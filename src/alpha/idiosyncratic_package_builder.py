@@ -72,6 +72,16 @@ class IdiosyncraticPackageBuilder:
         self.execution_reliability_cfg = self._load_execution_reliability_cfg()
         self.candidate_universe = self._build_default_candidate_universe()
 
+        # Fill simulator integration (optional — degrades gracefully)
+        try:
+            from src.execution.fill_simulator import FillSimulator
+        except Exception:
+            try:
+                from execution.fill_simulator import FillSimulator
+            except Exception:
+                FillSimulator = None
+        self.fill_simulator = FillSimulator() if FillSimulator else None
+
         self.ticker_theme_map = {
             "LMT": ["defense", "geopolitical_conflict"],
             "RTX": ["defense", "geopolitical_conflict"],
@@ -302,7 +312,10 @@ class IdiosyncraticPackageBuilder:
                 size_mult = clamp(window_size_mult * (0.6 + 0.4 * confidence), 0.0, 1.2)
                 thesis = self._build_thesis(sym, themes, template_key, thematic_context, packet)
                 row = {"symbol": sym, "themes": themes, "template_key": template_key, "strategy_style": idea["style"], "direction": idea["direction"], "instrument_types": idea["instrument_types"], "window_name": tw_name, "thesis": thesis, "catalyst_type": self._catalyst_type(themes, thematic_context), "confidence_score": round(confidence, 4), "size_multiplier_suggestion": round(size_mult, 4), "required_confirmations": self._candidate_required_confirmations(sym, themes, thematic_context), "execution_constraints": self._candidate_execution_constraints(packet, idea), "block_reasons": block_reasons, "status": "blocked" if block_reasons else "candidate"}
-                if block_reasons: blocked.append(row)
+                row = self._apply_fill_simulator(row, packet)
+                if row.get("status") == "blocked" or row.get("block_reasons"):
+                    row["status"] = "blocked"
+                    blocked.append(row)
                 else: rows.append(row)
         rows = self._rank_and_diversify(rows)
         blocked = self._rank_blocked(blocked)
@@ -385,8 +398,56 @@ class IdiosyncraticPackageBuilder:
         options_present = any("option" in str(x) for x in instrument_types)
         return {"shadow_only": True, "limit_only": True, "order_ttl_seconds": ttl, "estimated_slippage_bps_runtime": round(slippage_bps_est, 2), "defined_risk_preferred": bool(options_present or idea.get("direction") in {"bearish_defined_risk"}), "no_live_order_submission": True}
 
+    def _apply_fill_simulator(self, candidate_row: Dict[str, Any], packet: Dict[str, Any]) -> Dict[str, Any]:
+        """Enrich candidate with execution realism assessment. Shadow-only. Never routes orders."""
+        row = dict(candidate_row)
+
+        if self.fill_simulator is None:
+            row["fill_sim_assessment"] = {
+                "schema_version": "fill_sim_assessment.v1",
+                "execution_quality_class": "unknown",
+                "do_not_route_even_in_shadow": True,
+                "do_not_route_reasons": ["fill_simulator_unavailable"]
+            }
+            row.setdefault("block_reasons", []).append("fill_simulator_unavailable")
+            row["status"] = "blocked"
+            return row
+
+        quote_snapshot = (packet.get("quote_snapshots") or {}).get(row.get("symbol"), {})
+        assessment = self.fill_simulator.assess_candidate(
+            candidate=row,
+            packet=packet,
+            quote_snapshot=quote_snapshot if isinstance(quote_snapshot, dict) else None
+        )
+        row["fill_sim_assessment"] = assessment
+
+        if assessment.get("do_not_route_even_in_shadow"):
+            row.setdefault("block_reasons", []).append("fill_sim_do_not_route")
+            row["status"] = "blocked"
+
+        quality = str(assessment.get("execution_quality_class", "unknown"))
+        if quality == "poor" and row.get("status") != "blocked":
+            row["confidence_score"] = round(max(0.0, float(row.get("confidence_score", 0.0)) * 0.75), 4)
+            row["size_multiplier_suggestion"] = round(max(0.0, float(row.get("size_multiplier_suggestion", 0.0)) * 0.60), 4)
+            row.setdefault("block_reasons", []).append("fill_quality_poor_reduce_or_watch")
+        elif quality == "acceptable_shadow_only" and row.get("status") != "blocked":
+            row["size_multiplier_suggestion"] = round(max(0.0, float(row.get("size_multiplier_suggestion", 0.0)) * 0.80), 4)
+
+        row.setdefault("execution_constraints", {})
+        row["execution_constraints"]["expected_slippage_bps_simulated"] = assessment.get("expected_slippage_bps")
+        row["execution_constraints"]["fill_feasibility_score"] = assessment.get("fill_feasibility_score")
+        row["execution_constraints"]["partial_fill_probability"] = assessment.get("partial_fill_probability")
+        row["execution_constraints"]["reject_risk_probability"] = assessment.get("reject_risk_probability")
+        row["execution_constraints"]["execution_quality_class"] = assessment.get("execution_quality_class")
+
+        return row
+
     def _rank_and_diversify(self, rows) -> List[Dict[str, Any]]:
-        for r in rows: r["_rank_score"] = round(safe_float(r.get("confidence_score")) * max(safe_float(r.get("size_multiplier_suggestion")), 0.01), 6)
+        for r in rows:
+            fill_feas = safe_float((r.get("fill_sim_assessment") or {}).get("fill_feasibility_score"), 0.5)
+            reject_risk = safe_float((r.get("fill_sim_assessment") or {}).get("reject_risk_probability"), 0.0)
+            exec_penalty = 1.0 - min(reject_risk, 0.8) * 0.5
+            r["_rank_score"] = round(safe_float(r.get("confidence_score")) * max(safe_float(r.get("size_multiplier_suggestion")), 0.01) * fill_feas * exec_penalty, 6)
         rows = sorted(rows, key=lambda r: r["_rank_score"], reverse=True)
         selected = []
         theme_counts: Dict[str, int] = {}
