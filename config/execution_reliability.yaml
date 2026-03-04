@@ -1,0 +1,160 @@
+# Global Sentinel V4.5 - Execution Reliability Guardrails
+# Mock vs Real execution discrepancy controls, benchmarks, and contingency policies
+# Benchmark: institutional OMS/EMS + risk systems (Aladdin, Bloomberg EMS, etc.)
+
+execution_reliability_guardrails:
+  mode: "shadow_first"
+  live_trading_allowed: false   # keep false until production checklist passes
+
+  pre_trade_checks:
+    require_fresh_quote_max_age_ms: 1500
+    require_signal_to_submit_max_age_ms:
+      normal: 5000
+      elevated: 2500
+      crisis: 1500
+    require_market_session_open_check: true
+    require_luld_halt_check: true
+    require_broker_permissions_check: true
+    require_buying_power_buffer_pct: 15
+    require_short_locate_or_borrow_check_for_shorts: true
+    require_options_chain_validation: true
+
+  price_controls:
+    default_order_type_equity: "limit"
+    default_order_type_option: "limit"
+    max_spread_pct_equity: 0.35
+    max_spread_pct_option: 8.0
+    max_estimated_slippage_bps:
+      opening_windows: 20
+      lunch_lull: 12
+      power_hour: 22
+    max_price_drift_from_decision_bps: 25
+
+  fill_controls:
+    partial_fill_policy_default: "cancel_or_reduce"
+    partial_fill_risk_review_threshold_pct: 40
+    cancel_replace_max_attempts: 2
+    order_ttl_seconds:
+      opening_windows: 20
+      lunch_lull: 45
+      power_hour: 20
+
+  reconciliation:
+    broker_is_source_of_truth: true
+    reconcile_interval_seconds: 15
+    max_position_delta_shares: 1
+    max_position_delta_notional_usd: 100
+    freeze_on_unreconciled_delta_cycles: 3
+
+  exception_handling:
+    retryable_errors:
+      - timeout
+      - rate_limit
+      - transient_network
+    non_retryable_errors:
+      - invalid_order
+      - permission_denied
+      - insufficient_buying_power
+      - short_locate_unavailable
+      - market_closed
+    enter_manual_review_on:
+      - repeated_rejections
+      - repeated_partial_fills_with_slippage
+      - reconciliation_mismatch
+      - luld_halt_detected
+      - broker_status_degraded
+
+  observability:
+    log_all_timestamps: true
+    log_order_lifecycle_events: true
+    log_rejections_with_codes: true
+    log_intended_vs_actual_fills: true
+    daily_execution_quality_report: true
+
+  # Timestamp contract for order lifecycle
+  timestamp_fields:
+    - signal_ts
+    - decision_ts
+    - submit_ts
+    - ack_ts
+    - fill_ts
+
+  # Contingency policies by time window
+  contingency_policies:
+    opening_bell_whipsaw:
+      triggers:
+        - rapid_price_reversals
+        - spread_spikes
+        - slippage_jumps
+        - orb_breaks_failing
+      actions:
+        - extend_cooldown_to_10_00_et
+        - reduce_size_multiplier
+        - block_market_orders
+        - require_second_confirmation
+        - watchlist_only_if_repeated_failures
+
+    lunch_fakeout_cluster:
+      triggers:
+        - multiple_breakout_failures
+        - low_rvol
+        - choppy_price_action
+      actions:
+        - disable_breakout_strategies_until_14_00_et
+        - keep_mean_reversion_only
+        - reduce_gross_exposure_cap
+        - watchlist_only_unless_exceptional_catalyst
+
+    power_hour_slippage_spike:
+      triggers:
+        - valid_trend_but_fills_degrade
+        - options_spreads_widen_into_close
+      actions:
+        - shift_to_defined_risk_options_or_no_trade
+        - reduce_max_order_size
+        - shorten_order_ttl
+        - tighten_slippage_thresholds
+
+    broker_api_degradation:
+      triggers:
+        - timeouts
+        - delayed_acks
+        - inconsistent_order_states
+      actions:
+        - freeze_new_orders
+        - enter_manual_review
+        - reconcile_open_orders_and_positions
+        - log_broker_health_incident
+        - continue_market_monitoring_only
+
+    halt_luld_news_shock:
+      triggers:
+        - halt_flags
+        - violent_repricing
+        - stale_quotes
+      actions:
+        - block_new_orders_in_affected_symbols
+        - block_correlated_names
+        - require_official_source_confirmation
+        - operator_alert_plus_risk_review
+        - no_auto_tuning_intraday
+
+  # Go-live checklist gate
+  go_live_checklist:
+    - replay_pass_rate_thresholds_met
+    - time_window_engine_integrated
+    - macro_policy_bridges_healthy
+    - execution_simulator_calibrated
+    - broker_reconciliation_stable
+    - daily_operator_review_completed
+
+  # Shadow-to-market drift tracking
+  shadow_drift_tracking:
+    enabled: true
+    track_per_recommendation:
+      - intended_side
+      - intended_price
+      - intended_time
+      - simulated_fill_price_with_slippage
+      - actual_market_path_after_entry_window
+      - fill_likelihood_under_realistic_constraints

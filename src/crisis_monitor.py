@@ -26,6 +26,96 @@ from src.workflows.flash_memo import FlashMemoGenerator
 from src.risk.local_risk_mcp import RiskGate
 
 
+# ------------------------------------
+# Macro policy event merge utilities
+# ------------------------------------
+def _normalize_macro_policy_packets(raw_packets):
+    """Filter and keep only valid macro_policy_event packets."""
+    out = []
+    for p in raw_packets or []:
+        if not isinstance(p, dict):
+            continue
+        schema = str(p.get("schema_version", ""))
+        if schema.startswith("macro_policy_event"):
+            out.append(p)
+    return out
+
+
+def _merge_macro_policy_events_into_packet(packet, macro_packets):
+    """Merge macro policy bridge outputs into a scorecard packet."""
+    macro_events = _normalize_macro_policy_packets(macro_packets)
+
+    packet["macro_policy_events"] = macro_events
+    packet["macro_policy_event_count"] = len(macro_events)
+
+    urgency_scores = []
+    official_count = 0
+    rate_regime_any = False
+    requires_cross_asset_any = False
+    source_tiers_used = set()
+    source_domains_used = set()
+    event_types = {}
+    official_policy_confirmation_count = 0
+
+    for ev in macro_events:
+        try:
+            if ev.get("policy_release_urgency_score") is not None:
+                urgency_scores.append(float(ev.get("policy_release_urgency_score")))
+        except Exception:
+            pass
+
+        if ev.get("official_source") is True:
+            official_count += 1
+        if ev.get("official_source_confirmed") is True:
+            official_policy_confirmation_count += 1
+
+        if ev.get("rate_regime_shock_candidate") is True:
+            rate_regime_any = True
+        if ev.get("requires_rate_cross_asset_check") is True:
+            requires_cross_asset_any = True
+
+        if ev.get("source_tier"):
+            source_tiers_used.add(str(ev["source_tier"]))
+        if ev.get("source_domain"):
+            source_domains_used.add(str(ev["source_domain"]))
+
+        et = str(ev.get("event_type", "unknown"))
+        event_types[et] = event_types.get(et, 0) + 1
+
+    packet["macro_policy_summary"] = {
+        "policy_release_urgency_score_max": max(urgency_scores) if urgency_scores else 0.0,
+        "policy_release_urgency_score_avg": (sum(urgency_scores) / len(urgency_scores)) if urgency_scores else 0.0,
+        "official_policy_event_count": official_count,
+        "official_policy_confirmation_count": official_policy_confirmation_count,
+        "rate_regime_shock_candidate_any": rate_regime_any,
+        "requires_rate_cross_asset_check": requires_cross_asset_any or rate_regime_any,
+        "source_tiers_used": sorted(source_tiers_used),
+        "source_domains_used": sorted(source_domains_used),
+        "event_type_counts": event_types,
+    }
+
+    # Promote flags to top-level for downstream logic
+    packet["rate_regime_shock_candidate_any"] = rate_regime_any
+    packet["requires_rate_cross_asset_check"] = requires_cross_asset_any or rate_regime_any
+    packet["policy_release_urgency_score_max"] = packet["macro_policy_summary"]["policy_release_urgency_score_max"]
+
+    # Mark likely major release day if known event types appear
+    major_release_types = {"inflation_release", "labor_release", "central_bank_statement"}
+    packet["major_release_day"] = any(t in major_release_types for t in event_types.keys())
+
+    # Operator summary
+    top_types = ", ".join([f"{k}:{v}" for k, v in sorted(event_types.items())]) if event_types else "none"
+    packet["macro_policy_operator_summary"] = (
+        f"macro_events={len(macro_events)} | "
+        f"official_confirmations={official_policy_confirmation_count} | "
+        f"rate_regime_any={rate_regime_any} | "
+        f"urgency_max={packet['policy_release_urgency_score_max']:.2f} | "
+        f"types={top_types}"
+    )
+
+    return packet
+
+
 class CrisisMonitor:
     """Main monitoring loop for Global Sentinel."""
 
@@ -89,6 +179,31 @@ class CrisisMonitor:
 
         return self.mode
 
+    def _poll_macro_bridges(self) -> list:
+        """Poll available macro policy bridges and collect packets.
+        Bridges are loaded in-process if available, or from cached output files."""
+        macro_packets = []
+        bridge_classes = [
+            ("fed_board_bridge", "FedBoardBridge"),
+            ("bls_release_bridge", "BLSReleaseBridge"),
+            ("treasury_ofac_bridge", "TreasuryOFACBridge"),
+            ("whitehouse_policy_bridge", "WhiteHousePolicyBridge"),
+            ("fred_bridge", "FredBridge"),
+            ("eia_bridge", "EIABridge"),
+            ("finnhub_bridge", "FinnhubBridge"),
+        ]
+        for module_name, class_name in bridge_classes:
+            try:
+                import importlib
+                mod = importlib.import_module(f"src.bridges.{module_name}")
+                bridge_cls = getattr(mod, class_name)
+                bridge = bridge_cls(PROJECT_ROOT)
+                packets = bridge.poll()
+                macro_packets.extend(packets)
+            except Exception:
+                pass  # Bridge not available or failed — non-fatal
+        return macro_packets
+
     def run_cycle(self) -> dict:
         """Execute one monitoring cycle."""
         now = datetime.now(timezone.utc)
@@ -121,6 +236,13 @@ class CrisisMonitor:
             and risk_status.get("approved", False)
         )
 
+        # Poll macro policy bridges (non-fatal if bridges unavailable)
+        macro_packets = []
+        try:
+            macro_packets = self._poll_macro_bridges()
+        except Exception:
+            pass
+
         # Produce output
         output = self._produce_output(
             now, controls,
@@ -128,13 +250,15 @@ class CrisisMonitor:
             score_result=score_result,
             risk_status=risk_status,
             shadow_eligible=shadow_eligible,
+            macro_packets=macro_packets,
         )
 
         # Write scorecard
         self._write_scorecard(output)
 
-        # Generate flash memo if warranted
-        if self.mode in ("ELEVATED", "CRISIS") or regime_prob > 0.6:
+        # Generate flash memo if warranted (mode-based or high-urgency macro event)
+        macro_urgency_max = output.get("policy_release_urgency_score_max", 0.0)
+        if self.mode in ("ELEVATED", "CRISIS") or regime_prob > 0.6 or macro_urgency_max >= 0.90:
             self.memo_gen.generate(output)
 
         # Update heartbeat
@@ -161,6 +285,12 @@ class CrisisMonitor:
         }
         if halted:
             output["halt_reason"] = reason
+
+        # Merge macro policy events into output packet
+        macro_packets = kwargs.get("macro_packets", [])
+        if macro_packets:
+            _merge_macro_policy_events_into_packet(output, macro_packets)
+
         return output
 
     def _write_scorecard(self, output: dict):

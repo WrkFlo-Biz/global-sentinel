@@ -29,6 +29,57 @@
       "command": "python",
       "args": ["src/ingest/fallback_news_mcp.py"],
       "description": "Fallback public news sources (GDELT, RSS)"
+    },
+    "fed-board-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/fed_board_bridge.py", "--jsonl"],
+      "description": "Fed RSS bridge — press releases, speeches, testimony → macro_policy_event packets"
+    },
+    "bls-release-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/bls_release_bridge.py", "--jsonl"],
+      "description": "BLS release schedule + API bridge → CPI/jobs/calendar macro_policy_event packets"
+    },
+    "treasury-ofac-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/treasury_ofac_bridge.py", "--jsonl"],
+      "description": "Treasury press releases + OFAC sanctions → macro_policy_event packets"
+    },
+    "whitehouse-policy-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/whitehouse_policy_bridge.py", "--jsonl"],
+      "description": "White House briefings/statements + presidential actions → macro_policy_event packets"
+    },
+    "fred-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/fred_bridge.py", "--jsonl"],
+      "env": {
+        "FRED_API_KEY": "${FRED_API_KEY}"
+      },
+      "description": "FRED macro series pulls + rate cross-checks → macro_policy_event packets"
+    },
+    "eia-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/eia_bridge.py", "--jsonl"],
+      "env": {
+        "EIA_API_KEY": "${EIA_API_KEY}"
+      },
+      "description": "EIA energy inventory confirmation bridge → macro_policy_event packets"
+    },
+    "finnhub-bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/bridges/finnhub_bridge.py", "--jsonl"],
+      "env": {
+        "FINNHUB_KEY": "${FINNHUB_KEY}"
+      },
+      "description": "Finnhub sentiment/headline OSINT-alt bridge (tier_c, non-confirming for policy events)"
     }
   }
 }
