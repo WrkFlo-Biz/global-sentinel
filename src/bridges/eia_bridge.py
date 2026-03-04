@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-Global Sentinel V4.5 - EIA Bridge (Skeleton)
+Global Sentinel V4.5 - EIA Bridge (Implementation)
 
 Purpose:
-- Query EIA API for petroleum/energy inventory series
-- Emit normalized macro_policy_event packets for energy-related macro updates
-- Tag rate_regime_shock_candidate when inventory surprises + oil shock conditions present
-- Confirms whether geopolitical oil shock is bleeding into U.S. inventories
-
-Requires EIA_API_KEY env var (free from https://www.eia.gov/opendata/)
+- Pull configured EIA series (weekly petroleum status and related energy supply indicators)
+- Emit normalized macro_policy_event packets for energy inventory confirmation
+- Tag rate_regime_shock_candidate when inventory / refinery / implied supply signals support
+  an inflationary energy shock narrative
 
 Shadow / intelligence only:
 - No execution logic
-- Produces macro_policy_event packets for crisis_monitor / macro policy layer
+- No order routing
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -27,7 +24,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -36,185 +33,191 @@ except ImportError:
     sys.exit(1)
 
 
+# -----------------------------
+# Utilities
+# -----------------------------
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def sha1_hex(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+def safe_float(v: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if v is None:
+            return default
+        if isinstance(v, str) and v.strip() in {"", ".", "NaN", "nan", "null", "None"}:
+            return default
+        return float(v)
+    except Exception:
+        return default
 
 
-def safe_lower(x: Any) -> str:
-    return str(x or "").lower()
+def safe_lower(v: Any) -> str:
+    return str(v or "").lower()
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-# Default EIA series to track (petroleum status report)
-DEFAULT_SERIES = {
-    "PET.WCESTUS1.W": "U.S. Crude Oil Stocks (excl SPR)",
-    "PET.WGTSTUS1.W": "U.S. Total Gasoline Stocks",
-    "PET.WDISTUS1.W": "U.S. Distillate Fuel Oil Stocks",
-    "PET.WPULEUS3.W": "U.S. Refinery Utilization (%)",
-}
+def read_json_url(url: str, timeout: int = 20) -> Dict[str, Any]:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "GlobalSentinelEIABridge/1.0 (+shadow-mode)"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
 
+# -----------------------------
+# Bridge
+# -----------------------------
 class EIABridge:
+    """
+    Supports EIA API v2 style endpoints.
+
+    Config expectation (recommended extension under macro_policy_intel.official_sources.eia):
+      eia:
+        enabled: true
+        api_base: "https://api.eia.gov/v2"
+        series:
+          crude_stocks:
+            route: "petroleum/stoc/wstk/data/"
+            params:
+              frequency: "weekly"
+              data: ["value"]
+              facets:
+                product: ["EPC0"]
+                area: ["R30"]
+              sort:
+                - {column: "period", direction: "desc"}
+              offset: 0
+              length: 3
+          gasoline_stocks:
+            ...
+    """
+
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.cfg = load_yaml(repo_root / "config" / "macro_policy_intel.yaml")
         self.macro_cfg = self.cfg.get("macro_policy_intel", {})
-        self.parsing_rules = self.macro_cfg.get("parsing_rules", {})
-        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
+        self.eia_cfg = (self.macro_cfg.get("official_sources", {}) or {}).get("eia", {})
         self.source_tiers = self.macro_cfg.get("source_tiers", {})
+        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
         self.event_windows = self.macro_cfg.get("event_windows", {})
         self.guardrails = self.macro_cfg.get("guardrails", {})
 
-        self.api_key = os.environ.get("EIA_API_KEY", "")
-        self.api_base = "https://api.eia.gov/v2"
+        self.api_key = os.getenv("EIA_API_KEY")
+        self.api_base = (self.eia_cfg.get("api_base") or "https://api.eia.gov/v2").rstrip("/")
+
+        # configured series map
+        self.series_cfg = self.eia_cfg.get("series", {}) or {}
+
+        # thresholds for energy shock confirmation
+        t = self.eia_cfg.get("confirmation_thresholds", {}) or {}
+        self.thresholds = {
+            "inventory_draw_abs": float(t.get("inventory_draw_abs", 2.0)),
+            "inventory_build_abs": float(t.get("inventory_build_abs", 2.0)),
+            "refinery_util_change_abs": float(t.get("refinery_util_change_abs", 1.0)),
+            "staleness_days_warning": float(t.get("staleness_days_warning", 10)),
+        }
 
         self.cache_dir = repo_root / "logs" / "bridge_cache" / "eia_bridge"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use default series; can be extended via config
-        self.series_map = dict(DEFAULT_SERIES)
-
+    # -------------------------
+    # Public API
+    # -------------------------
     def poll(self) -> List[Dict[str, Any]]:
         packets: List[Dict[str, Any]] = []
-        if not self.api_key:
-            packets.append(self._error_packet("EIA_API_KEY not set"))
+
+        if not self.series_cfg:
+            packets.append(self._error_packet(
+                source_url=self.api_base,
+                error="no_eia_series_configured",
+                series_key=None
+            ))
             return packets
 
-        for series_id, description in self.series_map.items():
+        for series_key, spec in self.series_cfg.items():
             try:
-                packets.extend(self._poll_series(series_id, description))
+                packets.extend(self._poll_series(series_key, spec))
             except Exception as e:
-                packets.append(self._error_packet(f"series_error:{series_id}:{e}"))
+                packets.append(self._error_packet(
+                    source_url=self.api_base,
+                    error=f"eia_series_error:{e}",
+                    series_key=series_key
+                ))
+
         return packets
 
-    def _poll_series(self, series_id: str, description: str) -> List[Dict[str, Any]]:
-        data = self._fetch_series(series_id)
-        response_data = data.get("response", {}).get("data", [])
+    # -------------------------
+    # Series polling
+    # -------------------------
+    def _poll_series(self, series_key: str, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        route = str(spec.get("route", "")).lstrip("/")
+        params = dict(spec.get("params", {}) or {})
 
-        if not response_data:
-            return [self._error_packet(f"no_data:{series_id}")]
+        if not route:
+            return [self._error_packet(self.api_base, "missing_route", series_key)]
 
-        latest = response_data[0] if response_data else {}
-        latest_value = latest.get("value")
-        latest_period = latest.get("period", "")
+        resp = self._eia_get(route, params)
+        data_rows = self._extract_rows(resp)
 
-        prior_value = None
-        if len(response_data) >= 2:
-            pv = response_data[1].get("value")
-            if pv is not None:
-                try:
-                    prior_value = float(pv)
-                except (ValueError, TypeError):
-                    pass
+        latest, prev = self._latest_and_prev_rows(data_rows)
+        latest_value, prev_value = self._extract_numeric_values(latest, prev)
 
-        current_value = None
-        if latest_value is not None:
-            try:
-                current_value = float(latest_value)
-            except (ValueError, TypeError):
-                pass
+        delta = None
+        if latest_value is not None and prev_value is not None:
+            delta = latest_value - prev_value
 
-        change_vs_prior = None
-        if current_value is not None and prior_value is not None:
-            change_vs_prior = round(current_value - prior_value, 2)
+        period = latest.get("period") if latest else None
+        series_name = self._extract_series_name(resp, spec, series_key)
+        units = self._extract_units(resp)
+        category = self._categorize_series(series_key, spec)
 
-        # Energy inventories are always rate-regime relevant in geopolitical context
-        rate_regime = True
+        event_type = "macro_calendar_update"
 
-        parsing_meta = {
-            "series_id": series_id,
-            "description": description,
-            "latest_value": current_value,
-            "latest_period": latest_period,
-            "prior_value": prior_value,
-            "change_vs_prior": change_vs_prior,
-        }
-
-        return [self._make_packet(
-            series_id=series_id,
-            headline=f"EIA {description}: {current_value} ({latest_period})",
-            summary=f"EIA series {series_id} ({description}): {current_value}. Change vs prior: {change_vs_prior}.",
-            parsing_meta=parsing_meta,
-            rate_regime=rate_regime,
-        )]
-
-    def _fetch_series(self, series_id: str) -> Dict[str, Any]:
-        # EIA v2 API format
-        # Series IDs like PET.WCESTUS1.W need to be mapped to v2 routes
-        # For simplicity, use the series search endpoint
-        params = urllib.parse.urlencode({
-            "api_key": self.api_key,
-            "frequency": "weekly",
-            "sort[0][column]": "period",
-            "sort[0][direction]": "desc",
-            "length": 2,
-        })
-        # Convert old series ID format to v2 route (simplified)
-        url = f"{self.api_base}/seriesid/{series_id}?{params}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "GlobalSentinelEIABridge/1.0 (+shadow-mode)"}
+        # Energy shock confirmation logic
+        rate_regime_candidate, confirmation_tags, confirmation_meta = self._energy_shock_confirmation_logic(
+            series_key=series_key,
+            category=category,
+            latest_value=latest_value,
+            prev_value=prev_value,
+            delta=delta,
+            latest_row=latest,
+            prev_row=prev
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
-    def _make_packet(
-        self,
-        series_id: str,
-        headline: str,
-        summary: Optional[str],
-        parsing_meta: Dict[str, Any],
-        rate_regime: bool,
-    ) -> Dict[str, Any]:
-        # EIA is a Tier A official source
-        source_tier = "tier_a_official"
-        source_conf = float((self.source_tiers.get(source_tier) or {}).get("confidence_weight", 0.90))
+        urgency = self._policy_release_urgency_score(event_type)
+        source_conf = self._source_confidence("tier_a_official")
+        requires_cross_asset = bool(rate_regime_candidate and self.guardrails.get("force_cross_asset_checks_for_rate_regime_shock_candidate", True))
 
-        urgency_defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
-        urgency = float(urgency_defaults.get("growth_release", 0.75))
-
-        requires_cross_asset = bool(rate_regime and self.guardrails.get("force_cross_asset_checks_for_rate_regime_shock_candidate", True))
-
-        tags = ["official_source_confirmed"]
-        if rate_regime:
+        tags = ["official_source_confirmed", "energy_supply_confirmation"]
+        if rate_regime_candidate:
             tags += ["rate_regime_shock_candidate", "requires_rate_cross_asset_check"]
+        tags += confirmation_tags
 
-        release_window = {
-            "release_key": "eia_petroleum_status",
-            "release_time_et_hint": "10:30",
-            "pre_buffer_minutes": int(self.event_windows.get("pre_release_buffer_minutes_default", 10)),
-            "post_buffer_minutes": int(self.event_windows.get("post_release_buffer_minutes_default", 20)),
-        }
+        release_window = self._release_window_hint()
 
-        event_id_input = f"eia|{series_id}|{headline}|{json.dumps(parsing_meta, sort_keys=True)}"
-        event_id = f"eia-{sha1_hex(event_id_input)[:16]}"
-
-        return {
+        packet = {
             "schema_version": "macro_policy_event.v1",
-            "event_id": event_id,
+            "event_id": f"eia-{series_key}-{period or 'na'}",
             "timestamp_utc": iso_now(),
 
-            "source_domain": "eia.gov",
-            "source_url": f"https://www.eia.gov/opendata/browser/?api={series_id}",
-            "source_feed_url": self.api_base,
-            "source_tier": source_tier,
+            "source_domain": "api.eia.gov",
+            "source_url": f"{self.api_base}/{route}",
+            "source_feed_url": f"{self.api_base}/{route}",
+            "source_tier": "tier_a_official",
             "source_type": "api",
             "official_source": True,
 
-            "event_type": "macro_calendar_update",
-            "headline": headline,
-            "summary": summary,
+            "event_type": event_type,
+            "headline": f"EIA energy series update: {series_key} ({series_name})",
+            "summary": f"EIA data pull for {category} series. Used for energy supply/inventory confirmation.",
             "published_time_utc": None,
 
             "tags": tags,
-            "rate_regime_shock_candidate": rate_regime,
+            "rate_regime_shock_candidate": rate_regime_candidate,
             "requires_rate_cross_asset_check": requires_cross_asset,
             "official_source_confirmed": True,
 
@@ -223,41 +226,279 @@ class EIABridge:
 
             "release_window": release_window,
 
-            "parsing_meta": parsing_meta,
-            "provenance": {
-                "bridge": "eia_bridge",
-                "bridge_version": "0.1.0-skeleton",
-                "normalized_from": "api",
-                "raw_source_url": self.api_base,
+            "parsing_meta": {
+                "series_key": series_key,
+                "series_name": series_name,
+                "series_category": category,
+                "route": route,
+                "units": units,
+                "latest_row": latest,
+                "previous_row": prev,
+                "latest_value": latest_value,
+                "previous_value": prev_value,
+                "delta": delta,
+                "confirmation_meta": confirmation_meta,
+                "raw_row_count": len(data_rows)
             },
 
-            "operator_summary": self._operator_summary(headline, urgency, rate_regime),
+            "provenance": {
+                "bridge": "eia_bridge",
+                "bridge_version": "0.1.0",
+                "normalized_from": "eia_api",
+                "raw_source_url": f"{self.api_base}/{route}"
+            },
+
+            "operator_summary": self._operator_summary(
+                series_key=series_key,
+                category=category,
+                latest_value=latest_value,
+                delta=delta,
+                rate_regime_candidate=rate_regime_candidate,
+                confirmation_meta=confirmation_meta
+            )
         }
 
-    def _operator_summary(self, headline: str, urgency: float, rate_regime: bool) -> str:
-        parts = [f"macro_calendar_update: {headline}", f"urgency={urgency:.2f}"]
-        if rate_regime:
+        return [packet]
+
+    def _categorize_series(self, series_key: str, spec: Dict[str, Any]) -> str:
+        k = safe_lower(series_key)
+        if "crude" in k and "stock" in k:
+            return "crude_inventory"
+        if "gasoline" in k and "stock" in k:
+            return "gasoline_inventory"
+        if ("distill" in k or "diesel" in k) and "stock" in k:
+            return "distillate_inventory"
+        if "refinery" in k and ("util" in k or "utilization" in k):
+            return "refinery_utilization"
+        if "imports" in k:
+            return "imports"
+        if "production" in k:
+            return "production"
+        return "energy_supply"
+
+    # -------------------------
+    # Confirmation logic
+    # -------------------------
+    def _energy_shock_confirmation_logic(
+        self,
+        series_key: str,
+        category: str,
+        latest_value: Optional[float],
+        prev_value: Optional[float],
+        delta: Optional[float],
+        latest_row: Optional[Dict[str, Any]],
+        prev_row: Optional[Dict[str, Any]]
+    ) -> Tuple[bool, List[str], Dict[str, Any]]:
+        """
+        Tags events that support / contradict an inflationary energy shock narrative.
+        This does NOT itself "confirm" geopolitics; it provides a physical/economic transmission signal.
+        """
+        tags: List[str] = []
+        meta: Dict[str, Any] = {
+            "supports_supply_shock_narrative": False,
+            "contradicts_supply_shock_narrative": False,
+            "signals": []
+        }
+
+        if latest_value is None:
+            meta["signals"].append("no_numeric_value")
+            return False, tags, meta
+
+        # Inventory logic (draws can support tighter supply narrative)
+        if category in {"crude_inventory", "gasoline_inventory", "distillate_inventory"} and delta is not None:
+            draw_abs = self.thresholds["inventory_draw_abs"]
+            build_abs = self.thresholds["inventory_build_abs"]
+
+            if delta <= -draw_abs:
+                tags.append("inventory_draw_signal")
+                meta["supports_supply_shock_narrative"] = True
+                meta["signals"].append(f"inventory_draw_abs>={draw_abs}")
+            elif delta >= build_abs:
+                tags.append("inventory_build_signal")
+                meta["contradicts_supply_shock_narrative"] = True
+                meta["signals"].append(f"inventory_build_abs>={build_abs}")
+
+        # Refinery utilization logic
+        if category == "refinery_utilization" and delta is not None:
+            util_thresh = self.thresholds["refinery_util_change_abs"]
+            if delta <= -util_thresh:
+                tags.append("refinery_utilization_drop_signal")
+                meta["supports_supply_shock_narrative"] = True
+                meta["signals"].append(f"refinery_util_change_drop_abs>={util_thresh}")
+            elif delta >= util_thresh:
+                tags.append("refinery_utilization_rise_signal")
+                meta["signals"].append(f"refinery_util_change_rise_abs>={util_thresh}")
+
+        # Imports / production
+        if category in {"imports", "production"} and delta is not None:
+            if delta > 0:
+                meta["signals"].append(f"{category}_increase")
+            elif delta < 0:
+                meta["signals"].append(f"{category}_decrease")
+
+        rate_regime_candidate = bool(meta["supports_supply_shock_narrative"])
+
+        if meta["supports_supply_shock_narrative"] and meta["contradicts_supply_shock_narrative"]:
+            tags.append("energy_confirmation_ambiguous")
+            rate_regime_candidate = False
+
+        return rate_regime_candidate, tags, meta
+
+    # -------------------------
+    # EIA API handling
+    # -------------------------
+    def _eia_get(self, route: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        q = self._flatten_eia_params(params)
+        if self.api_key:
+            q["api_key"] = self.api_key
+
+        url = f"{self.api_base}/{route}"
+        if q:
+            url = f"{url}?{urllib.parse.urlencode(q, doseq=True)}"
+        return read_json_url(url)
+
+    def _flatten_eia_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Converts nested EIA params into query-string style.
+        Example:
+          facets: {product: ["EPC0"]} -> facets[product][]=EPC0
+          sort: [{column:"period", direction:"desc"}] -> sort[0][column]=period ...
+        """
+        flat: Dict[str, Any] = {}
+
+        for k, v in (params or {}).items():
+            if k == "facets" and isinstance(v, dict):
+                for facet_key, facet_vals in v.items():
+                    if isinstance(facet_vals, list):
+                        flat[f"facets[{facet_key}][]"] = [str(x) for x in facet_vals]
+                    else:
+                        flat[f"facets[{facet_key}][]"] = [str(facet_vals)]
+            elif k == "sort" and isinstance(v, list):
+                for i, sort_obj in enumerate(v):
+                    if isinstance(sort_obj, dict):
+                        for sk, sv in sort_obj.items():
+                            flat[f"sort[{i}][{sk}]"] = str(sv)
+            elif k == "data" and isinstance(v, list):
+                flat["data[]"] = [str(x) for x in v]
+            else:
+                flat[k] = v
+        return flat
+
+    def _extract_rows(self, resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+        response = resp.get("response") or {}
+        rows = response.get("data") or []
+        if isinstance(rows, list):
+            return [r for r in rows if isinstance(r, dict)]
+        return []
+
+    def _extract_series_name(self, resp: Dict[str, Any], spec: Dict[str, Any], series_key: str) -> str:
+        response = resp.get("response") or {}
+        return str(response.get("description") or spec.get("name") or series_key)
+
+    def _extract_units(self, resp: Dict[str, Any]) -> Optional[str]:
+        response = resp.get("response") or {}
+        return response.get("units")
+
+    def _latest_and_prev_rows(self, rows: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        if not rows:
+            return None, None
+        latest = rows[0]
+        prev = rows[1] if len(rows) > 1 else None
+        return latest, prev
+
+    def _extract_numeric_values(
+        self,
+        latest: Optional[Dict[str, Any]],
+        prev: Optional[Dict[str, Any]]
+    ) -> Tuple[Optional[float], Optional[float]]:
+        candidates = ["value", "Value", "series-value"]
+        latest_value = None
+        prev_value = None
+
+        if latest:
+            for c in candidates:
+                if c in latest:
+                    latest_value = safe_float(latest.get(c))
+                    if latest_value is not None:
+                        break
+        if prev:
+            for c in candidates:
+                if c in prev:
+                    prev_value = safe_float(prev.get(c))
+                    if prev_value is not None:
+                        break
+
+        return latest_value, prev_value
+
+    # -------------------------
+    # Meta helpers
+    # -------------------------
+    def _policy_release_urgency_score(self, event_type: str) -> float:
+        defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
+        return float(defaults.get(event_type, 0.55))
+
+    def _source_confidence(self, tier: str) -> float:
+        return float((self.source_tiers.get(tier) or {}).get("confidence_weight", 0.90))
+
+    def _release_window_hint(self) -> Dict[str, Any]:
+        pre = int(self.event_windows.get("pre_release_buffer_minutes_default", 10))
+        post = int(self.event_windows.get("post_release_buffer_minutes_default", 20))
+        return {
+            "release_key": "eia_weekly_petroleum_status",
+            "release_time_et_hint": None,
+            "pre_buffer_minutes": pre,
+            "post_buffer_minutes": post
+        }
+
+    def _operator_summary(
+        self,
+        series_key: str,
+        category: str,
+        latest_value: Optional[float],
+        delta: Optional[float],
+        rate_regime_candidate: bool,
+        confirmation_meta: Dict[str, Any]
+    ) -> str:
+        parts = [f"energy_supply:{series_key} ({category})"]
+        parts.append(f"value={latest_value}")
+        parts.append(f"delta={delta}")
+        if rate_regime_candidate:
             parts.append("rate_regime_shock_candidate=true")
+        if confirmation_meta.get("supports_supply_shock_narrative"):
+            parts.append("supports_supply_shock_narrative=true")
+        if confirmation_meta.get("contradicts_supply_shock_narrative"):
+            parts.append("contradicts_supply_shock_narrative=true")
+        sigs = confirmation_meta.get("signals") or []
+        if sigs:
+            parts.append(f"signals={','.join([str(s) for s in sigs])}")
         return " | ".join(parts)
 
-    def _error_packet(self, error: str) -> Dict[str, Any]:
+    # -------------------------
+    # Errors
+    # -------------------------
+    def _error_packet(self, source_url: str, error: str, series_key: Optional[str]) -> Dict[str, Any]:
         return {
             "schema_version": "macro_policy_event_error.v1",
             "timestamp_utc": iso_now(),
-            "source_domain": "eia.gov",
+            "source_domain": "api.eia.gov",
+            "source_url": source_url,
             "source_tier": "tier_a_official",
             "official_source": True,
             "bridge": "eia_bridge",
-            "error": error,
+            "series_key": series_key,
+            "error": error
         }
 
 
+# -----------------------------
+# CLI
+# -----------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Global Sentinel EIA Bridge")
     p.add_argument("--repo-root", default=".")
-    p.add_argument("--once", action="store_true")
-    p.add_argument("--jsonl", action="store_true")
-    p.add_argument("--loop-seconds", type=int, default=600)
+    p.add_argument("--once", action="store_true", help="Poll once and print JSON output")
+    p.add_argument("--jsonl", action="store_true", help="Emit one JSON packet per line")
+    p.add_argument("--loop-seconds", type=int, default=1800, help="Polling interval (default 30 min)")
     return p.parse_args()
 
 

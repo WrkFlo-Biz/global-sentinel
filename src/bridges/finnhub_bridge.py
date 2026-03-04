@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-Global Sentinel V4.5 - Finnhub Bridge (Skeleton)
+Global Sentinel V4.5 - Finnhub Bridge (Implementation)
 
 Purpose:
-- Pull company news + sentiment for configured watchlist symbols
-- Emit normalized macro_policy_event packets (tier_c_osint_alt)
-- NEVER confirms policy releases alone — non-confirming for official events
-- Confidence penalty when used without primary confirmation
-
-Requires FINNHUB_KEY env var (free from https://finnhub.io/)
+- Pull company news and sentiment-ish headline context for configured watchlist symbols
+- Emit normalized macro_policy_event packets (OSINT/alt tier) for enrichment
+- NEVER confirm policy releases / official actions on its own
 
 Shadow / intelligence only:
 - No execution logic
-- Produces sentiment/headline packets for crisis_monitor triangulation
+- No order routing
 """
 
 from __future__ import annotations
@@ -25,9 +22,9 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -36,225 +33,429 @@ except ImportError:
     sys.exit(1)
 
 
+# -----------------------------
+# Utilities
+# -----------------------------
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def sha1_hex(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+def safe_float(v: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if v is None:
+            return default
+        if isinstance(v, str) and v.strip() in {"", ".", "NaN", "nan", "null", "None"}:
+            return default
+        return float(v)
+    except Exception:
+        return default
 
 
-def safe_lower(x: Any) -> str:
-    return str(x or "").lower()
+def safe_lower(v: Any) -> str:
+    return str(v or "").lower()
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-# Default watchlist symbols for geopolitical/macro relevance
-DEFAULT_SYMBOLS = [
-    "XOM",    # Exxon (oil/energy)
-    "LMT",    # Lockheed Martin (defense)
-    "CAT",    # Caterpillar (infrastructure/construction)
-    "NVDA",   # NVIDIA (AI infrastructure)
-    "MAERSK.CO",  # Maersk (shipping proxy — may need ADR/alternative)
-    "KRE",    # Regional banks ETF (rate sensitive)
-    "XLF",    # Financials ETF (rate sensitive)
-    "SPY",    # Broad market
-]
+def read_json_url(url: str, timeout: int = 20) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "GlobalSentinelFinnhubBridge/1.0 (+shadow-mode)"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
 
+def utc_date_str(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+# -----------------------------
+# Bridge
+# -----------------------------
 class FinnhubBridge:
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.cfg = load_yaml(repo_root / "config" / "macro_policy_intel.yaml")
         self.macro_cfg = self.cfg.get("macro_policy_intel", {})
-        self.parsing_rules = self.macro_cfg.get("parsing_rules", {})
-        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
         self.source_tiers = self.macro_cfg.get("source_tiers", {})
-        self.event_windows = self.macro_cfg.get("event_windows", {})
+        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
         self.guardrails = self.macro_cfg.get("guardrails", {})
+        self.event_windows = self.macro_cfg.get("event_windows", {})
 
-        self.api_key = os.environ.get("FINNHUB_KEY", "")
+        self.api_key = os.getenv("FINNHUB_KEY")
         self.api_base = "https://finnhub.io/api/v1"
+
+        # Load watchlist from config/assets_watchlist.yaml
+        self.watchlist_cfg = load_yaml(repo_root / "config" / "assets_watchlist.yaml")
+        self.symbols = self._load_symbols_from_watchlist(self.watchlist_cfg)
+
+        # Optional finnhub-specific config extension
+        self.finnhub_cfg = (
+            (self.macro_cfg.get("official_sources", {}) or {}).get("finnhub", {})
+            or self.cfg.get("finnhub_bridge", {})
+            or {}
+        )
+
+        self.lookback_days = int(self.finnhub_cfg.get("news_lookback_days", 2))
+        self.max_headlines_per_symbol = int(self.finnhub_cfg.get("max_headlines_per_symbol", 8))
+        self.rate_sensitive_keywords = [
+            "fed", "fomc", "inflation", "cpi", "pce", "jobs", "employment", "rates",
+            "yield", "treasury", "tariff", "sanctions", "oil", "energy", "trade", "immigration"
+        ]
+        self.policy_keywords = [
+            "executive order", "presidential", "white house", "treasury sanctions", "ofac", "fomc", "federal reserve"
+        ]
 
         self.cache_dir = repo_root / "logs" / "bridge_cache" / "finnhub_bridge"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load watchlist from assets config or use defaults
-        watchlist_cfg = load_yaml(repo_root / "config" / "assets_watchlist.yaml") if (repo_root / "config" / "assets_watchlist.yaml").exists() else {}
-        self.symbols = watchlist_cfg.get("finnhub_symbols", DEFAULT_SYMBOLS)
-
+    # -------------------------
+    # Public API
+    # -------------------------
     def poll(self) -> List[Dict[str, Any]]:
         packets: List[Dict[str, Any]] = []
+
         if not self.api_key:
-            packets.append(self._error_packet("FINNHUB_KEY not set"))
+            packets.append(self._error_packet("missing_finnhub_key", symbol=None))
             return packets
 
         for symbol in self.symbols:
             try:
-                packets.extend(self._poll_symbol_news(symbol))
+                packets.extend(self._poll_symbol(symbol))
             except Exception as e:
-                packets.append(self._error_packet(f"symbol_error:{symbol}:{e}"))
+                packets.append(self._error_packet(f"symbol_poll_error:{e}", symbol=symbol))
+
         return packets
 
-    def _poll_symbol_news(self, symbol: str, max_items: int = 5) -> List[Dict[str, Any]]:
-        # Fetch company news from Finnhub
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        params = urllib.parse.urlencode({
-            "symbol": symbol,
-            "from": today,
-            "to": today,
-            "token": self.api_key,
-        })
-        url = f"{self.api_base}/company-news?{params}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "GlobalSentinelFinnhubBridge/1.0 (+shadow-mode)"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            articles = json.loads(resp.read().decode("utf-8", errors="ignore"))
-
-        if not isinstance(articles, list):
-            return []
-
+    # -------------------------
+    # Symbol polling
+    # -------------------------
+    def _poll_symbol(self, symbol: str) -> List[Dict[str, Any]]:
         packets: List[Dict[str, Any]] = []
-        seen_ids: set = set()
+        news = self._get_company_news(symbol)
 
-        for article in articles[:max_items]:
-            article_id = str(article.get("id", ""))
-            if article_id in seen_ids:
-                continue
-            seen_ids.add(article_id)
+        if not isinstance(news, list):
+            packets.append(self._error_packet("unexpected_news_response_type", symbol=symbol))
+            return packets
 
-            headline = str(article.get("headline", "")).strip()
-            summary = str(article.get("summary", "")).strip()
-            source = str(article.get("source", "")).strip()
-            article_url = str(article.get("url", "")).strip()
-            article_ts = article.get("datetime")
+        items = [n for n in news if isinstance(n, dict)][: self.max_headlines_per_symbol]
 
-            published = None
-            if article_ts:
-                try:
-                    published = datetime.fromtimestamp(int(article_ts), tz=timezone.utc).isoformat()
-                except Exception:
-                    pass
+        # Aggregate packet (enrichment summary)
+        agg_packet = self._build_aggregate_packet(symbol, items)
+        packets.append(agg_packet)
 
-            if not headline:
-                continue
-
-            packets.append(self._make_packet(
-                symbol=symbol,
-                headline=headline,
-                summary=summary,
-                article_url=article_url,
-                article_source=source,
-                published_time_utc=published,
-                article_id=article_id,
-            ))
+        # Optional item-level packets for high-signal headlines
+        top_items = self._select_high_signal_items(symbol, items, max_items=3)
+        for item in top_items:
+            packets.append(self._build_item_packet(symbol, item))
 
         return packets
 
-    def _make_packet(
-        self,
-        symbol: str,
-        headline: str,
-        summary: str,
-        article_url: str,
-        article_source: str,
-        published_time_utc: Optional[str],
-        article_id: str,
-    ) -> Dict[str, Any]:
-        # Finnhub is Tier C — OSINT/alt, NON-CONFIRMING for policy events
-        source_tier = "tier_c_osint_alt"
-        source_conf = float((self.source_tiers.get(source_tier) or {}).get("confidence_weight", 0.60))
+    def _get_company_news(self, symbol: str) -> Any:
+        now = datetime.now(timezone.utc)
+        frm = now - timedelta(days=self.lookback_days)
 
-        # Check for rate-sensitive keywords
-        text = f"{safe_lower(headline)} {safe_lower(summary)}"
-        rate_sensitive_keywords = [safe_lower(k) for k in (((self.parsing_rules.get("rate_sensitive_topic_keywords") or {}).get("includes_any")) or [])]
-        rate_regime = any(k in text for k in rate_sensitive_keywords)
+        params = {
+            "symbol": symbol,
+            "from": utc_date_str(frm),
+            "to": utc_date_str(now),
+            "token": self.api_key,
+        }
+        url = f"{self.api_base}/company-news?{urllib.parse.urlencode(params)}"
+        return read_json_url(url)
 
-        tags = []
-        if rate_regime:
+    # -------------------------
+    # Packet builders
+    # -------------------------
+    def _build_aggregate_packet(self, symbol: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        headline_count = len(items)
+        score = self._headline_pressure_score(items)
+        rate_sensitive_count = 0
+        policy_like_count = 0
+
+        top_headlines = []
+        for n in items:
+            h = str(n.get("headline", "") or "")
+            hs = safe_lower(h)
+            if any(k in hs for k in self.rate_sensitive_keywords):
+                rate_sensitive_count += 1
+            if any(k in hs for k in self.policy_keywords):
+                policy_like_count += 1
+            if h:
+                top_headlines.append(h)
+        top_headlines = top_headlines[:5]
+
+        tags = ["osint_alt_enrichment", "cannot_confirm_policy_event"]
+        rate_regime_candidate = (rate_sensitive_count > 0 and score >= 0.40)
+        if rate_regime_candidate:
             tags.append("rate_regime_shock_candidate")
-        # CRITICAL: Finnhub CANNOT confirm official policy events
-        tags.append("osint_alt_source")
-        tags.append("cannot_confirm_policy_event")
+            tags.append("requires_rate_cross_asset_check")
 
-        event_id_input = f"finnhub|{symbol}|{article_id}|{headline}"
-        event_id = f"finnhub-{sha1_hex(event_id_input)[:16]}"
+        event_type = "macro_calendar_update"
 
-        return {
+        urgency = self._policy_release_urgency_score(event_type)
+        source_conf = self._source_confidence("tier_c_osint_alt")
+        requires_cross_asset = bool(rate_regime_candidate)
+
+        packet = {
             "schema_version": "macro_policy_event.v1",
-            "event_id": event_id,
+            "event_id": f"finnhub-{symbol}-agg-{int(time.time())}",
             "timestamp_utc": iso_now(),
 
             "source_domain": "finnhub.io",
-            "source_url": article_url,
-            "source_feed_url": self.api_base,
-            "source_tier": source_tier,
+            "source_url": f"{self.api_base}/company-news",
+            "source_feed_url": f"{self.api_base}/company-news",
+            "source_tier": "tier_c_osint_alt",
             "source_type": "api",
-            "official_source": False,  # Finnhub is NOT official
+            "official_source": False,
 
-            "event_type": "macro_calendar_update",
-            "headline": f"FINNHUB [{symbol}]: {headline}",
-            "summary": summary[:500] if summary else None,
-            "published_time_utc": published_time_utc,
+            "event_type": event_type,
+            "headline": f"Finnhub news sentiment snapshot: {symbol}",
+            "summary": f"OSINT/alt-tier headline summary for {symbol}; enrichment only.",
+            "published_time_utc": None,
 
             "tags": tags,
-            "rate_regime_shock_candidate": rate_regime,
-            "requires_rate_cross_asset_check": False,  # Tier C cannot force cross-asset checks
+            "rate_regime_shock_candidate": rate_regime_candidate,
+            "requires_rate_cross_asset_check": requires_cross_asset,
             "official_source_confirmed": False,
-            "official_policy_confirmation": False,
-            "cannot_confirm_policy_event": True,
 
-            "policy_release_urgency_score": 0.30,  # Low urgency — OSINT only
+            "policy_release_urgency_score": urgency,
             "source_confidence": source_conf,
 
             "release_window": {
                 "release_key": None,
                 "release_time_et_hint": None,
-                "pre_buffer_minutes": 0,
-                "post_buffer_minutes": 0,
+                "pre_buffer_minutes": int(self.event_windows.get("pre_release_buffer_minutes_default", 10)),
+                "post_buffer_minutes": int(self.event_windows.get("post_release_buffer_minutes_default", 20))
             },
 
             "parsing_meta": {
                 "symbol": symbol,
-                "article_id": article_id,
-                "article_source": article_source,
-                "article_url": article_url,
+                "headline_count": headline_count,
+                "headline_pressure_score": score,
+                "rate_sensitive_headline_count": rate_sensitive_count,
+                "policy_like_headline_count": policy_like_count,
+                "top_headlines_preview": top_headlines,
+                "cannot_confirm_policy_event": True
             },
+
             "provenance": {
                 "bridge": "finnhub_bridge",
-                "bridge_version": "0.1.0-skeleton",
-                "normalized_from": "api",
-                "source_tier": source_tier,
-                "raw_source_url": self.api_base,
+                "bridge_version": "0.1.0",
+                "normalized_from": "finnhub_company_news",
+                "raw_source_url": f"{self.api_base}/company-news"
             },
 
-            "operator_summary": f"finnhub [{symbol}]: {headline[:80]} | conf={source_conf:.2f} | osint_only",
+            "operator_summary": (
+                f"osint_alt:{symbol} | headlines={headline_count} | "
+                f"pressure={score:.2f} | rate_sensitive={rate_sensitive_count} | "
+                f"policy_like={policy_like_count} | cannot_confirm_policy_event=true"
+            )
         }
+        return packet
 
-    def _error_packet(self, error: str) -> Dict[str, Any]:
+    def _build_item_packet(self, symbol: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        headline = str(item.get("headline", "") or "")
+        summary = str(item.get("summary", "") or "") if item.get("summary") else None
+        url = str(item.get("url", "") or f"{self.api_base}/company-news")
+        dt_iso = self._finnhub_ts_to_iso(item.get("datetime"))
+
+        hs = safe_lower(headline)
+        is_rate_sensitive = any(k in hs for k in self.rate_sensitive_keywords)
+        is_policy_like = any(k in hs for k in self.policy_keywords)
+
+        tags = ["osint_alt_enrichment", "headline_item", "cannot_confirm_policy_event"]
+        if is_rate_sensitive:
+            tags += ["rate_regime_shock_candidate", "requires_rate_cross_asset_check"]
+        if is_policy_like:
+            tags += ["policy_like_headline_unconfirmed"]
+
+        urgency = self._policy_release_urgency_score("macro_calendar_update")
+        source_conf = self._source_confidence("tier_c_osint_alt")
+
+        packet = {
+            "schema_version": "macro_policy_event.v1",
+            "event_id": f"finnhub-{symbol}-item-{self._stable_id_fragment(symbol, headline, dt_iso)}",
+            "timestamp_utc": iso_now(),
+
+            "source_domain": "finnhub.io",
+            "source_url": url,
+            "source_feed_url": f"{self.api_base}/company-news",
+            "source_tier": "tier_c_osint_alt",
+            "source_type": "api",
+            "official_source": False,
+
+            "event_type": "macro_calendar_update",
+            "headline": f"Finnhub headline ({symbol}): {headline}",
+            "summary": summary,
+            "published_time_utc": dt_iso,
+
+            "tags": tags,
+            "rate_regime_shock_candidate": bool(is_rate_sensitive),
+            "requires_rate_cross_asset_check": bool(is_rate_sensitive),
+            "official_source_confirmed": False,
+
+            "policy_release_urgency_score": urgency,
+            "source_confidence": source_conf,
+
+            "release_window": {
+                "release_key": None,
+                "release_time_et_hint": None,
+                "pre_buffer_minutes": int(self.event_windows.get("pre_release_buffer_minutes_default", 10)),
+                "post_buffer_minutes": int(self.event_windows.get("post_release_buffer_minutes_default", 20))
+            },
+
+            "parsing_meta": {
+                "symbol": symbol,
+                "finnhub_category": item.get("category"),
+                "finnhub_source": item.get("source"),
+                "related": item.get("related"),
+                "rate_sensitive_headline": is_rate_sensitive,
+                "policy_like_headline_unconfirmed": is_policy_like,
+                "cannot_confirm_policy_event": True
+            },
+
+            "provenance": {
+                "bridge": "finnhub_bridge",
+                "bridge_version": "0.1.0",
+                "normalized_from": "finnhub_company_news",
+                "raw_source_url": f"{self.api_base}/company-news"
+            },
+
+            "operator_summary": (
+                f"osint_alt_headline:{symbol} | rate_sensitive={is_rate_sensitive} | "
+                f"policy_like_unconfirmed={is_policy_like} | cannot_confirm_policy_event=true"
+            )
+        }
+        return packet
+
+    # -------------------------
+    # Scoring / selection helpers
+    # -------------------------
+    def _headline_pressure_score(self, items: List[Dict[str, Any]]) -> float:
+        if not items:
+            return 0.0
+
+        score = 0.0
+        count = 0
+        for n in items:
+            h = safe_lower(n.get("headline", ""))
+            if not h:
+                continue
+            s = 0.0
+            if any(k in h for k in self.rate_sensitive_keywords):
+                s += 0.45
+            if any(k in h for k in ["surge", "plunge", "warning", "cuts", "raises", "sanctions", "tariff", "guidance", "downgrade"]):
+                s += 0.25
+            if any(k in h for k in ["fed", "fomc", "cpi", "inflation", "jobs", "treasury", "oil", "energy"]):
+                s += 0.20
+            count += 1
+            score += min(s, 1.0)
+
+        if count == 0:
+            return 0.0
+        return round(min(score / count, 1.0), 4)
+
+    def _select_high_signal_items(self, symbol: str, items: List[Dict[str, Any]], max_items: int = 3) -> List[Dict[str, Any]]:
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        for it in items:
+            h = safe_lower(it.get("headline", ""))
+            if not h:
+                continue
+            s = 0.0
+            if any(k in h for k in self.rate_sensitive_keywords):
+                s += 0.6
+            if any(k in h for k in self.policy_keywords):
+                s += 0.3
+            if any(k in h for k in ["earnings", "guidance", "downgrade", "upgrade", "sanctions", "tariff"]):
+                s += 0.2
+            if s > 0:
+                scored.append((s, it))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [it for _, it in scored[:max_items]]
+
+    # -------------------------
+    # Meta helpers
+    # -------------------------
+    def _load_symbols_from_watchlist(self, watchlist_cfg: Dict[str, Any]) -> List[str]:
+        symbols: List[str] = []
+        wl = watchlist_cfg.get("watchlist") or watchlist_cfg.get("assets") or []
+        for item in wl:
+            if not isinstance(item, dict):
+                continue
+            sym = str(item.get("symbol", "")).strip()
+            if not sym:
+                continue
+
+            skip_patterns = ["USD", "XAU", "UST", "VIX", "BRN", "BZ=F", "^", "GC=F", "USD/"]
+            if any(sym.startswith(p) or p in sym for p in skip_patterns):
+                continue
+
+            symbols.append(sym)
+
+        seen = set()
+        out = []
+        for s in symbols:
+            if s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
+
+    def _policy_release_urgency_score(self, event_type: str) -> float:
+        defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
+        base = float(defaults.get(event_type, 0.40))
+        return min(base, 0.55)
+
+    def _source_confidence(self, tier: str) -> float:
+        return float((self.source_tiers.get(tier) or {}).get("confidence_weight", 0.60))
+
+    def _finnhub_ts_to_iso(self, ts: Any) -> Optional[str]:
+        try:
+            if ts is None:
+                return None
+            val = float(ts)
+            if val > 1e12:
+                val /= 1000.0
+            dt = datetime.fromtimestamp(val, tz=timezone.utc)
+            return dt.isoformat()
+        except Exception:
+            return None
+
+    def _stable_id_fragment(self, symbol: str, headline: str, dt_iso: Optional[str]) -> str:
+        raw = f"{symbol}|{headline}|{dt_iso or ''}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+    # -------------------------
+    # Errors
+    # -------------------------
+    def _error_packet(self, error: str, symbol: Optional[str]) -> Dict[str, Any]:
         return {
             "schema_version": "macro_policy_event_error.v1",
             "timestamp_utc": iso_now(),
             "source_domain": "finnhub.io",
+            "source_url": f"{self.api_base}/company-news",
             "source_tier": "tier_c_osint_alt",
             "official_source": False,
             "bridge": "finnhub_bridge",
-            "error": error,
+            "symbol": symbol,
+            "error": error
         }
 
 
+# -----------------------------
+# CLI
+# -----------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Global Sentinel Finnhub Bridge")
     p.add_argument("--repo-root", default=".")
-    p.add_argument("--once", action="store_true")
-    p.add_argument("--jsonl", action="store_true")
-    p.add_argument("--symbols", default="", help="Comma-separated symbols to override config")
-    p.add_argument("--loop-seconds", type=int, default=300)
+    p.add_argument("--once", action="store_true", help="Poll once and print JSON output")
+    p.add_argument("--jsonl", action="store_true", help="Emit one JSON packet per line")
+    p.add_argument("--loop-seconds", type=int, default=300, help="Polling interval")
     return p.parse_args()
 
 
@@ -262,9 +463,6 @@ def main() -> None:
     args = parse_args()
     repo_root = Path(args.repo_root).resolve()
     bridge = FinnhubBridge(repo_root)
-
-    if args.symbols:
-        bridge.symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
 
     if args.once:
         packets = bridge.poll()

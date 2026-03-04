@@ -1,571 +1,460 @@
 #!/usr/bin/env python3
 """
-Global Sentinel V4.2 - Idiosyncratic Intraday Package Builder (Shadow Mode Only)
+Global Sentinel V4.5 - Idiosyncratic Package Builder (Shadow Mode)
 
 Purpose:
-- Generate a diversified intraday opportunity package (long/short/puts/calls/spreads)
-- Bias toward idiosyncratic names (low ETF overlap / underweighted in thematic baskets)
-- Use real-time regime score + catalysts + AI infra/geopolitical signals
-- Never place live orders; outputs shadow recommendations only
+- Build diversified, time-window-aware, guardrail-aware SHADOW trade packages
+- Focus on idiosyncratic/single-name opportunities informed by macro + geopolitics + AI infra themes
+- Produce auditable package objects, not orders
 
-This is a framework/stub:
-- Replace mock inputs with your real MCP feeds / market snapshots / options chains / ETF holdings data.
+Inputs (flexible dicts):
+- packet: crisis_monitor packet with macro summaries/router output/time-window state/risk flags
+- watchlist config and optional candidate universe
+- runtime flags
+
+Outputs:
+- package dict with candidate ideas + blocked ideas + execution constraints + reasons
 """
 
 from __future__ import annotations
 
 import json
-import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
-
-try:
-    import yaml
-except ImportError:
-    raise SystemExit("Please install pyyaml")
-
-try:
-    from src.alpha.time_window_policy import TimeWindowPolicyEngine
-except Exception:
-    try:
-        # Fallback: direct relative import when running as script
-        import importlib.util as _ilu
-        _twp_path = Path(__file__).resolve().parent / "time_window_policy.py"
-        if _twp_path.exists():
-            _spec = _ilu.spec_from_file_location("time_window_policy", _twp_path)
-            _mod = _ilu.module_from_spec(_spec)
-            _spec.loader.exec_module(_mod)
-            TimeWindowPolicyEngine = _mod.TimeWindowPolicyEngine
-        else:
-            TimeWindowPolicyEngine = None  # type: ignore[assignment,misc]
-    except Exception:
-        TimeWindowPolicyEngine = None  # type: ignore[assignment,misc]
+from typing import Any, Dict, List, Optional, Tuple
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
 def iso_now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_float(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def safe_bool(v: Any, default: bool = False) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, x))
 
 
-def read_json(path: Path, default: Any) -> Any:
-    try:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
-
-
 def load_yaml(path: Path) -> Dict[str, Any]:
+    import yaml
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+# -----------------------------
+# Package Builder
+# -----------------------------
 class IdiosyncraticPackageBuilder:
+    """
+    Produces shadow-only candidate packages.
+    Does NOT submit orders.
+    """
+
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
-        self.cfg = load_yaml(repo_root / "config" / "idiosyncratic_package.yaml")
-        self.out_dir = repo_root / "reports" / "packages"
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.watchlist_cfg = self._load_watchlist()
+        self.execution_reliability_cfg = self._load_execution_reliability_cfg()
+        self.candidate_universe = self._build_default_candidate_universe()
 
-        # --- Time window policy (additive timing layer) ---
-        self.time_policy = None
-        try:
-            if TimeWindowPolicyEngine is not None:
-                self.time_policy = TimeWindowPolicyEngine(repo_root=self.repo_root)
-        except Exception:
-            self.time_policy = None
-
-    def load_latest_regime_packet(self) -> Dict[str, Any]:
-        score_dir = self.repo_root / "logs" / "scorecards"
-        if not score_dir.exists():
-            return {}
-        files = sorted(score_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return read_json(files[0], {}) if files else {}
-
-    def load_control_flags(self) -> Dict[str, bool]:
-        manual = read_json(self.repo_root / "control" / "manual_veto.json", {"manual_veto": False})
-        kill = read_json(self.repo_root / "control" / "kill_switch.json", {"kill_switch": False})
-        return {
-            "manual_veto": bool(manual.get("manual_veto", False)),
-            "kill_switch": bool(kill.get("kill_switch", False))
+        self.ticker_theme_map = {
+            "LMT": ["defense", "geopolitical_conflict"],
+            "RTX": ["defense", "geopolitical_conflict"],
+            "NOC": ["defense", "geopolitical_conflict"],
+            "XOM": ["energy", "oil_supply"],
+            "CVX": ["energy", "oil_supply"],
+            "SLB": ["energy_services", "oil_supply"],
+            "HAL": ["energy_services", "oil_supply"],
+            "CAT": ["industrials", "infrastructure", "margin_squeeze_risk"],
+            "DE": ["industrials", "ag", "margin_squeeze_risk"],
+            "NVDA": ["ai_infra", "hyperscaler_capex", "liquidity_beta"],
+            "SMCI": ["ai_infra", "server_hardware", "data_center_capex"],
+            "ANET": ["ai_infra", "networking", "data_center_capex"],
+            "VRT": ["ai_infra", "power_cooling", "data_center_capex"],
+            "ETN": ["electrical", "power_infra", "data_center_power"],
+            "ABB": ["electrical", "power_infra"],
+            "AMZN": ["hyperscaler", "cloud", "ai_capex"],
+            "MSFT": ["hyperscaler", "cloud", "ai_capex"],
+            "GOOGL": ["hyperscaler", "cloud", "ai_capex"],
+            "META": ["ai_capex", "ad_beta", "risk_beta"],
+            "TSLA": ["high_beta", "consumer_discretionary", "macro_sensitive"],
+            "ASML": ["semicap", "ai_infra", "global_supply_chain"],
+            "ARM": ["semis", "ai_beta"],
         }
 
-    def get_candidate_universe(self) -> List[Dict[str, Any]]:
-        """
-        Replace this with:
-        - ETF holdings overlap stats
-        - liquidity
-        - options chain quality
-        - real-time catalyst tags
-        - MCP-sourced signals (news, price, options, infra, geopolitics)
-        """
-        return [
-            {
-                "symbol": "DY", "name": "Dycom Industries", "sector": "Industrials",
-                "themes": ["fiber_buildout", "engineering_construction_datacenter"],
-                "etf_overlap_score": 0.22, "thematic_ai_etf_overlap_score": 0.10,
-                "liquidity_quality": 0.78, "ai_infra_relevance": 0.88,
-                "geopolitical_relevance": 0.32, "idiosyncratic_catalyst": 0.74,
-                "real_time_dislocation": 0.63, "crowding_inverse": 0.72,
-                "risk_asymmetry": 0.58, "options_liquidity": 0.55,
-                "catalyst_tags": ["hyperscaler_capex_signal", "fiber_buildout"]
-            },
-            {
-                "symbol": "ETN", "name": "Eaton", "sector": "Industrials",
-                "themes": ["data_center_power_distribution", "switchgear"],
-                "etf_overlap_score": 0.55, "thematic_ai_etf_overlap_score": 0.42,
-                "liquidity_quality": 0.95, "ai_infra_relevance": 0.92,
-                "geopolitical_relevance": 0.40, "idiosyncratic_catalyst": 0.68,
-                "real_time_dislocation": 0.52, "crowding_inverse": 0.30,
-                "risk_asymmetry": 0.60, "options_liquidity": 0.85,
-                "catalyst_tags": ["data_center_capacity_signal", "power_constraint_signal"]
-            },
-            {
-                "symbol": "LITE", "name": "Lumentum", "sector": "Technology",
-                "themes": ["optical_interconnects", "networking_components"],
-                "etf_overlap_score": 0.31, "thematic_ai_etf_overlap_score": 0.21,
-                "liquidity_quality": 0.73, "ai_infra_relevance": 0.83,
-                "geopolitical_relevance": 0.29, "idiosyncratic_catalyst": 0.66,
-                "real_time_dislocation": 0.71, "crowding_inverse": 0.64,
-                "risk_asymmetry": 0.67, "options_liquidity": 0.61,
-                "catalyst_tags": ["optical_interconnects", "guidance_revision"]
-            },
-            {
-                "symbol": "PWR", "name": "Quanta Services", "sector": "Industrials",
-                "themes": ["grid_infrastructure", "power_distribution"],
-                "etf_overlap_score": 0.36, "thematic_ai_etf_overlap_score": 0.18,
-                "liquidity_quality": 0.86, "ai_infra_relevance": 0.84,
-                "geopolitical_relevance": 0.48, "idiosyncratic_catalyst": 0.61,
-                "real_time_dislocation": 0.57, "crowding_inverse": 0.58,
-                "risk_asymmetry": 0.54, "options_liquidity": 0.70,
-                "catalyst_tags": ["power_constraint_signal", "grid_infrastructure"]
-            },
-            {
-                "symbol": "CARR", "name": "Carrier Global", "sector": "Industrials",
-                "themes": ["thermal_management_cooling", "hvac_datacenter"],
-                "etf_overlap_score": 0.43, "thematic_ai_etf_overlap_score": 0.25,
-                "liquidity_quality": 0.88, "ai_infra_relevance": 0.79,
-                "geopolitical_relevance": 0.37, "idiosyncratic_catalyst": 0.59,
-                "real_time_dislocation": 0.49, "crowding_inverse": 0.51,
-                "risk_asymmetry": 0.50, "options_liquidity": 0.72,
-                "catalyst_tags": ["thermal_management_cooling"]
-            },
-            {
-                "symbol": "AMKR", "name": "Amkor Technology", "sector": "Technology",
-                "themes": ["semiconductor_packaging_test"],
-                "etf_overlap_score": 0.29, "thematic_ai_etf_overlap_score": 0.16,
-                "liquidity_quality": 0.76, "ai_infra_relevance": 0.72,
-                "geopolitical_relevance": 0.55, "idiosyncratic_catalyst": 0.64,
-                "real_time_dislocation": 0.62, "crowding_inverse": 0.69,
-                "risk_asymmetry": 0.63, "options_liquidity": 0.58,
-                "catalyst_tags": ["supply_chain_disruption", "semiconductor_packaging_test"]
-            },
-            {
-                "symbol": "DLR", "name": "Digital Realty", "sector": "Real Estate",
-                "themes": ["data_center_reit", "capacity_constraints"],
-                "etf_overlap_score": 0.61, "thematic_ai_etf_overlap_score": 0.47,
-                "liquidity_quality": 0.84, "ai_infra_relevance": 0.80,
-                "geopolitical_relevance": 0.35, "idiosyncratic_catalyst": 0.56,
-                "real_time_dislocation": 0.45, "crowding_inverse": 0.34,
-                "risk_asymmetry": 0.44, "options_liquidity": 0.77,
-                "catalyst_tags": ["data_center_capacity_signal"]
-            },
-            {
-                "symbol": "KEYS", "name": "Keysight Technologies", "sector": "Technology",
-                "themes": ["test_measurement", "network_validation"],
-                "etf_overlap_score": 0.35, "thematic_ai_etf_overlap_score": 0.19,
-                "liquidity_quality": 0.82, "ai_infra_relevance": 0.69,
-                "geopolitical_relevance": 0.42, "idiosyncratic_catalyst": 0.60,
-                "real_time_dislocation": 0.58, "crowding_inverse": 0.62,
-                "risk_asymmetry": 0.57, "options_liquidity": 0.66,
-                "catalyst_tags": ["networking_components", "guidance_revision"]
-            }
-        ]
-
-    def score_candidate(self, c: Dict[str, Any], regime: Dict[str, Any]) -> Dict[str, Any]:
-        weights = self.cfg["package_builder"]["signals"]["weights"]
-        base = (
-            weights["geopolitical_relevance"] * c.get("geopolitical_relevance", 0.0)
-            + weights["ai_infra_relevance"] * c.get("ai_infra_relevance", 0.0)
-            + weights["idiosyncratic_catalyst"] * c.get("idiosyncratic_catalyst", 0.0)
-            + weights["real_time_dislocation"] * c.get("real_time_dislocation", 0.0)
-            + weights["crowding_inverse"] * c.get("crowding_inverse", 0.0)
-            + weights["liquidity_quality"] * c.get("liquidity_quality", 0.0)
-            + weights["risk_asymmetry"] * c.get("risk_asymmetry", 0.0)
-        )
-
-        regime_p = float(regime.get("regime_shift_probability", 0.0) or 0.0)
-        crisis_tilt = 0.0
-        if regime_p >= 0.75:
-            if any(t in c.get("themes", []) for t in ["grid_infrastructure", "power_distribution", "data_center_power_distribution"]):
-                crisis_tilt += 0.04
-            if c.get("geopolitical_relevance", 0.0) > 0.45:
-                crisis_tilt += 0.03
-
-        overlap_penalty = 0.15 * max(c.get("etf_overlap_score", 0.0) - 0.35, 0.0)
-        thematic_overlap_penalty = 0.10 * max(c.get("thematic_ai_etf_overlap_score", 0.0) - 0.25, 0.0)
-
-        score = clamp(base + crisis_tilt - overlap_penalty - thematic_overlap_penalty)
-        c2 = dict(c)
-        c2["package_score"] = round(score, 4)
-        c2["score_components"] = {
-            "base_score": round(base, 4),
-            "crisis_tilt": round(crisis_tilt, 4),
-            "overlap_penalty": round(overlap_penalty + thematic_overlap_penalty, 4)
+        self.default_strategy_templates = {
+            "long_breakout": {"style": "momentum_long", "requires": ["orb_breakout_long"], "direction": "long", "instrument_types": ["equity"]},
+            "short_breakdown": {"style": "momentum_short", "requires": ["orb_breakdown_short"], "direction": "short", "instrument_types": ["equity"]},
+            "gap_and_crap_puts": {"style": "gap_failure_puts", "requires": ["gap_and_crap_puts"], "direction": "bearish_defined_risk", "instrument_types": ["options_put"]},
+            "late_morning_mean_reversion_short": {"style": "mean_reversion_short", "requires": ["short_mean_reversion"], "direction": "short", "instrument_types": ["equity", "options_put"]},
+            "power_hour_continuation_long": {"style": "power_hour_momentum_long", "requires": ["orb_breakout_long"], "direction": "long", "instrument_types": ["equity"]},
+            "watchlist_next_day_fade_only": {"style": "watchlist_only_next_day_setup", "requires": ["eod_fade_watchlist_only"], "direction": "watchlist_only", "instrument_types": ["none"]},
         }
-        return c2
 
-    def choose_instrument(self, c: Dict[str, Any], regime: Dict[str, Any]) -> Tuple[str, str]:
-        regime_p = float(regime.get("regime_shift_probability", 0.0) or 0.0)
-        options_ok = c.get("options_liquidity", 0.0) >= 0.6
-        score = c.get("package_score", 0.0)
+    def build_package(self, packet: Dict[str, Any], candidate_universe_override: Optional[List[str]] = None) -> Dict[str, Any]:
+        now = iso_now()
+        time_window_state = packet.get("time_window_state") or {}
+        strategy_eligibility = time_window_state.get("strategy_eligibility") or {}
+        runtime_flags = packet.get("runtime_flags") or {}
+        control_flags = packet.get("control_flags") or {}
+        macro_summary = packet.get("macro_policy_summary") or {}
+        macro_router_summary = (packet.get("macro_event_router") or {}).get("macro_event_router_summary", {})
+        macro_top_events = (packet.get("macro_event_router") or {}).get("macro_events_priority_top", []) or packet.get("macro_events_priority_top", [])
 
-        bullish = c.get("ai_infra_relevance", 0.0) + c.get("idiosyncratic_catalyst", 0.0) >= 1.35
-        if regime_p >= 0.75 and c.get("geopolitical_relevance", 0.0) < 0.3 and c.get("real_time_dislocation", 0.0) > 0.7:
-            bullish = False
+        effective_mode = str(packet.get("effective_mode") or packet.get("mode") or "NORMAL")
+        regime_p = safe_float(packet.get("regime_shift_probability"), 0.0)
+        base_conf = safe_float(packet.get("confidence") or packet.get("time_window_adjusted_confidence"), 0.0)
+        tw_conf_mult = safe_float(packet.get("window_confidence_multiplier"), 1.0)
+        tw_size_mult = safe_float(packet.get("window_size_multiplier"), 1.0)
+        tw_adj_conf = safe_float(packet.get("time_window_adjusted_confidence"), base_conf * tw_conf_mult)
 
-        if bullish:
-            if options_ok and c.get("risk_asymmetry", 0.0) > 0.6:
-                return "long_call" if score > 0.72 else "call_spread", "bullish idiosyncratic catalyst + AI infra relevance"
-            return "long_equity", "bullish idiosyncratic catalyst + liquidity"
-        else:
-            if options_ok:
-                return "long_put" if score > 0.70 else "put_spread", "defensive/downside setup in risk-off or dislocation context"
-            return "short_equity", "bearish/dislocation setup with limited options liquidity"
+        combined_shadow_blocked = safe_bool(packet.get("shadow_execution_blocked"), False)
+        window_shadow_blocked = safe_bool(packet.get("window_shadow_execution_blocked"), False)
+        watchlist_only_window = safe_bool(packet.get("watchlist_only_window"), False)
+        policy_data_integrity_degraded = safe_bool(packet.get("policy_data_integrity_degraded"), False)
+        slippage_bps_est = safe_float(runtime_flags.get("slippage_bps_estimate"), 0.0)
+        luld_halt_detected = safe_bool(runtime_flags.get("luld_halt_detected"), False)
+        broker_status_degraded = safe_bool(runtime_flags.get("broker_status_degraded"), False)
+        major_release_day = safe_bool(runtime_flags.get("major_release_day"), False)
+        whipsaw_after_open = safe_bool(runtime_flags.get("whipsaw_detected_after_open"), False)
 
-    def _strategy_type_for_instrument(self, instrument: str) -> str:
-        mapping = {
-            "long_equity": "orb_breakout_long",
-            "short_equity": "orb_breakdown_short",
-            "long_put": "gap_and_crap_puts",
-            "long_call": "orb_breakout_long",
-            "put_spread": "short_mean_reversion",
-            "call_spread": "orb_breakout_long",
-        }
-        return mapping.get(instrument, "orb_breakout_long")
-
-    def build_package(self) -> Dict[str, Any]:
-        regime = self.load_latest_regime_packet()
-        flags = self.load_control_flags()
-
-        fallback_mode = bool(regime.get("fallback_mode_status", False))
-        confidence = float(regime.get("confidence", 0.85) or 0.85)
-        quorum_ok = bool(regime.get("data_freshness_status", {}).get("quorum_pass", True)) if isinstance(regime.get("data_freshness_status"), dict) else True
-
-        shadow_blocked = flags["manual_veto"] or flags["kill_switch"] or fallback_mode or (not quorum_ok)
-
-        # --- Time window classification ---
-        timestamp_utc = iso_now()
-        window_state = None
-        window_guardrail_blocks: List[str] = []
-        if self.time_policy is not None:
-            try:
-                window_state = self.time_policy.classify(
-                    timestamp_utc=timestamp_utc,
-                    controls={
-                        "manual_veto": bool(flags.get("manual_veto", False)),
-                        "kill_switch": bool(flags.get("kill_switch", False)),
-                    },
-                    data_quality={
-                        "quorum_pass": quorum_ok,
-                        "fallback_mode": fallback_mode,
-                        "luld_halt_detected": False,
-                    },
-                    runtime_flags={
-                        "major_release_day": False,
-                    },
-                )
-            except Exception:
-                window_state = None
-
-        # Apply window-level confidence multiplier
-        window_confidence_mult = 1.0
-        window_size_mult = 1.0
-        shadow_execution_window_blocked = False
-        strategy_eligibility: Dict[str, Any] = {}
-        if window_state is not None:
-            window_confidence_mult = float(window_state.get("confidence_multiplier", 1.0))
-            window_size_mult = float(window_state.get("size_multiplier", 1.0))
-            strategy_eligibility = window_state.get("strategy_eligibility", {})
-            # Merge engine-reported guardrail blocks
-            for blk in window_state.get("window_guardrail_blocks", []):
-                if blk not in window_guardrail_blocks:
-                    window_guardrail_blocks.append(blk)
-            if window_state.get("shadow_execution_window_blocked", False):
-                shadow_execution_window_blocked = True
-                shadow_blocked = True
-                if "window_policy_block" not in window_guardrail_blocks:
-                    window_guardrail_blocks.append("window_policy_block")
-            if window_size_mult == 0.0:
-                if "size_multiplier_zero_no_new_positions" not in window_guardrail_blocks:
-                    window_guardrail_blocks.append("size_multiplier_zero_no_new_positions")
-            if window_state.get("event_risk_window_active", False):
-                if "event_risk_window_active" not in window_guardrail_blocks:
-                    window_guardrail_blocks.append("event_risk_window_active")
-
-        candidates = self.get_candidate_universe()
-        cfg = self.cfg["package_builder"]
-
-        filt = []
-        for c in candidates:
-            if c.get("etf_overlap_score", 1.0) > cfg["universe"]["max_etf_overlap_score"]:
-                continue
-            if c.get("thematic_ai_etf_overlap_score", 1.0) > cfg["universe"]["max_thematic_ai_etf_overlap_score"]:
-                continue
-            if c.get("liquidity_quality", 0.0) < cfg["universe"]["min_intraday_liquidity_score"]:
-                continue
-            filt.append(c)
-
-        scored = [self.score_candidate(c, regime) for c in filt]
-        scored.sort(key=lambda x: x["package_score"], reverse=True)
-
-        positions = []
-        sector_weights: Dict[str, float] = {}
-        themes = set()
-        target_positions = cfg["diversification"]["target_positions"]
-        max_positions = cfg["diversification"]["max_positions"]
-        max_sector = cfg["diversification"]["max_sector_weight_pct"] / 100.0
-        max_single = cfg["diversification"]["max_single_name_weight_pct"] / 100.0
-
-        # Pre-compute window-aware parameters for candidate loop
-        current_window_name = window_state.get("current_window", "") if window_state else ""
-        preferred_setups = window_state.get("preferred_setups", []) if window_state else []
-        window_min_rvol = None
-        if window_state and isinstance(window_state.get("thresholds"), dict):
-            window_min_rvol = window_state["thresholds"].get("min_rvol")
-
-        for c in scored:
-            if len(positions) >= max_positions:
-                break
-
-            # Block new positions entirely if size_multiplier is 0
-            if window_state is not None and window_size_mult == 0.0:
-                break
-
-            instrument, rationale_dir = self.choose_instrument(c, regime)
-            raw_w = 0.10 + 0.12 * (c["package_score"] - 0.5)
-            w = clamp(raw_w, 0.04, max_single)
-
-            # Apply window size multiplier to position weight
-            if window_state is not None and window_size_mult != 1.0:
-                w = w * window_size_mult
-
-            sector = c["sector"]
-            if sector_weights.get(sector, 0.0) + w > max_sector:
-                continue
-
-            # --- Window-aware tagging (shadow-mode permissive: tag, don't hard-block) ---
-            position_tags: List[str] = []
-
-            # Strategy eligibility from TimeWindowPolicyEngine
-            strategy_type = self._strategy_type_for_instrument(instrument)
-            strat_elig = strategy_eligibility.get(strategy_type, {})
-            if not strat_elig.get("eligible", True):
-                position_tags.append(f"strategy_blocked:{','.join(strat_elig.get('reasons_blocked', []))}")
-
-            # Strategy eligibility: tag preferred_setup mismatches
-            if preferred_setups and c.get("setup_type"):
-                if c["setup_type"] not in preferred_setups:
-                    position_tags.append(f"setup_mismatch:{c['setup_type']}_not_in_window_preferred")
-
-            # Lunch lull restrictions
-            if current_window_name == "lunch_lull":
-                has_exceptional_catalyst = bool(c.get("idiosyncratic_catalyst", 0.0) >= 0.80)
-                if not has_exceptional_catalyst:
-                    position_tags.append("watchlist_only")
-                if window_min_rvol is not None:
-                    position_tags.append(f"min_rvol_required:{window_min_rvol}")
-
-            # Event risk mode tagging
-            if window_state and window_state.get("event_risk_window_active", False):
-                position_tags.append("event_risk_active")
-
-            position = {
-                "symbol": c["symbol"], "name": c["name"],
-                "instrument": instrument,
-                "weight_pct_gross": round(w * 100.0, 2),
-                "package_score": c["package_score"],
-                "sector": sector, "themes": c.get("themes", []),
-                "catalyst_tags": c.get("catalyst_tags", []),
-                "etf_overlap_score": c.get("etf_overlap_score"),
-                "thematic_ai_etf_overlap_score": c.get("thematic_ai_etf_overlap_score"),
-                "rationale": [
-                    rationale_dir,
-                    f"AI infra relevance={c.get('ai_infra_relevance')}",
-                    f"Real-time dislocation={c.get('real_time_dislocation')}",
-                    f"Crowding inverse={c.get('crowding_inverse')}",
-                    f"ETF overlap penalty applied={c['score_components']['overlap_penalty']}"
-                ],
-                "score_components": c["score_components"],
-                "window_tags": position_tags,
-            }
-            positions.append(position)
-            sector_weights[sector] = sector_weights.get(sector, 0.0) + w
-            for t in c.get("themes", []):
-                themes.add(t)
-            if len(positions) >= target_positions and len(themes) >= cfg["diversification"]["min_unique_themes"]:
-                break
-
-        # --- Watchlist-only logic for specific windows ---
-        current_window = window_state.get("current_window", "unknown") if window_state else "unknown"
-        if current_window == "close_exhaustion_watch":
-            # No new intraday risk, watchlist only
-            for p in positions:
-                p["watchlist_only"] = True
-                p.setdefault("window_tags", []).append("close_exhaustion_no_new_risk")
-        elif current_window == "lunch_lull":
-            # Tag lunch_lull unless there's an exceptional catalyst
-            for p in positions:
-                has_exceptional = any(
-                    ct in ("earnings_surprise", "fda_approval", "activist_stake")
-                    for ct in p.get("catalyst_tags", [])
-                )
-                if not has_exceptional:
-                    p.setdefault("window_tags", []).append("lunch_lull_reduced_conviction")
-
-        if cfg["diversification"]["require_at_least_one_hedge"]:
-            has_hedge = any(p["instrument"] in {"long_put", "put_spread", "short_equity"} for p in positions)
-            if not has_hedge and positions:
-                worst = positions[-1]
-                worst["instrument"] = "put_spread"
-                worst["rationale"].append("forced hedge slot for package diversification/risk control")
-
-        total_w = sum(p["weight_pct_gross"] for p in positions) or 1.0
-        for p in positions:
-            p["weight_pct_gross"] = round((p["weight_pct_gross"] / total_w) * 100.0, 2)
-
-        confidence_adj = confidence
-        if fallback_mode:
-            confidence_adj -= cfg["intraday_logic"]["confidence_penalty_if_fallback_mode"]
-        if isinstance(regime.get("data_freshness_status"), dict) and regime["data_freshness_status"].get("conflicting_signals"):
-            confidence_adj -= cfg["intraday_logic"]["confidence_penalty_if_conflicting_signals"]
-        # Apply time window confidence multiplier
-        confidence_adj *= window_confidence_mult
-        confidence_adj = round(clamp(confidence_adj), 4)
+        thematic_context = self._derive_thematic_context(packet, macro_summary, macro_top_events)
+        candidates = candidate_universe_override or self.candidate_universe
+        candidates = self._dedupe_preserve_order(candidates)
 
         package = {
-            "timestamp_utc": timestamp_utc,
-            "engine": "idiosyncratic_intraday_package_builder_v4_2",
-            "shadow_only": True, "no_live_orders": True,
-            "regime_context": {
-                "mode": regime.get("mode"),
-                "effective_mode": regime.get("effective_mode", regime.get("mode")),
-                "regime_shift_probability": regime.get("regime_shift_probability"),
-                "confidence": confidence, "adjusted_package_confidence": confidence_adj
-            },
-            "control_flags": flags,
-            "data_quality": {"fallback_mode_status": fallback_mode, "quorum_ok": quorum_ok},
-            "shadow_execution_blocked": shadow_blocked,
-            "time_window_state": {
-                "current_window": window_state.get("current_window", "unknown") if window_state else "unknown",
-                "window_priority": window_state.get("window_priority", "unknown") if window_state else "unknown",
-                "confidence_multiplier": window_state.get("confidence_multiplier", 1.0) if window_state else 1.0,
-                "size_multiplier": window_state.get("size_multiplier", 1.0) if window_state else 1.0,
-                "event_risk_active": window_state.get("event_risk_window_active", False) if window_state else False,
-                "event_risk_mode": window_state.get("event_risk_mode") if window_state else None,
-                "global_overlap": window_state.get("global_overlap_active") if window_state else None,
-                "overlap_states": window_state.get("overlap_states") if window_state else None,
-                "shadow_window_blocked": window_state.get("shadow_execution_window_blocked", False) if window_state else False,
-                "preferred_setups": window_state.get("preferred_setups", []) if window_state else [],
-                "restrictions": window_state.get("restrictions") if window_state else None,
-                "thresholds": window_state.get("thresholds") if window_state else None,
-            },
-            "window_policy_applied": True if window_state else False,
-            "window_risk_budget": window_state.get("risk_budget") if window_state else None,
-            "window_guardrail_blocks": window_guardrail_blocks,
-            "window_strategy_eligibility": strategy_eligibility if strategy_eligibility else None,
-            "package_summary": {
-                "position_count": len(positions),
-                "unique_themes": sorted(list(themes)),
-                "sector_weights_pct": {k: round(v * 100.0, 2) for k, v in sector_weights.items()},
-                "underweighted_etf_bias": True,
-                "notes": [
-                    "This package is for shadow mode / research only.",
-                    "Focus is idiosyncratic names with lower ETF overlap rather than broad ETF beta.",
-                    "Instrument selection is a stub and must be validated against real options chain + borrow + liquidity data."
-                ]
-            },
-            "position_candidates": positions,
-            "risk_notes": [
-                "No live execution; paper/sandbox only.",
-                "Require risk gate + human approval before any shadow order routing export.",
-                "Avoid concentrated exposure to a single subtheme even when scores cluster (e.g., power/cooling)."
-            ]
+            "schema_version": "idiosyncratic_trade_package.v1",
+            "timestamp_utc": now, "shadow_mode_only": True,
+            "package_type": "diversified_idiosyncratic_daytrade_candidates",
+            "effective_mode": effective_mode,
+            "regime_shift_probability": round(regime_p, 4),
+            "base_confidence": round(base_conf, 4),
+            "time_window_adjusted_confidence": round(tw_adj_conf, 4),
+            "window_context": {"time_window_name": packet.get("time_window_name"), "watchlist_only_window": watchlist_only_window, "window_shadow_execution_blocked": window_shadow_blocked, "window_confidence_multiplier": round(tw_conf_mult, 4), "window_size_multiplier": round(tw_size_mult, 4)},
+            "runtime_flags_snapshot": {"major_release_day": major_release_day, "whipsaw_detected_after_open": whipsaw_after_open, "slippage_bps_estimate": slippage_bps_est, "luld_halt_detected": luld_halt_detected, "broker_status_degraded": broker_status_degraded},
+            "macro_context": {"policy_release_urgency_score_max": macro_summary.get("policy_release_urgency_score_max", 0.0), "official_policy_confirmation_count": macro_summary.get("official_policy_confirmation_count", 0), "rate_regime_shock_candidate_any": macro_summary.get("rate_regime_shock_candidate_any", False), "macro_event_quorum_pass": (packet.get("macro_event_quorum_status") or {}).get("quorum_pass"), "macro_event_router_summary": macro_router_summary, "top_macro_headlines_preview": [str(e.get("headline", "")) for e in macro_top_events[:5]]},
+            "thematic_context": thematic_context,
+            "global_blocks": [], "execution_constraints": {}, "required_confirmations": [],
+            "candidates": [], "blocked_candidates": [], "diversification_summary": {}, "operator_notes": [],
         }
+
+        global_blocks = self._compute_global_blocks(packet=packet, combined_shadow_blocked=combined_shadow_blocked, window_shadow_blocked=window_shadow_blocked, watchlist_only_window=watchlist_only_window, policy_data_integrity_degraded=policy_data_integrity_degraded, luld_halt_detected=luld_halt_detected, broker_status_degraded=broker_status_degraded)
+        package["global_blocks"] = global_blocks
+        package["execution_constraints"] = self._compute_execution_constraints(packet=packet, slippage_bps_est=slippage_bps_est, tw_size_mult=tw_size_mult, watchlist_only_window=watchlist_only_window, major_release_day=major_release_day, whipsaw_after_open=whipsaw_after_open)
+        package["required_confirmations"] = self._required_confirmations(packet=packet, policy_data_integrity_degraded=policy_data_integrity_degraded, major_release_day=major_release_day)
+
+        candidate_rows, blocked_rows = self._build_candidate_rows(packet=packet, candidates=candidates, strategy_eligibility=strategy_eligibility, package_global_blocks=global_blocks, thematic_context=thematic_context)
+        package["candidates"] = candidate_rows
+        package["blocked_candidates"] = blocked_rows
+        package["diversification_summary"] = self._build_diversification_summary(candidate_rows, blocked_rows)
+        package["operator_notes"] = self._operator_notes(packet, package)
         return package
 
-    def write_outputs(self, package: Dict[str, Any]) -> None:
-        ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        out_json = self.out_dir / f"intraday_package_{ts}.json"
-        out_json.write_text(json.dumps(package, indent=2), encoding="utf-8")
+    def _load_watchlist(self) -> Dict[str, Any]:
+        path = self.repo_root / "config" / "assets_watchlist.yaml"
+        if path.exists():
+            return load_yaml(path)
+        return {}
 
-        tw = package.get("time_window_state", {})
-        md = [
-            "# Global Sentinel Intraday Package (Shadow Mode)",
-            f"- Timestamp (UTC): {package['timestamp_utc']}",
-            f"- Regime mode: {package['regime_context'].get('mode')}",
-            f"- Effective mode: {package['regime_context'].get('effective_mode')}",
-            f"- Regime shift probability: {package['regime_context'].get('regime_shift_probability')}",
-            f"- Package confidence: {package['regime_context'].get('adjusted_package_confidence')}",
-            f"- Shadow execution blocked: {package['shadow_execution_blocked']}",
-            "",
-            "## Time Window",
-            f"- Current window: {tw.get('current_window', 'unknown')}",
-            f"- Window priority: {tw.get('window_priority', 'unknown')}",
-            f"- Confidence multiplier: {tw.get('confidence_multiplier', 1.0)}",
-            f"- Size multiplier: {tw.get('size_multiplier', 1.0)}",
-            f"- Event risk active: {tw.get('event_risk_active', False)}",
-            f"- Global overlap: {tw.get('global_overlap', 'N/A')}",
-            f"- Event risk mode: {tw.get('event_risk_mode', 'N/A')}",
-            f"- Overlap states: {tw.get('overlap_states', 'N/A')}",
-            f"- Shadow window blocked: {tw.get('shadow_window_blocked', False)}",
-            f"- Preferred setups: {', '.join(tw.get('preferred_setups', [])) or 'None'}",
-            f"- Window policy applied: {package.get('window_policy_applied', False)}",
-            f"- Guardrail blocks: {', '.join(package.get('window_guardrail_blocks', [])) or 'None'}",
-            "",
-            "## Strategy Eligibility",
-        ]
-        strat_elig_data = package.get("window_strategy_eligibility") or {}
-        if strat_elig_data:
-            for strat_name, elig_info in strat_elig_data.items():
-                eligible = elig_info.get("eligible", True)
-                status = "ELIGIBLE" if eligible else "BLOCKED"
-                reasons = ", ".join(elig_info.get("reasons_blocked", [])) if not eligible else "none"
-                md.append(f"- **{strat_name}**: {status} (blocked: {reasons})")
-        else:
-            md.append("- No strategy eligibility data available")
-        md += [
-            "",
-            "## Summary",
-            f"- Positions: {package['package_summary']['position_count']}",
-            f"- Unique themes: {', '.join(package['package_summary']['unique_themes']) if package['package_summary']['unique_themes'] else 'None'}",
-            "",
-            "## Candidates"
-        ]
-        for p in package["position_candidates"]:
-            tags_str = f", tags={p['window_tags']}" if p.get("window_tags") else ""
-            md.append(f"- **{p['symbol']}** ({p['instrument']}) — score={p['package_score']}, weight={p['weight_pct_gross']}%, themes={', '.join(p['themes'])}{tags_str}")
-        (self.out_dir / f"intraday_package_{ts}.md").write_text("\n".join(md), encoding="utf-8")
+    def _load_execution_reliability_cfg(self) -> Dict[str, Any]:
+        path = self.repo_root / "config" / "execution_reliability.yaml"
+        if path.exists():
+            return load_yaml(path)
+        return {"execution_reliability_guardrails": {"price_controls": {"default_order_type_equity": "limit", "default_order_type_option": "limit", "max_estimated_slippage_bps": {"opening_windows": 20, "lunch_lull": 12, "power_hour": 22}}, "fill_controls": {"order_ttl_seconds": {"opening_windows": 20, "lunch_lull": 45, "power_hour": 20}}}}
 
-    def run(self) -> Dict[str, Any]:
-        pkg = self.build_package()
-        self.write_outputs(pkg)
-        return pkg
+    def _build_default_candidate_universe(self) -> List[str]:
+        seeded = []
+        wl = self.watchlist_cfg.get("watchlist") or self.watchlist_cfg.get("assets") or []
+        for item in wl:
+            if not isinstance(item, dict):
+                continue
+            sym = str(item.get("symbol", "")).strip()
+            if sym and self._is_equity_like(sym):
+                seeded.append(sym)
+        seeded.extend(["RTX", "NOC", "CVX", "SLB", "HAL", "SMCI", "ANET", "VRT", "ETN", "ABB", "ASML", "ARM", "AVGO", "MU", "AMZN", "MSFT", "GOOGL", "META", "DE", "URI", "PWR", "EME"])
+        return self._dedupe_preserve_order(seeded)
+
+    def _is_equity_like(self, sym: str) -> bool:
+        bad_fragments = ["USD", "XAU", "UST", "^", "=", "/"]
+        return not any(f in sym for f in bad_fragments)
+
+    def _dedupe_preserve_order(self, items: List[str]) -> List[str]:
+        seen = set()
+        out = []
+        for x in items:
+            if x in seen:
+                continue
+            seen.add(x)
+            out.append(x)
+        return out
+
+    def _derive_thematic_context(self, packet: Dict[str, Any], macro_summary: Dict[str, Any], macro_top_events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text_blob = " ".join([str(e.get("headline", "")) + " " + str(e.get("summary", "")) for e in (macro_top_events or [])]).lower()
+        rate_regime_any = safe_bool(macro_summary.get("rate_regime_shock_candidate_any"), False)
+        policy_urgency = safe_float(macro_summary.get("policy_release_urgency_score_max"), 0.0)
+        energy_shock = any(k in text_blob for k in ["oil", "energy", "opec", "hormuz", "tanker", "eia"])
+        sanctions_policy = any(k in text_blob for k in ["sanction", "ofac", "treasury"])
+        fed_rates = any(k in text_blob for k in ["fomc", "federal reserve", "fed", "cpi", "inflation", "jobs", "employment", "pce"])
+        trade_tariffs = any(k in text_blob for k in ["tariff", "trade policy"])
+        immigration_labor = any(k in text_blob for k in ["immigration", "labor", "jobs", "manufacturing"])
+        packet_text_flags = {"energy_shock_transmission_confirmed": safe_bool(packet.get("energy_shock_transmission_confirmed"), False), "ai_capex_positive_impulse": safe_bool(packet.get("ai_capex_positive_impulse"), False), "hyperscaler_capex_watch": safe_bool(packet.get("hyperscaler_capex_watch"), False)}
+        ai_infra_bias = packet_text_flags["ai_capex_positive_impulse"] or packet_text_flags["hyperscaler_capex_watch"]
+        return {"rate_regime_shock_candidate_any": rate_regime_any, "policy_release_urgency_score_max": policy_urgency, "energy_shock_theme": energy_shock, "sanctions_policy_theme": sanctions_policy, "fed_rates_theme": fed_rates, "trade_tariffs_theme": trade_tariffs, "immigration_labor_theme": immigration_labor, "ai_infra_theme": ai_infra_bias or any(k in text_blob for k in ["nvidia", "data center", "hyperscaler", "ai infrastructure"]), "energy_shock_transmission_confirmed": packet_text_flags["energy_shock_transmission_confirmed"]}
+
+    def _compute_global_blocks(self, packet, combined_shadow_blocked, window_shadow_blocked, watchlist_only_window, policy_data_integrity_degraded, luld_halt_detected, broker_status_degraded) -> List[str]:
+        blocks = []
+        control_flags = packet.get("control_flags") or {}
+        if safe_bool(control_flags.get("manual_veto"), False): blocks.append("manual_veto")
+        if safe_bool(control_flags.get("kill_switch"), False): blocks.append("kill_switch")
+        if combined_shadow_blocked: blocks.append("shadow_execution_blocked")
+        if window_shadow_blocked: blocks.append("time_window_shadow_execution_blocked")
+        if watchlist_only_window: blocks.append("watchlist_only_window")
+        if policy_data_integrity_degraded: blocks.append("policy_data_integrity_degraded")
+        if luld_halt_detected: blocks.append("luld_halt_detected")
+        if broker_status_degraded: blocks.append("broker_status_degraded")
+        macro_quorum = (packet.get("macro_event_quorum_status") or {}).get("quorum_pass")
+        if macro_quorum is False and safe_float(packet.get("policy_release_urgency_score_max"), 0.0) >= 0.85:
+            blocks.append("high_urgency_macro_without_quorum")
+        return self._dedupe_preserve_order(blocks)
+
+    def _compute_execution_constraints(self, packet, slippage_bps_est, tw_size_mult, watchlist_only_window, major_release_day, whipsaw_after_open) -> Dict[str, Any]:
+        cfg = self.execution_reliability_cfg.get("execution_reliability_guardrails", {})
+        price_cfg = cfg.get("price_controls", {})
+        fill_cfg = cfg.get("fill_controls", {})
+        tw_name = str(packet.get("time_window_name") or "")
+        max_slippage_cfg = price_cfg.get("max_estimated_slippage_bps", {}) or {}
+        ttl_cfg = fill_cfg.get("order_ttl_seconds", {}) or {}
+        bucket = "opening_windows" if "opening" in tw_name else ("power_hour" if "power_hour" in tw_name else ("lunch_lull" if "lunch" in tw_name else "opening_windows"))
+        max_slippage_bps = float(max_slippage_cfg.get(bucket, 20))
+        ttl_seconds = int(ttl_cfg.get(bucket, 20))
+        if major_release_day: max_slippage_bps = min(max_slippage_bps, 15)
+        if whipsaw_after_open: max_slippage_bps = min(max_slippage_bps, 12)
+        constraints = {"shadow_mode_only": True, "default_order_type_equity": price_cfg.get("default_order_type_equity", "limit"), "default_order_type_option": price_cfg.get("default_order_type_option", "limit"), "max_estimated_slippage_bps_allowed": round(max_slippage_bps, 2), "runtime_estimated_slippage_bps": round(slippage_bps_est, 2), "slippage_constraint_breached": bool(slippage_bps_est > max_slippage_bps), "order_ttl_seconds": ttl_seconds, "position_size_multiplier_cap": round(clamp(tw_size_mult, 0.0, 1.25), 4), "watchlist_only_window": watchlist_only_window}
+        if constraints["slippage_constraint_breached"]: constraints["recommended_execution_posture"] = "watchlist_only_or_reduce_size"
+        elif watchlist_only_window: constraints["recommended_execution_posture"] = "watchlist_only"
+        else: constraints["recommended_execution_posture"] = "shadow_candidate_generation_ok"
+        return constraints
+
+    def _required_confirmations(self, packet, policy_data_integrity_degraded, major_release_day) -> List[str]:
+        req = []
+        macro_summary = packet.get("macro_policy_summary") or {}
+        if safe_bool(macro_summary.get("rate_regime_shock_candidate_any"), False):
+            req.append("rate_cross_asset_check_pass")
+            req.append("official_policy_or_macro_confirmation")
+        if policy_data_integrity_degraded: req.append("policy_data_integrity_recovery_or_manual_review")
+        if major_release_day:
+            req.append("release_window_volatility_confirmation")
+            req.append("fresh_quote_and_signal_age_check")
+        req += ["execution_reliability_checks_pass", "risk_gate_pass", "manual_operator_review_before_any_live_use"]
+        return self._dedupe_preserve_order(req)
+
+    def _build_candidate_rows(self, packet, candidates, strategy_eligibility, package_global_blocks, thematic_context) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        rows: List[Dict[str, Any]] = []
+        blocked: List[Dict[str, Any]] = []
+        tw_name = str(packet.get("time_window_name") or "")
+        base_conf = safe_float(packet.get("time_window_adjusted_confidence") or packet.get("confidence"), 0.0)
+        regime_p = safe_float(packet.get("regime_shift_probability"), 0.0)
+        slippage_breach = safe_bool((packet.get("execution_constraints") or {}).get("slippage_constraint_breached"), False)
+        strat_elig = {}
+        for k, v in (strategy_eligibility or {}).items():
+            if isinstance(v, dict): strat_elig[k] = safe_bool(v.get("eligible"), False)
+            else: strat_elig[k] = safe_bool(v, False)
+        global_blocking = set(package_global_blocks)
+
+        for sym in candidates:
+            themes = self.ticker_theme_map.get(sym, ["other"])
+            idea_templates = self._select_strategy_templates_for_symbol(sym, themes, tw_name, thematic_context, strat_elig)
+            if not idea_templates:
+                blocked.append({"symbol": sym, "reason": "no_eligible_strategy_templates_for_window", "themes": themes})
+                continue
+            for template_key in idea_templates:
+                idea = self.default_strategy_templates.get(template_key)
+                if not idea: continue
+                req_flags = idea.get("requires", [])
+                missing_reqs = [r for r in req_flags if not strat_elig.get(r, False)]
+                block_reasons = []
+                if missing_reqs: block_reasons.append(f"missing_strategy_eligibility:{','.join(missing_reqs)}")
+                hard_blocks = {"manual_veto", "kill_switch", "luld_halt_detected", "broker_status_degraded"}
+                if any(b in global_blocking for b in hard_blocks): block_reasons.append("global_hard_block")
+                if "shadow_execution_blocked" in global_blocking and idea["direction"] != "watchlist_only": block_reasons.append("shadow_execution_blocked")
+                if "time_window_shadow_execution_blocked" in global_blocking and idea["direction"] != "watchlist_only": block_reasons.append("time_window_shadow_execution_blocked")
+                if "watchlist_only_window" in global_blocking and idea["direction"] != "watchlist_only": block_reasons.append("watchlist_only_window")
+                if slippage_breach and idea["direction"] != "watchlist_only": block_reasons.append("slippage_constraint_breached")
+                thematic_boost = self._thematic_fit_score(sym, themes, thematic_context)
+                strategy_fit = self._strategy_fit_score(template_key, thematic_context, tw_name)
+                confidence = clamp(0.45 * base_conf + 0.25 * regime_p + 0.15 * thematic_boost + 0.15 * strategy_fit)
+                window_size_mult = safe_float(packet.get("window_size_multiplier"), 1.0)
+                size_mult = clamp(window_size_mult * (0.6 + 0.4 * confidence), 0.0, 1.2)
+                thesis = self._build_thesis(sym, themes, template_key, thematic_context, packet)
+                row = {"symbol": sym, "themes": themes, "template_key": template_key, "strategy_style": idea["style"], "direction": idea["direction"], "instrument_types": idea["instrument_types"], "window_name": tw_name, "thesis": thesis, "catalyst_type": self._catalyst_type(themes, thematic_context), "confidence_score": round(confidence, 4), "size_multiplier_suggestion": round(size_mult, 4), "required_confirmations": self._candidate_required_confirmations(sym, themes, thematic_context), "execution_constraints": self._candidate_execution_constraints(packet, idea), "block_reasons": block_reasons, "status": "blocked" if block_reasons else "candidate"}
+                if block_reasons: blocked.append(row)
+                else: rows.append(row)
+        rows = self._rank_and_diversify(rows)
+        blocked = self._rank_blocked(blocked)
+        return rows, blocked
+
+    def _select_strategy_templates_for_symbol(self, sym, themes, tw_name, thematic_context, strat_elig) -> List[str]:
+        out: List[str] = []
+        if "close_exhaustion_watch" in tw_name:
+            out.append("watchlist_next_day_fade_only")
+            return out
+        if "late_morning_mean_reversion" in tw_name: out.append("late_morning_mean_reversion_short")
+        if "power_hour" in tw_name:
+            if any(t in themes for t in ["defense", "energy", "ai_infra", "hyperscaler", "electrical", "networking"]): out.append("power_hour_continuation_long")
+            if "high_beta" in themes and thematic_context.get("rate_regime_shock_candidate_any"): out.append("short_breakdown")
+        if "opening" in tw_name or "opening_range_breakout" in tw_name:
+            if any(t in themes for t in ["defense", "energy", "ai_infra", "hyperscaler"]): out.append("long_breakout")
+            if any(t in themes for t in ["high_beta", "consumer_discretionary"]) and thematic_context.get("rate_regime_shock_candidate_any"):
+                out.append("gap_and_crap_puts")
+                out.append("short_breakdown")
+        if "lunch_lull" in tw_name:
+            if strat_elig.get("short_mean_reversion", False): out.append("late_morning_mean_reversion_short")
+        if not out:
+            if any(t in themes for t in ["defense", "energy", "ai_infra"]): out.append("long_breakout")
+            elif "high_beta" in themes: out.append("short_breakdown")
+        return self._dedupe_preserve_order(out)
+
+    def _thematic_fit_score(self, sym, themes, thematic_context) -> float:
+        score = 0.4
+        if thematic_context.get("energy_shock_theme"):
+            if any(t in themes for t in ["energy", "energy_services", "oil_supply"]): score += 0.35
+            if any(t in themes for t in ["consumer_discretionary", "high_beta"]): score += 0.05
+        if thematic_context.get("sanctions_policy_theme"):
+            if any(t in themes for t in ["defense", "energy", "geopolitical_conflict"]): score += 0.25
+        if thematic_context.get("fed_rates_theme") or thematic_context.get("rate_regime_shock_candidate_any"):
+            if any(t in themes for t in ["ai_infra", "hyperscaler", "high_beta", "consumer_discretionary", "margin_squeeze_risk"]): score += 0.20
+        if thematic_context.get("ai_infra_theme"):
+            if any(t in themes for t in ["ai_infra", "hyperscaler", "server_hardware", "networking", "power_cooling", "data_center_capex"]): score += 0.35
+        return clamp(score)
+
+    def _strategy_fit_score(self, template_key, thematic_context, tw_name) -> float:
+        score = 0.5
+        if template_key in {"long_breakout", "power_hour_continuation_long"} and ("power_hour" in tw_name or "opening" in tw_name): score += 0.2
+        if template_key == "gap_and_crap_puts" and thematic_context.get("rate_regime_shock_candidate_any"): score += 0.2
+        if template_key == "late_morning_mean_reversion_short" and "mean_reversion" in tw_name: score += 0.25
+        if template_key == "watchlist_next_day_fade_only" and "close_exhaustion_watch" in tw_name: score += 0.35
+        return clamp(score)
+
+    def _build_thesis(self, sym, themes, template_key, thematic_context, packet) -> str:
+        clauses = []
+        if thematic_context.get("energy_shock_theme") and any(t in themes for t in ["energy", "energy_services", "oil_supply"]): clauses.append("energy supply shock narrative supports relative strength in energy-linked names")
+        if thematic_context.get("sanctions_policy_theme") and any(t in themes for t in ["defense", "geopolitical_conflict"]): clauses.append("sanctions/geopolitical policy flow increases defense/geopolitical sensitivity relevance")
+        if thematic_context.get("ai_infra_theme") and any(t in themes for t in ["ai_infra", "hyperscaler", "server_hardware", "networking", "power_cooling"]): clauses.append("AI infrastructure / data-center capex theme supports idiosyncratic upside in infra-linked names")
+        if thematic_context.get("rate_regime_shock_candidate_any") and any(t in themes for t in ["high_beta", "consumer_discretionary", "margin_squeeze_risk"]): clauses.append("rate-regime shock conditions raise downside sensitivity / valuation compression risk")
+        if not clauses: clauses.append("candidate selected for watchlist relevance and time-window strategy fit")
+        return f"{sym}: " + "; ".join(clauses) + f"; strategy_template={template_key}"
+
+    def _catalyst_type(self, themes, thematic_context) -> str:
+        if thematic_context.get("energy_shock_theme") and any(t in themes for t in ["energy", "energy_services"]): return "macro_geopolitical_energy"
+        if thematic_context.get("sanctions_policy_theme") and any(t in themes for t in ["defense", "geopolitical_conflict"]): return "macro_policy_geopolitical"
+        if thematic_context.get("ai_infra_theme") and any(t in themes for t in ["ai_infra", "hyperscaler", "server_hardware", "networking", "power_cooling"]): return "ai_infrastructure_capex"
+        if thematic_context.get("rate_regime_shock_candidate_any"): return "macro_rates_cross_asset"
+        return "idiosyncratic_watchlist"
+
+    def _candidate_required_confirmations(self, sym, themes, thematic_context) -> List[str]:
+        req = ["fresh_quote_check", "spread_slippage_check", "execution_reliability_check"]
+        if thematic_context.get("rate_regime_shock_candidate_any"): req.append("rate_cross_asset_check_pass")
+        if any(t in themes for t in ["energy", "energy_services", "oil_supply"]): req.append("energy_transmission_confirmation_or_market_price_alignment")
+        if any(t in themes for t in ["defense", "geopolitical_conflict"]): req.append("official_geopolitical_policy_confirmation")
+        if any(t in themes for t in ["ai_infra", "hyperscaler", "server_hardware", "networking"]): req.append("headline_catalyst_quality_check_non_osint_only")
+        return self._dedupe_preserve_order(req)
+
+    def _candidate_execution_constraints(self, packet, idea) -> Dict[str, Any]:
+        tw_name = str(packet.get("time_window_name") or "")
+        runtime_flags = packet.get("runtime_flags") or {}
+        slippage_bps_est = safe_float(runtime_flags.get("slippage_bps_estimate"), 0.0)
+        if "power_hour" in tw_name or "opening" in tw_name: ttl = 20
+        elif "lunch" in tw_name: ttl = 45
+        else: ttl = 30
+        instrument_types = idea.get("instrument_types", [])
+        options_present = any("option" in str(x) for x in instrument_types)
+        return {"shadow_only": True, "limit_only": True, "order_ttl_seconds": ttl, "estimated_slippage_bps_runtime": round(slippage_bps_est, 2), "defined_risk_preferred": bool(options_present or idea.get("direction") in {"bearish_defined_risk"}), "no_live_order_submission": True}
+
+    def _rank_and_diversify(self, rows) -> List[Dict[str, Any]]:
+        for r in rows: r["_rank_score"] = round(safe_float(r.get("confidence_score")) * max(safe_float(r.get("size_multiplier_suggestion")), 0.01), 6)
+        rows = sorted(rows, key=lambda r: r["_rank_score"], reverse=True)
+        selected = []
+        theme_counts: Dict[str, int] = {}
+        for r in rows:
+            themes = r.get("themes", [])
+            primary = themes[0] if themes else "other"
+            if theme_counts.get(primary, 0) >= 3: continue
+            selected.append(r)
+            theme_counts[primary] = theme_counts.get(primary, 0) + 1
+        if len(selected) < 5:
+            for r in rows:
+                if r in selected: continue
+                selected.append(r)
+                if len(selected) >= min(len(rows), 8): break
+        for r in selected: r.pop("_rank_score", None)
+        return selected
+
+    def _rank_blocked(self, blocked) -> List[Dict[str, Any]]:
+        def keyfn(r):
+            br = " ".join(r.get("block_reasons", [])) if isinstance(r.get("block_reasons"), list) else str(r.get("reason", ""))
+            hard = 0 if "global_hard_block" in br else 1
+            return (hard, str(r.get("symbol", "")))
+        return sorted(blocked, key=keyfn)
+
+    def _build_diversification_summary(self, candidates, blocked) -> Dict[str, Any]:
+        theme_counts: Dict[str, int] = {}
+        direction_counts: Dict[str, int] = {}
+        instrument_counts: Dict[str, int] = {}
+        for r in candidates:
+            for t in r.get("themes", [])[:2]: theme_counts[t] = theme_counts.get(t, 0) + 1
+            direction_counts[str(r.get("direction", "unknown"))] = direction_counts.get(str(r.get("direction", "unknown")), 0) + 1
+            for inst in r.get("instrument_types", []): instrument_counts[str(inst)] = instrument_counts.get(str(inst), 0) + 1
+        return {"candidate_count": len(candidates), "blocked_candidate_count": len(blocked), "theme_counts_top": dict(sorted(theme_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]), "direction_counts": direction_counts, "instrument_type_counts": instrument_counts}
+
+    def _operator_notes(self, packet, package) -> List[str]:
+        notes = []
+        if package["global_blocks"]: notes.append(f"Global blocks active: {', '.join(package['global_blocks'])}")
+        if package["execution_constraints"].get("slippage_constraint_breached"): notes.append("Runtime slippage estimate exceeds allowed threshold; treat package as watchlist-only or reduce size.")
+        if package["macro_context"].get("policy_release_urgency_score_max", 0.0) >= 0.85 and not package["macro_context"].get("macro_event_quorum_pass", False): notes.append("High-urgency macro context without quorum confirmation; degrade confidence and require manual review.")
+        if not package["candidates"]: notes.append("No actionable shadow candidates after time-window and guardrail filtering; no-trade/watchlist outcome is valid.")
+        notes.append("Shadow-mode package only. No live order routing from this builder.")
+        return notes
 
 
-def main() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+def parse_args():
+    import argparse
+    p = argparse.ArgumentParser(description="Global Sentinel Idiosyncratic Package Builder")
+    p.add_argument("--repo-root", default=".")
+    p.add_argument("--packet-json", default=None, help="Path to input packet JSON")
+    p.add_argument("--output", default=None, help="Output path for package JSON")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
     builder = IdiosyncraticPackageBuilder(repo_root)
-    pkg = builder.run()
-    print(json.dumps({
-        "timestamp_utc": pkg["timestamp_utc"],
-        "position_count": pkg["package_summary"]["position_count"],
-        "shadow_execution_blocked": pkg["shadow_execution_blocked"],
-        "package_confidence": pkg["regime_context"]["adjusted_package_confidence"]
-    }, indent=2))
+    if args.packet_json:
+        packet = json.loads(Path(args.packet_json).read_text(encoding="utf-8"))
+    else:
+        packet = {"mode": "ELEVATED", "effective_mode": "ELEVATED", "regime_shift_probability": 0.67, "confidence": 0.74, "time_window_adjusted_confidence": 0.78, "time_window_name": "power_hour", "watchlist_only_window": False, "window_shadow_execution_blocked": False, "shadow_execution_blocked": False, "window_confidence_multiplier": 1.05, "window_size_multiplier": 1.0, "runtime_flags": {"major_release_day": False, "whipsaw_detected_after_open": False, "slippage_bps_estimate": 12}, "macro_policy_summary": {"policy_release_urgency_score_max": 0.9, "official_policy_confirmation_count": 2, "rate_regime_shock_candidate_any": True}, "macro_event_quorum_status": {"quorum_pass": True}, "macro_event_router": {"macro_events_priority_top": [{"headline": "Treasury linked item: sanctions update on shipping entities", "summary": "official source", "event_type": "treasury_sanctions_or_regulatory_action"}, {"headline": "FRED series update: DGS10", "summary": "rate move", "event_type": "central_bank_statement"}], "macro_event_router_summary": {"top_event_count": 2}}, "time_window_state": {"window_policy": {"priority": "trend_acceleration", "allow_shadow_drafts": True}, "strategy_eligibility": {"orb_breakout_long": {"eligible": True}, "orb_breakdown_short": {"eligible": True}, "gap_and_crap_puts": {"eligible": False}, "short_mean_reversion": {"eligible": False}, "eod_fade_watchlist_only": {"eligible": False}}}, "control_flags": {}}
+    package = builder.build_package(packet)
+    if args.output:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
+    else:
+        print(json.dumps(package, indent=2))
 
 
 if __name__ == "__main__":

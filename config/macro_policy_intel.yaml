@@ -129,6 +129,62 @@ macro_policy_intel:
         UNRATE_abs_delta: 0.2
         staleness_days_warning: 10
 
+    eia:
+      enabled: true
+      api_base: "https://api.eia.gov/v2"
+      confirmation_thresholds:
+        inventory_draw_abs: 2.0
+        inventory_build_abs: 2.0
+        refinery_util_change_abs: 1.0
+        staleness_days_warning: 10
+      series:
+        crude_stocks:
+          name: "US Crude Oil Stocks"
+          route: "petroleum/stoc/wstk/data/"
+          params:
+            frequency: "weekly"
+            data: ["value"]
+            facets:
+              product: ["EPC0"]
+              area: ["R30"]
+            sort:
+              - column: "period"
+                direction: "desc"
+            offset: 0
+            length: 3
+        gasoline_stocks:
+          name: "US Motor Gasoline Stocks"
+          route: "petroleum/stoc/wstk/data/"
+          params:
+            frequency: "weekly"
+            data: ["value"]
+            facets:
+              product: ["EPM0"]
+              area: ["R30"]
+            sort:
+              - column: "period"
+                direction: "desc"
+            offset: 0
+            length: 3
+        distillate_stocks:
+          name: "US Distillate Fuel Oil Stocks"
+          route: "petroleum/stoc/wstk/data/"
+          params:
+            frequency: "weekly"
+            data: ["value"]
+            facets:
+              product: ["EPD0"]
+              area: ["R30"]
+            sort:
+              - column: "period"
+                direction: "desc"
+            offset: 0
+            length: 3
+
+  finnhub_bridge:
+    news_lookback_days: 2
+    max_headlines_per_symbol: 8
+
   event_classification:
     event_types:
       - central_bank_statement
