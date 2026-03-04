@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.scoring.regime_shift import RegimeShiftScorer
 from src.workflows.flash_memo import FlashMemoGenerator
 from src.risk.local_risk_mcp import RiskGate
+from src.macro.macro_event_router import MacroEventRouter, RouterConfig
 
 
 # ------------------------------------
@@ -132,6 +133,7 @@ class CrisisMonitor:
         self.memo_gen = FlashMemoGenerator()
         self.risk_gate = RiskGate(PROJECT_ROOT)
         self.heartbeat_file = os.getenv("HEARTBEAT_FILE", "/tmp/global-sentinel-heartbeat")
+        self.macro_event_router = MacroEventRouter(RouterConfig(max_top_events=12))
 
     def poll_interval_seconds(self) -> int:
         intervals = {"NORMAL": 900, "ELEVATED": 300, "CRISIS": 60, "MANUAL_REVIEW": 0}
@@ -188,7 +190,7 @@ class CrisisMonitor:
             ("bls_release_bridge", "BLSReleaseBridge"),
             ("treasury_ofac_bridge", "TreasuryOFACBridge"),
             ("whitehouse_policy_bridge", "WhiteHousePolicyBridge"),
-            ("fred_bridge", "FredBridge"),
+            ("fred_bridge", "FREDBridge"),
             ("eia_bridge", "EIABridge"),
             ("finnhub_bridge", "FinnhubBridge"),
         ]
@@ -286,10 +288,33 @@ class CrisisMonitor:
         if halted:
             output["halt_reason"] = reason
 
-        # Merge macro policy events into output packet
+        # Route macro policy events through MacroEventRouter, then merge
         macro_packets = kwargs.get("macro_packets", [])
         if macro_packets:
-            _merge_macro_policy_events_into_packet(output, macro_packets)
+            router_output = self.macro_event_router.route(macro_packets)
+
+            output["macro_event_router"] = router_output
+            output["macro_events_suppressed_duplicates"] = router_output.get("macro_events_suppressed_duplicates", [])
+            output["macro_event_quorum_status"] = router_output.get("macro_event_quorum_status", {})
+            output["macro_event_router_summary"] = router_output.get("macro_event_router_summary", {})
+
+            # Merge only prioritized (routed) events into the scorecard
+            prioritized = router_output.get("macro_events_priority_top", [])
+            _merge_macro_policy_events_into_packet(output, prioritized)
+
+            # Add router quorum as data quality input
+            output.setdefault("data_freshness_status", {})
+            output["data_freshness_status"]["macro_event_quorum_pass"] = bool(
+                output.get("macro_event_quorum_status", {}).get("quorum_pass", False)
+            )
+
+            # If no official confirmation and policy urgency is high, degrade to watchlist
+            mq = output.get("macro_event_quorum_status", {})
+            ms = output.get("macro_policy_summary", {})
+            if ms.get("policy_release_urgency_score_max", 0.0) >= 0.85 and not mq.get("quorum_pass", False):
+                output["policy_data_integrity_degraded"] = True
+                output.setdefault("control_flags", {})
+                output["control_flags"]["policy_confirmation_required"] = True
 
         return output
 

@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
 """
-Global Sentinel V4.5 - FRED Bridge (Skeleton)
+Global Sentinel V4.5 - FRED Bridge (Full Implementation)
 
 Purpose:
 - Pull configured FRED series from config/macro_policy_intel.yaml
-- Emit normalized macro_policy_event packets for macro_calendar_update
-- Tag rate_regime_shock_candidate when rate-sensitive series are present
-- Track series staleness and release metadata
-
-Requires FRED_API_KEY env var (free from https://fred.stlouisfed.org/docs/api/api_key.html)
+- Emit normalized macro_policy_event packets for macro calendar / macro data updates
+- Tag rate_regime_shock_candidate when rate-sensitive series move beyond thresholds
+- Track basic staleness and observation metadata
 
 Shadow / intelligence only:
 - No execution logic
-- Produces macro_policy_event packets for crisis_monitor / macro policy layer
+- No order routing
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -36,12 +33,31 @@ except ImportError:
     sys.exit(1)
 
 
+# -----------------------------
+# Utilities
+# -----------------------------
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def sha1_hex(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+def safe_float(v: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if v is None:
+            return default
+        if isinstance(v, str) and v.strip() in {".", "", "NaN", "nan", "null", "None"}:
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def safe_int(v: Any, default: Optional[int] = None) -> Optional[int]:
+    try:
+        if v is None:
+            return default
+        return int(v)
+    except Exception:
+        return default
 
 
 def safe_lower(x: Any) -> str:
@@ -52,192 +68,146 @@ def load_yaml(path: Path) -> Dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-# Rate-sensitive series that should trigger rate_regime_shock_candidate tagging
-RATE_SENSITIVE_SERIES = {"DGS10", "DFF", "CPIAUCSL", "PCEPI", "PAYEMS", "UNRATE"}
-
-# Series-to-event-type mapping
-SERIES_EVENT_TYPE_MAP = {
-    "DGS10": "macro_calendar_update",
-    "DFF": "macro_calendar_update",
-    "CPIAUCSL": "inflation_release",
-    "PCEPI": "inflation_release",
-    "PAYEMS": "labor_release",
-    "UNRATE": "labor_release",
-    "VIXCLS": "macro_calendar_update",
-}
+def read_json_url(url: str, timeout: int = 20) -> Dict[str, Any]:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "GlobalSentinelFREDBridge/1.0 (+shadow-mode)"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
 
-class FredBridge:
+def parse_obs_date(s: Optional[str]) -> Optional[date]:
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+# -----------------------------
+# Bridge
+# -----------------------------
+class FREDBridge:
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.cfg = load_yaml(repo_root / "config" / "macro_policy_intel.yaml")
         self.macro_cfg = self.cfg.get("macro_policy_intel", {})
         self.fred_cfg = (self.macro_cfg.get("official_sources", {}) or {}).get("fred", {})
-        self.parsing_rules = self.macro_cfg.get("parsing_rules", {})
-        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
         self.source_tiers = self.macro_cfg.get("source_tiers", {})
+        self.scoring_overlays = self.macro_cfg.get("scoring_overlays", {})
         self.event_windows = self.macro_cfg.get("event_windows", {})
         self.guardrails = self.macro_cfg.get("guardrails", {})
 
-        self.api_base = self.fred_cfg.get("api_base", "https://api.stlouisfed.org/fred")
-        self.api_key = os.environ.get("FRED_API_KEY", "")
+        self.api_base = (self.fred_cfg.get("api_base") or "https://api.stlouisfed.org/fred").rstrip("/")
+        self.api_key = os.getenv("FRED_API_KEY")
+
+        self.series_by_category = self._load_series_map()
+        self.rate_check_thresholds = self._load_rate_check_thresholds()
 
         self.cache_dir = repo_root / "logs" / "bridge_cache" / "fred_bridge"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect all configured series
-        self.series_ids: List[str] = []
-        series_cfg = self.fred_cfg.get("series", {}) or {}
-        for _group, ids in series_cfg.items():
-            if isinstance(ids, list):
-                self.series_ids.extend(ids)
+    def _load_series_map(self) -> Dict[str, List[str]]:
+        series_cfg = (self.fred_cfg.get("series") or {})
+        out: Dict[str, List[str]] = {}
+        for cat, series_list in series_cfg.items():
+            if isinstance(series_list, list):
+                out[cat] = [str(s) for s in series_list]
+        return out
 
+    def _load_rate_check_thresholds(self) -> Dict[str, float]:
+        cfg = (self.fred_cfg.get("rate_check_thresholds") or {})
+        return {
+            "DGS10_abs_delta": float(cfg.get("DGS10_abs_delta", 0.10)),
+            "DFF_abs_delta": float(cfg.get("DFF_abs_delta", 0.10)),
+            "VIXCLS_abs_delta": float(cfg.get("VIXCLS_abs_delta", 2.0)),
+            "CPIAUCSL_abs_delta": float(cfg.get("CPIAUCSL_abs_delta", 0.5)),
+            "PCEPI_abs_delta": float(cfg.get("PCEPI_abs_delta", 0.3)),
+            "PAYEMS_abs_delta": float(cfg.get("PAYEMS_abs_delta", 150.0)),
+            "UNRATE_abs_delta": float(cfg.get("UNRATE_abs_delta", 0.2)),
+            "staleness_days_warning": float(cfg.get("staleness_days_warning", 10)),
+        }
+
+    # -------------------------
+    # Public API
+    # -------------------------
     def poll(self) -> List[Dict[str, Any]]:
         packets: List[Dict[str, Any]] = []
-        if not self.api_key:
-            packets.append(self._error_packet("FRED_API_KEY not set"))
-            return packets
-
-        for series_id in self.series_ids:
+        all_series = self._flatten_series()
+        for category, series_id in all_series:
             try:
-                packets.extend(self._poll_series(series_id))
+                packets.extend(self._poll_series(category, series_id))
             except Exception as e:
-                packets.append(self._error_packet(f"series_error:{series_id}:{e}"))
+                packets.append(self._error_packet(series_id, f"fred_series_error:{e}", category))
         return packets
 
-    def _poll_series(self, series_id: str) -> List[Dict[str, Any]]:
-        # Fetch latest observation
-        obs_data = self._fetch_series_observations(series_id, limit=2)
-        observations = obs_data.get("observations", [])
-        if not observations:
-            return [self._error_packet(f"no_observations:{series_id}")]
+    def _flatten_series(self) -> List[Tuple[str, str]]:
+        out: List[Tuple[str, str]] = []
+        for cat, ids in self.series_by_category.items():
+            for sid in ids:
+                out.append((cat, sid))
+        return out
 
-        latest = observations[-1]
-        latest_value = latest.get("value", ".")
-        latest_date = latest.get("date", "")
+    # -------------------------
+    # Series polling
+    # -------------------------
+    def _poll_series(self, category: str, series_id: str) -> List[Dict[str, Any]]:
+        meta = self._get_series_meta(series_id)
+        obs = self._get_series_observations(series_id, limit=3)
+        latest, prev = self._extract_latest_and_prev(obs)
 
-        # Compute prior value for change detection
-        prior_value = None
-        if len(observations) >= 2:
-            pv = observations[-2].get("value", ".")
-            if pv != ".":
-                try:
-                    prior_value = float(pv)
-                except (ValueError, TypeError):
-                    pass
+        latest_date = parse_obs_date(latest.get("date") if latest else None) if latest else None
+        prev_date = parse_obs_date(prev.get("date") if prev else None) if prev else None
 
-        current_value = None
-        if latest_value != ".":
-            try:
-                current_value = float(latest_value)
-            except (ValueError, TypeError):
-                pass
+        latest_value = safe_float(latest.get("value") if latest else None)
+        prev_value = safe_float(prev.get("value") if prev else None)
+        delta = (latest_value - prev_value) if (latest_value is not None and prev_value is not None) else None
 
-        # Staleness check
-        days_since = None
-        if latest_date:
-            try:
-                obs_dt = datetime.strptime(latest_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                days_since = (datetime.now(timezone.utc) - obs_dt).days
-            except Exception:
-                pass
+        today = datetime.now(timezone.utc).date()
+        staleness_days = (today - latest_date).days if latest_date else None
 
-        # Determine event type
-        event_type = SERIES_EVENT_TYPE_MAP.get(series_id, "macro_calendar_update")
-        rate_regime = series_id in RATE_SENSITIVE_SERIES
+        series_name = (meta.get("seriess") or [{}])[0].get("title") if isinstance(meta.get("seriess"), list) else None
+        units = (meta.get("seriess") or [{}])[0].get("units") if isinstance(meta.get("seriess"), list) else None
+        frequency = (meta.get("seriess") or [{}])[0].get("frequency_short") if isinstance(meta.get("seriess"), list) else None
+        last_updated = (meta.get("seriess") or [{}])[0].get("last_updated") if isinstance(meta.get("seriess"), list) else None
 
-        change_vs_prior = None
-        if current_value is not None and prior_value is not None:
-            change_vs_prior = round(current_value - prior_value, 6)
+        event_type = self._map_category_to_event_type(category)
+        urgency = self._policy_release_urgency_score(event_type)
+        source_conf = self._source_confidence("tier_a_official")
 
-        parsing_meta = {
-            "series_id": series_id,
-            "latest_value": current_value,
-            "latest_date": latest_date,
-            "prior_value": prior_value,
-            "change_vs_prior": change_vs_prior,
-            "days_since_observation": days_since,
-        }
+        rate_regime_candidate, triggers = self._rate_regime_check(series_id, category, latest_value, prev_value, delta)
+        requires_cross_asset = bool(rate_regime_candidate and self.guardrails.get("force_cross_asset_checks_for_rate_regime_shock_candidate", True))
 
-        return [self._make_packet(
-            series_id=series_id,
-            event_type=event_type,
-            headline=f"FRED {series_id}: {current_value} ({latest_date})",
-            summary=f"FRED series {series_id} latest observation: {current_value} on {latest_date}. Change vs prior: {change_vs_prior}.",
-            parsing_meta=parsing_meta,
-            rate_regime=rate_regime,
-        )]
-
-    def _fetch_series_observations(self, series_id: str, limit: int = 2) -> Dict[str, Any]:
-        params = urllib.parse.urlencode({
-            "series_id": series_id,
-            "api_key": self.api_key,
-            "file_type": "json",
-            "sort_order": "desc",
-            "limit": limit,
-        })
-        url = f"{self.api_base}/series/observations?{params}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "GlobalSentinelFredBridge/1.0 (+shadow-mode)"}
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-        # Reverse so oldest first
-        if "observations" in data:
-            data["observations"] = list(reversed(data["observations"]))
-        return data
-
-    def _make_packet(
-        self,
-        series_id: str,
-        event_type: str,
-        headline: str,
-        summary: Optional[str],
-        parsing_meta: Dict[str, Any],
-        rate_regime: bool,
-    ) -> Dict[str, Any]:
-        source_tier = "tier_a_official"
-        source_conf = float((self.source_tiers.get(source_tier) or {}).get("confidence_weight", 0.90))
-
-        urgency_defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
-        urgency = float(urgency_defaults.get(event_type, 0.40))
-
-        requires_cross_asset = bool(rate_regime and self.guardrails.get("force_cross_asset_checks_for_rate_regime_shock_candidate", True))
+        if staleness_days is not None and staleness_days > self.rate_check_thresholds["staleness_days_warning"]:
+            triggers.append(f"staleness_warning:{staleness_days}d")
 
         tags = ["official_source_confirmed"]
-        if rate_regime:
+        if rate_regime_candidate:
             tags += ["rate_regime_shock_candidate", "requires_rate_cross_asset_check"]
 
-        release_window = {
-            "release_key": None,
-            "release_time_et_hint": None,
-            "pre_buffer_minutes": int(self.event_windows.get("pre_release_buffer_minutes_default", 10)),
-            "post_buffer_minutes": int(self.event_windows.get("post_release_buffer_minutes_default", 20)),
-        }
+        release_window = self._release_window_hint_for_category(category, series_id)
 
-        event_id_input = f"fred|{series_id}|{headline}|{json.dumps(parsing_meta, sort_keys=True)}"
-        event_id = f"fred-{sha1_hex(event_id_input)[:16]}"
-
-        return {
+        packet = {
             "schema_version": "macro_policy_event.v1",
-            "event_id": event_id,
+            "event_id": f"fred-{series_id}-{latest.get('date') if latest else 'na'}",
             "timestamp_utc": iso_now(),
 
             "source_domain": "fred.stlouisfed.org",
-            "source_url": f"https://fred.stlouisfed.org/series/{series_id}",
-            "source_feed_url": self.api_base,
-            "source_tier": source_tier,
+            "source_url": self._fred_series_url(series_id),
+            "source_feed_url": self._fred_series_url(series_id),
+            "source_tier": "tier_a_official",
             "source_type": "api",
             "official_source": True,
 
             "event_type": event_type,
-            "headline": headline,
-            "summary": summary,
+            "headline": f"FRED series update: {series_id} ({series_name or 'Unknown series'})",
+            "summary": f"Latest observation fetched from FRED for category={category}.",
             "published_time_utc": None,
 
             "tags": tags,
-            "rate_regime_shock_candidate": rate_regime,
+            "rate_regime_shock_candidate": rate_regime_candidate,
             "requires_rate_cross_asset_check": requires_cross_asset,
             "official_source_confirmed": True,
 
@@ -246,53 +216,199 @@ class FredBridge:
 
             "release_window": release_window,
 
-            "parsing_meta": parsing_meta,
-            "provenance": {
-                "bridge": "fred_bridge",
-                "bridge_version": "0.1.0-skeleton",
-                "normalized_from": "api",
-                "raw_source_url": self.api_base,
+            "parsing_meta": {
+                "series_id": series_id,
+                "series_category": category,
+                "series_name": series_name,
+                "units": units,
+                "frequency": frequency,
+                "last_updated": last_updated,
+                "latest_observation": latest,
+                "previous_observation": prev,
+                "latest_value": latest_value,
+                "previous_value": prev_value,
+                "delta": delta,
+                "delta_triggers": triggers,
+                "staleness_days": staleness_days,
+                "latest_observation_date": latest.get("date") if latest else None,
+                "previous_observation_date": prev.get("date") if prev else None,
             },
 
-            "operator_summary": self._operator_summary(headline, event_type, urgency, rate_regime),
+            "provenance": {
+                "bridge": "fred_bridge",
+                "bridge_version": "0.1.0",
+                "normalized_from": "fred_api",
+                "raw_source_url": self._fred_series_url(series_id)
+            },
+
+            "operator_summary": self._operator_summary(
+                series_id=series_id,
+                event_type=event_type,
+                latest_value=latest_value,
+                delta=delta,
+                staleness_days=staleness_days,
+                rate_regime=rate_regime_candidate,
+                triggers=triggers
+            )
         }
 
-    def _operator_summary(self, headline: str, event_type: str, urgency: float, rate_regime: bool) -> str:
-        parts = [f"{event_type}: {headline}", f"urgency={urgency:.2f}"]
+        return [packet]
+
+    def _map_category_to_event_type(self, category: str) -> str:
+        if category == "inflation":
+            return "inflation_release"
+        if category == "labor":
+            return "labor_release"
+        if category == "rates":
+            return "central_bank_statement"
+        return "macro_calendar_update"
+
+    def _policy_release_urgency_score(self, event_type: str) -> float:
+        defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
+        return float(defaults.get(event_type, 0.50))
+
+    def _source_confidence(self, tier: str) -> float:
+        tiers = self.source_tiers or {}
+        return float((tiers.get(tier) or {}).get("confidence_weight", 0.90))
+
+    def _release_window_hint_for_category(self, category: str, series_id: str) -> Dict[str, Any]:
+        release_times = self.event_windows.get("release_times_et", {}) or {}
+        pre = int(self.event_windows.get("pre_release_buffer_minutes_default", 10))
+        post = int(self.event_windows.get("post_release_buffer_minutes_default", 20))
+
+        release_key = None
+        if category == "inflation":
+            release_key = "cpi" if series_id == "CPIAUCSL" else "pce"
+        elif category == "labor":
+            release_key = "employment_situation"
+        elif category == "rates":
+            release_key = None
+
+        return {
+            "release_key": release_key,
+            "release_time_et_hint": release_times.get(release_key),
+            "pre_buffer_minutes": pre,
+            "post_buffer_minutes": post,
+        }
+
+    def _rate_regime_check(
+        self,
+        series_id: str,
+        category: str,
+        latest_value: Optional[float],
+        prev_value: Optional[float],
+        delta: Optional[float],
+    ) -> Tuple[bool, List[str]]:
+        triggers: List[str] = []
+        if latest_value is None:
+            return False, triggers
+
+        sid = str(series_id)
+        abs_delta = abs(delta) if delta is not None else None
+
+        threshold_key = f"{sid}_abs_delta"
+        threshold = self.rate_check_thresholds.get(threshold_key)
+
+        if abs_delta is not None and threshold is not None and abs_delta >= float(threshold):
+            triggers.append(f"abs_delta_threshold:{sid}>={threshold}")
+
+        if category == "rates" and abs_delta is not None:
+            if abs_delta > 0:
+                triggers.append("rate_series_changed")
+        if category in {"inflation", "labor"} and abs_delta is not None:
+            triggers.append(f"{category}_series_update")
+
+        highly_sensitive = {"DGS10", "DFF", "CPIAUCSL", "PCEPI", "PAYEMS", "UNRATE", "VIXCLS"}
+        rate_regime = (len(triggers) > 0) and (sid in highly_sensitive or category in {"rates", "inflation", "labor"})
+
+        return bool(rate_regime), triggers
+
+    def _operator_summary(
+        self,
+        series_id: str,
+        event_type: str,
+        latest_value: Optional[float],
+        delta: Optional[float],
+        staleness_days: Optional[int],
+        rate_regime: bool,
+        triggers: List[str],
+    ) -> str:
+        parts = [f"{event_type}: {series_id}"]
+        parts.append(f"value={latest_value}")
+        parts.append(f"delta={delta}")
+        parts.append(f"staleness_days={staleness_days}")
         if rate_regime:
             parts.append("rate_regime_shock_candidate=true")
+        if triggers:
+            parts.append(f"triggers={','.join(triggers)}")
         return " | ".join(parts)
 
-    def _error_packet(self, error: str) -> Dict[str, Any]:
+    # -------------------------
+    # FRED API calls
+    # -------------------------
+    def _fred_series_url(self, series_id: str) -> str:
+        return f"https://fred.stlouisfed.org/series/{series_id}"
+
+    def _fred_api_get(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        q = dict(params)
+        q["file_type"] = "json"
+        if self.api_key:
+            q["api_key"] = self.api_key
+        url = f"{self.api_base}/{endpoint}?{urllib.parse.urlencode(q)}"
+        return read_json_url(url)
+
+    def _get_series_meta(self, series_id: str) -> Dict[str, Any]:
+        return self._fred_api_get("series", {"series_id": series_id})
+
+    def _get_series_observations(self, series_id: str, limit: int = 3) -> Dict[str, Any]:
+        params = {
+            "series_id": series_id,
+            "sort_order": "desc",
+            "limit": limit,
+        }
+        return self._fred_api_get("series/observations", params)
+
+    def _extract_latest_and_prev(self, obs_json: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        observations = obs_json.get("observations") or []
+        cleaned = [o for o in observations if safe_float(o.get("value")) is not None]
+        latest = cleaned[0] if len(cleaned) >= 1 else None
+        prev = cleaned[1] if len(cleaned) >= 2 else None
+        return latest, prev
+
+    # -------------------------
+    # Errors
+    # -------------------------
+    def _error_packet(self, series_id: str, error: str, category: str) -> Dict[str, Any]:
         return {
             "schema_version": "macro_policy_event_error.v1",
             "timestamp_utc": iso_now(),
             "source_domain": "fred.stlouisfed.org",
+            "source_url": self._fred_series_url(series_id),
             "source_tier": "tier_a_official",
             "official_source": True,
             "bridge": "fred_bridge",
-            "error": error,
+            "series_id": series_id,
+            "category": category,
+            "error": error
         }
 
 
+# -----------------------------
+# CLI
+# -----------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Global Sentinel FRED Bridge")
     p.add_argument("--repo-root", default=".")
-    p.add_argument("--once", action="store_true")
-    p.add_argument("--jsonl", action="store_true")
-    p.add_argument("--series", default="", help="Comma-separated series IDs to override config")
-    p.add_argument("--loop-seconds", type=int, default=300)
+    p.add_argument("--once", action="store_true", help="Poll once and print JSON output")
+    p.add_argument("--jsonl", action="store_true", help="Emit one JSON packet per line")
+    p.add_argument("--loop-seconds", type=int, default=300, help="Loop polling interval")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     repo_root = Path(args.repo_root).resolve()
-    bridge = FredBridge(repo_root)
-
-    # Override series from CLI if provided
-    if args.series:
-        bridge.series_ids = [s.strip() for s in args.series.split(",") if s.strip()]
+    bridge = FREDBridge(repo_root)
 
     if args.once:
         packets = bridge.poll()

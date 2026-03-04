@@ -119,6 +119,15 @@ macro_policy_intel:
           - "UNRATE"    # Unemployment rate
         policy_uncertainty_proxies:
           - "VIXCLS"
+      rate_check_thresholds:
+        DGS10_abs_delta: 0.10
+        DFF_abs_delta: 0.10
+        VIXCLS_abs_delta: 2.0
+        CPIAUCSL_abs_delta: 0.5
+        PCEPI_abs_delta: 0.3
+        PAYEMS_abs_delta: 150.0
+        UNRATE_abs_delta: 0.2
+        staleness_days_warning: 10
 
   event_classification:
     event_types:
