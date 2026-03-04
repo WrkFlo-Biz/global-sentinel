@@ -1,0 +1,54 @@
+{
+  "name": "lunch_lull_fallback_conflict_smoke_03",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 49.0,
+      "hormuz_velocity_drop_pct": 15.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.62
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.35
+    },
+    "market": {
+      "brent_change_pct_5m": 2.4,
+      "vix_change_pct_15m": 8.6,
+      "us10y_bps_move_15m": 6.2
+    },
+    "data_quality": {
+      "missing_feeds": ["lseg", "dataminr"],
+      "fresh_sources_count": 1,
+      "quorum_pass": false,
+      "conflicting_signals": true
+    },
+    "control_flags": {
+      "manual_veto": false,
+      "kill_switch": false
+    },
+    "meta": {
+      "fallback_mode": true,
+      "time_window_hint": "lunch_lull",
+      "expected_shadow_execution_blocked": true,
+      "correlation_break_detected": true
+    },
+    "correlations": {
+      "brent_gold_rolling_zscore": 2.4
+    }
+  },
+  "expected": {
+    "mode": "ELEVATED",
+    "effective_mode": "ELEVATED",
+    "max_regime_probability": 0.80,
+    "shadow_execution_blocked": true,
+    "time_window_name": "lunch_lull",
+    "time_window_hint_match": true,
+    "watchlist_only_window": true,
+    "window_shadow_execution_blocked": true,
+    "min_confidence_multiplier": 0.75,
+    "max_confidence_multiplier": 0.85,
+    "min_size_multiplier": 0.45,
+    "max_size_multiplier": 0.55,
+    "strategy_blocked": ["orb_breakout_long", "short_mean_reversion"]
+  }
+}

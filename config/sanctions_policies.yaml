@@ -1,0 +1,43 @@
+# Global Sentinel V4 — Sanctions Policies
+# Entities and jurisdictions excluded from any shadow analysis
+
+version: "4.0"
+
+blocked_jurisdictions:
+  - code: "RU"
+    name: "Russia"
+    scope: "Full SDN + sectoral"
+  - code: "BY"
+    name: "Belarus"
+    scope: "Full SDN"
+  - code: "KP"
+    name: "North Korea"
+    scope: "Full embargo"
+  - code: "IR"
+    name: "Iran"
+    scope: "Full SDN + sectoral"
+  - code: "SY"
+    name: "Syria"
+    scope: "Full SDN"
+  - code: "CU"
+    name: "Cuba"
+    scope: "Full embargo"
+
+restricted_jurisdictions:
+  - code: "CN"
+    name: "China"
+    scope: "Entity-level screening required for military-linked firms"
+  - code: "VE"
+    name: "Venezuela"
+    scope: "Sectoral (oil/gold)"
+
+ofac_sdn_check:
+  enabled: true
+  update_frequency_days: 7
+  source: "https://sanctionslist.ofac.treas.gov/Home/SdnList"
+  notes: "Even in shadow mode, do not generate drafts involving sanctioned entities"
+
+policies:
+  block_shadow_drafts_for_blocked: true
+  flag_restricted_for_review: true
+  log_all_sanctions_checks: true

@@ -1,0 +1,10 @@
+[Unit]
+Description=Global Sentinel Healthcheck
+
+[Service]
+Type=oneshot
+User=gsadmin
+Group=gsadmin
+WorkingDirectory=/home/gsadmin/global-sentinel
+EnvironmentFile=/home/gsadmin/global-sentinel/.env
+ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/healthcheck.py

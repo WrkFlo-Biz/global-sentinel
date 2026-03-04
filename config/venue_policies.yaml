@@ -1,0 +1,36 @@
+# Global Sentinel V4 — Venue Policies
+# Shadow/paper execution venue configuration
+
+version: "4.0"
+
+# All venues are shadow-only. No live order paths exist.
+venues:
+  paper_primary:
+    name: "Paper Trading (Primary)"
+    type: shadow
+    enabled: true
+    max_notional_usd: 1000000
+    allowed_asset_classes: ["equity", "etf", "futures"]
+    notes: "Default shadow venue for draft generation"
+
+  paper_fx:
+    name: "Paper FX"
+    type: shadow
+    enabled: true
+    max_notional_usd: 500000
+    allowed_asset_classes: ["fx"]
+    notes: "Shadow venue for FX hedge drafts"
+
+# Live venues — INTENTIONALLY EMPTY
+# No live venue configuration shall exist in this file.
+# Adding a live venue requires:
+#   1. Human approval with documented rationale
+#   2. PR review by Risk Officer
+#   3. Kill switch and veto integration verified
+live_venues: {}
+
+policies:
+  require_human_approval_for_all_drafts: true
+  max_drafts_per_day: 10
+  shadow_mode_enforced: true
+  live_trading_enabled: false

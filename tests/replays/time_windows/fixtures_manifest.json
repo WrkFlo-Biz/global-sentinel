@@ -1,0 +1,15 @@
+{
+  "pack": "time_windows",
+  "version": "4.3",
+  "description": "Time-window-specific replay fixtures for validating TimeWindowPolicyEngine integration",
+  "fixtures": [
+    "opening_whipsaw_after_release_01.json",
+    "lunch_fakeout_watchlist_only_01.json",
+    "late_morning_mean_reversion_eligibility_01.json",
+    "power_hour_continuation_01.json",
+    "close_exhaustion_watch_01.json"
+  ],
+  "expected_pass_rate": 1.0,
+  "scoring_version": "calibrated_v4.3",
+  "time_window_policy": true
+}

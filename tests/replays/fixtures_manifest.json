@@ -1,0 +1,14 @@
+{
+  "version": "v4-minimal",
+  "description": "Baseline replay fixtures for Global Sentinel V4",
+  "fixtures": [
+    "baseline.json",
+    "hormuz_crisis_severe_01.json",
+    "hormuz_crisis_moderate_02.json",
+    "false_kinetic_alert_no_confirmation_01.json",
+    "domestic_slowburn_elevated_01.json",
+    "market_whipsaw_no_physical_01.json",
+    "deescalation_normal_01.json",
+    "mixed_signal_crisis_01.json"
+  ]
+}

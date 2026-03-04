@@ -1,0 +1,75 @@
+# Global Sentinel V4 — Scoring Thresholds
+# Changes to this file require PR review (see CODEOWNERS)
+# Config is FROZEN during CRISIS mode
+
+version: "4.0"
+last_updated: "2026-03-04"
+
+# --- Operating Mode Thresholds ---
+mode_thresholds:
+  normal_to_elevated: 0.45
+  elevated_to_crisis: 0.75
+  crisis_to_elevated: 0.65   # hysteresis: lower than entry
+  elevated_to_normal: 0.35   # hysteresis: lower than entry
+
+# --- Hysteresis ---
+hysteresis:
+  min_cycles_before_downgrade: 3
+  min_cycles_before_upgrade: 2
+  flap_detection_window_minutes: 60
+  max_flaps_before_lock: 3
+
+# --- Regime Shift Scoring Weights ---
+regime_weights:
+  geopolitical_tension: 0.25
+  market_volatility: 0.20
+  currency_stress: 0.15
+  commodity_shock: 0.15
+  policy_uncertainty: 0.10
+  labor_disruption: 0.05
+  credit_spread: 0.05
+  liquidity_stress: 0.05
+
+# --- Confidence Adjustments ---
+confidence:
+  base_confidence: 0.80
+  stale_data_penalty: 0.15       # per stale source
+  conflicting_signal_penalty: 0.10
+  fallback_mode_penalty: 0.20
+  single_source_penalty: 0.25
+  min_confidence_for_shadow_draft: 0.50
+
+# --- Freshness Requirements ---
+freshness:
+  max_age_minutes:
+    market_data: 15
+    news_signals: 30
+    macro_indicators: 1440       # 24 hours
+    policy_feeds: 720            # 12 hours
+  quorum_required_for_escalation: 3  # min fresh sources to escalate
+
+# --- Shadow Execution ---
+shadow:
+  max_notional_per_draft_usd: 1000000
+  max_drafts_per_day: 10
+  require_human_approval: true
+  disabled_in_crisis: true
+
+# --- Domestic Stress Proxies ---
+domestic_stress:
+  policy_uncertainty_weight: 0.10
+  labor_disruption_weight: 0.05
+  dol_bls_lookback_days: 30
+  uscis_policy_lookback_days: 90
+
+# --- Correlation Sanity ---
+correlation:
+  check_interval_hours: 6
+  max_pairwise_correlation: 0.95
+  min_expected_sources: 4
+  alert_on_correlation_break: true
+
+# --- Dead Letter ---
+dead_letter:
+  max_queue_size: 1000
+  retention_days: 30

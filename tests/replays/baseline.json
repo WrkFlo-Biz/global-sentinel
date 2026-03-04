@@ -1,0 +1,26 @@
+{
+  "name": "baseline_normal_conditions",
+  "description": "Baseline scenario with normal market conditions. Regime probability should remain below 0.5.",
+  "events": [
+    {
+      "type": "normal_conditions",
+      "timestamp": "2026-03-01T00:00:00Z",
+      "description": "Standard market day, no geopolitical escalation"
+    },
+    {
+      "type": "minor_volatility",
+      "timestamp": "2026-03-01T06:00:00Z",
+      "description": "Minor VIX spike, no fundamental driver"
+    },
+    {
+      "type": "normal_conditions",
+      "timestamp": "2026-03-01T12:00:00Z",
+      "description": "Markets return to baseline"
+    }
+  ],
+  "expected_outcomes": {
+    "final_mode": "NORMAL",
+    "max_regime_probability": 0.5,
+    "min_confidence": 0.6
+  }
+}

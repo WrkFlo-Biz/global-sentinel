@@ -1,0 +1,43 @@
+{
+  "name": "opening_whipsaw_after_release_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 85.0,
+      "hormuz_velocity_drop_pct": 5.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.30
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.25
+    },
+    "market": {
+      "brent_change_pct_5m": 1.8,
+      "vix_change_pct_15m": 6.5,
+      "us10y_bps_move_15m": 4.0
+    },
+    "meta": {
+      "time_window_hint": "opening_range_breakout_window",
+      "runtime_flags": {
+        "major_release_day": true,
+        "whipsaw_detected_after_open": true,
+        "slippage_bps_estimate": 30
+      }
+    }
+  },
+  "expected": {
+    "mode": "NORMAL",
+    "max_regime_probability": 0.55,
+    "shadow_execution_blocked": false,
+    "time_window_name": "opening_range_breakout_window",
+    "time_window_hint_match": true,
+    "watchlist_only_window": false,
+    "window_shadow_execution_blocked": true,
+    "min_confidence_multiplier": 0.85,
+    "max_confidence_multiplier": 1.00,
+    "min_size_multiplier": 0.40,
+    "max_size_multiplier": 0.60,
+    "strategy_eligible": ["orb_breakout_long"],
+    "strategy_blocked": ["short_mean_reversion", "eod_fade_watchlist_only"]
+  }
+}

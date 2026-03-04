@@ -1,0 +1,32 @@
+[Unit]
+Description=Global Sentinel V4 Crisis Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsadmin
+Group=gsadmin
+WorkingDirectory=/home/gsadmin/global-sentinel
+EnvironmentFile=/home/gsadmin/global-sentinel/.env
+ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python src/crisis_monitor.py
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=global-sentinel
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/gsadmin/global-sentinel/logs
+ReadWritePaths=/home/gsadmin/global-sentinel/reports
+ReadWritePaths=/home/gsadmin/global-sentinel/control
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

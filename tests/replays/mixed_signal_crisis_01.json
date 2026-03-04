@@ -1,0 +1,25 @@
+{
+  "name": "mixed_signal_crisis_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 35.0,
+      "hormuz_velocity_drop_pct": 21.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.81
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.62
+    },
+    "market": {
+      "brent_price": 102.1,
+      "brent_change_pct_5m": 3.9,
+      "vix_change_pct_15m": 14.4,
+      "us10y_bps_move_15m": 10.2
+    }
+  },
+  "expected": {
+    "mode": "CRISIS",
+    "min_regime_probability": 0.78
+  }
+}

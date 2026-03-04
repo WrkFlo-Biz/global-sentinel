@@ -1,0 +1,29 @@
+# Global Sentinel V4 — CODEOWNERS
+# Changes to these files require review from designated owners.
+
+# Risk configuration — requires Risk Officer review
+config/thresholds.yaml       @YOUR_ORG/risk-team
+config/venue_policies.yaml   @YOUR_ORG/risk-team
+config/sanctions_policies.yaml @YOUR_ORG/risk-team
+
+# Control files — requires Risk Officer review
+control/                     @YOUR_ORG/risk-team
+
+# Risk gate logic — requires Risk Officer review
+src/risk/                    @YOUR_ORG/risk-team
+
+# Scoring logic — requires Macro Strategist review
+src/scoring/                 @YOUR_ORG/strategy-team
+
+# Infrastructure — requires Ops review
+scripts/azure/               @YOUR_ORG/ops-team
+scripts/systemd/             @YOUR_ORG/ops-team
+scripts/github/              @YOUR_ORG/ops-team
+.github/workflows/           @YOUR_ORG/ops-team
+
+# Safety-critical
+CLAUDE.md                    @YOUR_ORG/risk-team @YOUR_ORG/ops-team
+
+# Self-improvement — requires AI/Research review
+scripts/self_improvement_loop.py @YOUR_ORG/research-team
+scripts/agent_factory.py     @YOUR_ORG/ops-team

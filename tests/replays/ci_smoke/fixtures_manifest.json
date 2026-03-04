@@ -1,0 +1,15 @@
+{
+  "pack": "ci_smoke",
+  "version": "4.3",
+  "description": "CI smoke fixtures with time-window-aware expectations for fast PR validation",
+  "fixtures": [
+    "normal_orb_window_smoke_01.json",
+    "crisis_manual_veto_orb_smoke_02.json",
+    "lunch_lull_fallback_conflict_smoke_03.json",
+    "power_hour_continuation_smoke_04.json",
+    "close_exhaustion_watch_smoke_05.json"
+  ],
+  "expected_pass_rate": 1.0,
+  "scoring_version": "calibrated_v4.3",
+  "time_window_policy": true
+}

@@ -1,0 +1,25 @@
+{
+  "name": "false_kinetic_alert_no_confirmation_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 93.0,
+      "hormuz_velocity_drop_pct": 2.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.88
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.12
+    },
+    "market": {
+      "brent_price": 81.4,
+      "brent_change_pct_5m": 0.4,
+      "vix_change_pct_15m": 1.2,
+      "us10y_bps_move_15m": 1.0
+    }
+  },
+  "expected": {
+    "mode": "NORMAL",
+    "max_regime_probability": 0.55
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "hormuz_crisis_moderate_02",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 41.0,
+      "hormuz_velocity_drop_pct": 17.5
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.74
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.28
+    },
+    "market": {
+      "brent_price": 97.3,
+      "brent_change_pct_5m": 3.1,
+      "vix_change_pct_15m": 9.0,
+      "us10y_bps_move_15m": 7.5
+    }
+  },
+  "expected": {
+    "mode": "ELEVATED",
+    "min_regime_probability": 0.60,
+    "max_regime_probability": 0.80
+  }
+}

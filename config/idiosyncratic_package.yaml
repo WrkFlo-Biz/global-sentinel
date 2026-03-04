@@ -1,0 +1,110 @@
+# Global Sentinel V4.2 - Idiosyncratic Intraday Package Engine (Shadow Mode Only)
+
+package_builder:
+  enabled: true
+  mode: "shadow_only"
+  objective: "Generate diversified intraday opportunity package with low ETF-overlap bias and catalyst-backed setups."
+
+  universe:
+    min_price: 5
+    min_avg_dollar_volume_usd: 25000000
+    min_intraday_liquidity_score: 0.6
+    exclude_etfs: true
+    exclude_mega_caps_as_primary: true
+    allow_mega_caps_as_hedges: true
+    max_etf_overlap_score: 0.45
+    max_thematic_ai_etf_overlap_score: 0.35
+
+  diversification:
+    target_positions: 8
+    min_positions: 5
+    max_positions: 12
+    max_single_name_weight_pct: 15
+    max_sector_weight_pct: 35
+    max_side_bias_pct: 65
+    min_unique_themes: 4
+    require_at_least_one_hedge: true
+
+  instruments:
+    allowed:
+      - long_equity
+      - short_equity
+      - long_put
+      - long_call
+      - put_spread
+      - call_spread
+    disallowed:
+      - naked_short_put
+      - naked_short_call
+      - leveraged_etf
+      - illiquid_options
+    options_rules:
+      min_open_interest: 1000
+      max_bid_ask_spread_pct: 8
+      max_days_to_expiry: 14
+      preferred_days_to_expiry_range: [3, 10]
+
+  signals:
+    weights:
+      geopolitical_relevance: 0.20
+      ai_infra_relevance: 0.20
+      idiosyncratic_catalyst: 0.20
+      real_time_dislocation: 0.15
+      crowding_inverse: 0.10
+      liquidity_quality: 0.10
+      risk_asymmetry: 0.05
+
+    catalyst_types:
+      - earnings_prewindow
+      - earnings_postwindow
+      - guidance_revision
+      - hyperscaler_capex_signal
+      - data_center_capacity_signal
+      - power_constraint_signal
+      - supply_chain_disruption
+      - regulatory_export_control
+      - geopolitical_energy_shock
+      - labor_or_logistics_bottleneck
+
+    ai_infra_subthemes:
+      - data_center_power_distribution
+      - thermal_management_cooling
+      - backup_power_generators
+      - transformers_switchgear
+      - fiber_buildout
+      - optical_interconnects
+      - networking_components
+      - rack_enclosures_power_management
+      - engineering_construction_datacenter
+      - grid_infrastructure
+      - semiconductor_packaging_test
+      - security_observability_for_infra
+
+  intraday_logic:
+    rebalance_interval_minutes: 15
+    signal_decay_minutes: 60
+    require_multi_source_confirmation: true
+    min_confidence_for_shadow_draft: 0.70
+    confidence_penalty_if_fallback_mode: 0.15
+    confidence_penalty_if_conflicting_signals: 0.10
+
+  risk_controls:
+    shadow_only: true
+    no_live_orders: true
+    require_risk_gate_pass: true
+    block_if_manual_veto: true
+    block_if_kill_switch: true
+    stop_generating_if_data_quorum_fails: false
+    generate_low_confidence_watchlist_only_if_quorum_fails: true
+
+  outputs:
+    include:
+      - package_summary
+      - position_candidates
+      - rationale_per_name
+      - data_sources_used
+      - confidence
+      - shadow_execution_blocked
+      - risk_notes
+      - etf_overlap_scores
+      - catalyst_tags

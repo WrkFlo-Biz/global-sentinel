@@ -1,0 +1,271 @@
+# Global Sentinel V4.5 - Macro / Fed / Policy Intelligence Layer
+# Official-source-first macro policy ingestion and normalization
+
+macro_policy_intel:
+  enabled: true
+  timezone: "America/New_York"
+
+  source_tiers:
+    tier_a_official:
+      description: "Official public sources (highest public confidence)"
+      confidence_weight: 0.90
+      execution_authority: "none"
+      examples:
+        - federalreserve.gov
+        - bls.gov
+        - bea.gov
+        - census.gov
+        - treasury.gov
+        - whitehouse.gov
+        - fred.stlouisfed.org
+
+    tier_b_institutional:
+      description: "Institutional paid feeds"
+      confidence_weight: 0.95
+      execution_authority: "none"
+      examples:
+        - bloomberg
+        - lseg
+        - sp_global
+        - dataminr
+
+    tier_c_osint_alt:
+      description: "OSINT / alternative feeds"
+      confidence_weight: 0.60
+      execution_authority: "none"
+      examples:
+        - finnhub
+        - tradingview_webhooks
+        - maritime_osint
+
+    tier_d_free_fallback:
+      description: "Free dashboards / fallback analyst tools"
+      confidence_weight: 0.45
+      execution_authority: "none"
+      examples:
+        - koyfin
+        - tradingview_ui
+        - tikr
+        - fiscal_ai
+        - yahoo_finance
+        - x_lists
+
+  official_sources:
+    fed:
+      enabled: true
+      base_url: "https://www.federalreserve.gov"
+      rss_feeds:
+        - "https://www.federalreserve.gov/feeds/press_all.xml"
+        - "https://www.federalreserve.gov/feeds/speeches.xml"
+        - "https://www.federalreserve.gov/feeds/testimony.xml"
+      pages:
+        fomc_calendars: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+        pressreleases: "https://www.federalreserve.gov/newsevents/pressreleases.htm"
+        speeches: "https://www.federalreserve.gov/newsevents/speech.htm"
+        testimony: "https://www.federalreserve.gov/newsevents/testimony.htm"
+
+    bls:
+      enabled: true
+      base_url: "https://www.bls.gov"
+      api_base: "https://api.bls.gov/publicAPI/v2"
+      pages:
+        cpi_schedule: "https://www.bls.gov/schedule/news_release/cpi.htm"
+        employment_situation: "https://www.bls.gov/news.release/empsit.nr0.htm"
+        current_release_calendar: "https://www.bls.gov/schedule/news_release/current_year.htm"
+
+    bea:
+      enabled: true
+      base_url: "https://www.bea.gov"
+      pages:
+        release_schedule: "https://www.bea.gov/news/schedule"
+
+    census:
+      enabled: true
+      base_url: "https://www.census.gov"
+      pages:
+        retail_release_schedule: "https://www.census.gov/retail/release_schedule.html"
+
+    treasury:
+      enabled: true
+      base_url: "https://home.treasury.gov"
+      pages:
+        press_releases: "https://home.treasury.gov/news/press-releases"
+
+    ofac:
+      enabled: true
+      base_url: "https://home.treasury.gov"
+      pages:
+        recent_actions: "https://home.treasury.gov/policy-issues/office-of-foreign-assets-control-sanctions-programs-and-information"
+
+    white_house:
+      enabled: true
+      base_url: "https://www.whitehouse.gov"
+      pages:
+        briefings_statements: "https://www.whitehouse.gov/briefings-statements/"
+        presidential_actions: "https://www.whitehouse.gov/presidential-actions/"
+
+    fred:
+      enabled: true
+      api_base: "https://api.stlouisfed.org/fred"
+      series:
+        rates:
+          - "DGS10"     # 10Y Treasury Constant Maturity
+          - "DFF"       # Effective Fed Funds Rate
+        inflation:
+          - "CPIAUCSL"  # CPI All Urban Consumers SA
+          - "PCEPI"     # PCE Price Index
+        labor:
+          - "PAYEMS"    # Nonfarm payrolls
+          - "UNRATE"    # Unemployment rate
+        policy_uncertainty_proxies:
+          - "VIXCLS"
+
+  event_classification:
+    event_types:
+      - central_bank_statement
+      - fed_speech_testimony
+      - inflation_release
+      - labor_release
+      - growth_release
+      - executive_policy_action
+      - treasury_sanctions_or_regulatory_action
+      - macro_calendar_update
+      - official_release_schedule_change
+
+    tags:
+      rate_regime_shock_candidate:
+        description: "Likely to impact rates/vol curve / risk assets quickly"
+      requires_rate_cross_asset_check:
+        description: "Force UST/VIX/FX/equity style basket cross-check"
+      official_source_confirmed:
+        description: "Event confirmed from Tier A official source"
+
+  parsing_rules:
+    headline_keywords:
+      central_bank_statement:
+        includes_any:
+          - "Federal Open Market Committee"
+          - "FOMC"
+          - "statement"
+          - "federal reserve issues fomc statement"
+      fed_speech_testimony:
+        includes_any:
+          - "speech"
+          - "testimony"
+          - "chair"
+          - "powell"
+          - "governor"
+      inflation_release:
+        includes_any:
+          - "consumer price index"
+          - "CPI"
+          - "inflation"
+          - "PCE"
+      labor_release:
+        includes_any:
+          - "employment situation"
+          - "nonfarm payroll"
+          - "unemployment"
+          - "JOLTS"
+      growth_release:
+        includes_any:
+          - "gross domestic product"
+          - "GDP"
+          - "retail sales"
+          - "personal income"
+      executive_policy_action:
+        includes_any:
+          - "executive order"
+          - "proclamation"
+          - "presidential memorandum"
+          - "presidential action"
+      treasury_sanctions_or_regulatory_action:
+        includes_any:
+          - "sanctions"
+          - "OFAC"
+          - "Treasury sanctions"
+          - "designation"
+
+    rate_sensitive_topic_keywords:
+      includes_any:
+        - "inflation"
+        - "interest rates"
+        - "federal funds"
+        - "labor market"
+        - "tariffs"
+        - "sanctions"
+        - "oil"
+        - "energy"
+        - "trade policy"
+
+  scoring_overlays:
+    policy_release_urgency_score:
+      enabled: true
+      defaults:
+        central_bank_statement: 1.00
+        fed_speech_testimony: 0.70
+        inflation_release: 0.95
+        labor_release: 0.90
+        growth_release: 0.75
+        executive_policy_action: 0.75
+        treasury_sanctions_or_regulatory_action: 0.80
+        macro_calendar_update: 0.40
+        official_release_schedule_change: 0.55
+
+    official_source_confidence_bonus:
+      enabled: true
+      tier_a_bonus: 0.10
+      max_total_bonus: 0.15
+
+    stale_calendar_penalty:
+      enabled: true
+      if_release_calendar_fetch_stale_minutes_gt: 240
+      penalty: 0.05
+
+    conflicting_policy_signal_penalty:
+      enabled: true
+      penalty: 0.08
+
+  event_windows:
+    pre_release_buffer_minutes_default: 10
+    post_release_buffer_minutes_default: 20
+    release_times_et:
+      cpi: "08:30"
+      employment_situation: "08:30"
+      retail_sales: "08:30"
+      pce: "08:30"
+      gdp: "08:30"
+      fomc_statement: "14:00"
+      fomc_press_conference: "14:30"
+
+  guardrails:
+    official_source_required_for_confirmation:
+      central_bank_statement: true
+      inflation_release: true
+      labor_release: true
+      executive_policy_action: true
+      treasury_sanctions_or_regulatory_action: true
+
+    no_social_only_policy_confirmation: true
+    no_osint_only_policy_confirmation: true
+
+    if_official_source_unavailable:
+      action:
+        - mark_policy_data_integrity_degraded
+        - reduce_confidence
+        - watchlist_only_or_monitor_only_for_policy_driven_setups
+
+    force_cross_asset_checks_for_rate_regime_shock_candidate: true
+    cross_asset_check_baskets:
+      rates: ["UST2Y", "UST10Y", "SOFR_futures_proxy"]
+      fx: ["DXY", "EURUSD", "USDJPY"]
+      vol: ["VIX"]
+      equity_rate_sensitive: ["KRE", "IYR", "XLF", "QQQ", "SPY"]
+      commodities: ["Brent", "WTI", "XAUUSD"]
+
+  outputs:
+    emit_normalized_packet: true
+    include_source_provenance: true
+    include_rate_regime_tags: true
+    include_release_window_metadata: true
+    include_operator_summary: true

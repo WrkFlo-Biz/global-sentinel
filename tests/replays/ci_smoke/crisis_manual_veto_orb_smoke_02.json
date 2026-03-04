@@ -1,0 +1,37 @@
+{
+  "name": "crisis_manual_veto_orb_smoke_02",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 18.0,
+      "hormuz_velocity_drop_pct": 35.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.92
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.70
+    },
+    "market": {
+      "brent_change_pct_5m": 6.8,
+      "vix_change_pct_15m": 22.0,
+      "us10y_bps_move_15m": 14.0
+    },
+    "control_flags": {
+      "manual_veto": true,
+      "kill_switch": false
+    },
+    "meta": {
+      "time_window_hint": "opening_range_breakout_window"
+    }
+  },
+  "expected": {
+    "mode": "CRISIS",
+    "effective_mode": "MANUAL_REVIEW",
+    "min_regime_probability": 0.75,
+    "shadow_execution_blocked": true,
+    "time_window_name": "opening_range_breakout_window",
+    "time_window_hint_match": true,
+    "window_shadow_execution_blocked": true,
+    "strategy_blocked": ["orb_breakout_long", "orb_breakdown_short", "gap_and_crap_puts"]
+  }
+}

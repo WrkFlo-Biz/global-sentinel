@@ -1,0 +1,26 @@
+{
+  "name": "domestic_slowburn_elevated_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 88.0,
+      "hormuz_velocity_drop_pct": 4.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.22
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.86
+    },
+    "market": {
+      "brent_price": 86.2,
+      "brent_change_pct_5m": 1.6,
+      "vix_change_pct_15m": 12.4,
+      "us10y_bps_move_15m": 8.8
+    }
+  },
+  "expected": {
+    "mode": "ELEVATED",
+    "min_regime_probability": 0.55,
+    "max_regime_probability": 0.75
+  }
+}

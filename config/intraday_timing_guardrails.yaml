@@ -1,0 +1,258 @@
+# Global Sentinel V4.3 - Intraday Timing / Market Microstructure Guardrails
+# Timezone for policy evaluation MUST be America/New_York (ET), with DST-aware conversion from UTC.
+
+timing_policy:
+  timezone: "America/New_York"
+  us_equities_regular_hours:
+    open: "09:30"
+    close: "16:00"
+
+  global_overlap_windows:
+    london_newyork_overlap:
+      start: "08:00"
+      end: "12:00"
+      enabled: true
+      notes: "Highest global liquidity overlap; strong FX/index futures signal relevance."
+    tokyo_london_overlap:
+      start: "03:00"
+      end: "04:00"
+      enabled: true
+      notes: "Early premarket tone-setting window; mostly signal prep, not US equities execution."
+
+  economic_release_windows:
+    us_major_release_buffer:
+      # e.g., CPI, NFP, PCE, unemployment claims when relevant
+      release_time_et: "08:30"
+      pre_buffer_minutes: 10
+      post_buffer_minutes: 20
+      policy: "event_risk_mode"
+      notes: "Treat 8:20–8:50 ET as event-risk; avoid normal momentum assumptions."
+
+  windows:
+    premarket_signal_prep:
+      start: "07:00"
+      end: "09:29"
+      priority: "signal_prep"
+      allow_shadow_drafts: false
+      use_for:
+        - watchlist_building
+        - catalyst_detection
+        - futures_fx_confirmation
+        - gap_mapping
+      confidence_multiplier: 0.90
+
+    opening_amateur_hour_cooldown:
+      start: "09:30"
+      end: "09:45"
+      priority: "high_risk_price_discovery"
+      allow_shadow_drafts: true
+      restrictions:
+        require_stricter_confirmation: true
+        avoid_first_candle_chase: true
+        prefer_wait_for_retest_or_confirmation: true
+      confidence_multiplier: 0.90
+      size_multiplier: 0.60
+      notes: "Professionals often avoid impulsive first-minute entries."
+
+    opening_range_breakout_window:
+      start: "09:45"
+      end: "10:30"
+      priority: "high_opportunity"
+      allow_shadow_drafts: true
+      preferred_setups:
+        - orb_breakout_long
+        - orb_breakdown_short
+        - gap_and_crap_puts
+      thresholds:
+        min_rvol: 2.0
+        breakout_candle_minutes: [5, 15]
+        require_volume_confirmation: true
+      confidence_multiplier: 1.05
+      size_multiplier: 1.00
+
+    late_morning_mean_reversion:
+      start: "10:30"
+      end: "11:30"
+      priority: "conditional"
+      allow_shadow_drafts: true
+      preferred_setups:
+        - short_mean_reversion
+        - put_spread_on_exhaustion
+      thresholds:
+        require_extension_from_ema20: true
+        require_reversal_signal_confirmation: true
+      confidence_multiplier: 1.00
+      size_multiplier: 0.85
+
+    lunch_lull:
+      start: "11:30"
+      end: "14:00"
+      priority: "low_quality_chop"
+      allow_shadow_drafts: true
+      restrictions:
+        watchlist_only_unless_exceptional_catalyst: true
+        reduce_breakout_trading: true
+        require_higher_rvol_than_normal: true
+      thresholds:
+        min_rvol: 2.5
+        require_multi_source_confirmation: true
+      confidence_multiplier: 0.80
+      size_multiplier: 0.50
+      notes: "High fakeout risk / low sustained volume."
+
+    post_lunch_reacceleration:
+      start: "14:00"
+      end: "15:00"
+      priority: "rebuild_liquidity"
+      allow_shadow_drafts: true
+      preferred_setups:
+        - trend_reconfirmation
+        - catalyst_followthrough
+      confidence_multiplier: 0.95
+      size_multiplier: 0.80
+
+    power_hour:
+      start: "15:00"
+      end: "15:50"
+      priority: "high_opportunity_rebalance"
+      allow_shadow_drafts: true
+      preferred_setups:
+        - momentum_followthrough
+        - trend_acceleration
+        - squeeze_continuation
+      thresholds:
+        require_trend_strength_confirmation: true
+        require_liquidity_ok: true
+      confidence_multiplier: 1.05
+      size_multiplier: 1.00
+
+    close_exhaustion_watch:
+      start: "15:50"
+      end: "16:00"
+      priority: "exhaustion_watch"
+      allow_shadow_drafts: false
+      use_for:
+        - next_day_fade_watchlist
+        - eod_exhaustion_flags
+      restrictions:
+        no_new_intraday_risk_add: true
+      confidence_multiplier: 0.85
+      size_multiplier: 0.00
+
+  strategy_policies:
+    orb_breakout_long:
+      allowed_windows:
+        - opening_range_breakout_window
+        - power_hour
+      block_if:
+        - fallback_mode
+        - kill_switch
+      requires:
+        - rvol_threshold
+        - volume_confirmation
+        - spread_ok
+
+    orb_breakdown_short:
+      allowed_windows:
+        - opening_range_breakout_window
+        - power_hour
+      block_if:
+        - fallback_mode
+        - kill_switch
+      requires:
+        - rvol_threshold
+        - borrow_or_locate_ok_if_short
+        - spread_ok
+
+    gap_and_crap_puts:
+      allowed_windows:
+        - opening_amateur_hour_cooldown
+        - opening_range_breakout_window
+      requires:
+        - options_liquidity_ok
+        - failure_confirmation
+        - spread_ok
+      block_if:
+        - fallback_mode
+        - manual_veto
+        - kill_switch
+
+    short_mean_reversion:
+      allowed_windows:
+        - late_morning_mean_reversion
+      requires:
+        - extension_from_ema20
+        - reversal_signal
+        - rvol_not_collapsing
+      block_if:
+        - trend_strength_too_high
+        - fallback_mode
+
+    eod_fade_watchlist_only:
+      allowed_windows:
+        - close_exhaustion_watch
+      execution_allowed: false
+      notes: "Generate next-day reversal candidates only."
+
+  risk_budgets_by_window:
+    opening_amateur_hour_cooldown:
+      max_gross_exposure_pct: 35
+      max_new_positions: 2
+      max_loss_budget_pct_of_daily: 20
+    opening_range_breakout_window:
+      max_gross_exposure_pct: 70
+      max_new_positions: 4
+      max_loss_budget_pct_of_daily: 35
+    lunch_lull:
+      max_gross_exposure_pct: 25
+      max_new_positions: 1
+      max_loss_budget_pct_of_daily: 10
+    power_hour:
+      max_gross_exposure_pct: 65
+      max_new_positions: 3
+      max_loss_budget_pct_of_daily: 25
+    close_exhaustion_watch:
+      max_gross_exposure_pct: 0
+      max_new_positions: 0
+      max_loss_budget_pct_of_daily: 0
+
+  universal_intraday_guardrails:
+    max_spread_pct_equity: 0.35
+    max_spread_pct_option: 8.0
+    max_slippage_bps_estimate: 25
+    consecutive_failed_setups_before_pause: 3
+    cooldown_minutes_after_pause: 20
+    block_new_setups_if_data_quorum_fails: true
+    block_new_setups_if_manual_veto: true
+    block_new_setups_if_kill_switch: true
+    block_new_setups_if_luld_halt_detected: true
+    require_market_calendar_open_check: true
+    require_halfday_schedule_awareness: true
+
+  contingency_plan:
+    feed_latency_spike:
+      trigger: "key_feeds_stale_over_threshold"
+      action:
+        - switch_to_monitor_only
+        - label_low_confidence
+        - log_incident
+    repeated_fakeouts_lunch:
+      trigger: "2_failed_breakouts_in_lunch_lull"
+      action:
+        - disable_breakout_setups_until_14_00
+        - watchlist_only_mode
+    opening_whipsaw_after_8_30_release:
+      trigger: "major_release_day_and_opening_range_whipsaw"
+      action:
+        - extend_cooldown_to_10_00
+        - require_second_confirmation
+    high_volatility_slippage_event:
+      trigger: "estimated_slippage_above_threshold"
+      action:
+        - reduce_size_multiplier
+        - options_only_defined_risk_or_no_trade
+    correlation_break_cluster:
+      trigger: "multiple_correlation_break_flags_in_short_window"
+      action:
+        - flag_only_to_operators
+        - do_not_auto_tune_thresholds_intraday

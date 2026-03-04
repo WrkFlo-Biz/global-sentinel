@@ -1,0 +1,97 @@
+# Global Sentinel V4 — Asset Watchlist
+# Geopolitical arbitrage focus: 2nd/3rd-order macro effects
+
+version: "4.0"
+
+# --- Equity Indices ---
+equity_indices:
+  - symbol: SPY
+    description: "S&P 500 ETF"
+    priority: high
+  - symbol: QQQ
+    description: "Nasdaq 100 ETF"
+    priority: high
+  - symbol: EEM
+    description: "Emerging Markets ETF"
+    priority: medium
+  - symbol: EFA
+    description: "EAFE Developed Markets ETF"
+    priority: medium
+  - symbol: FXI
+    description: "China Large-Cap ETF"
+    priority: high
+  - symbol: VIX
+    description: "CBOE Volatility Index"
+    priority: high
+
+# --- Currencies ---
+currencies:
+  - pair: DXY
+    description: "US Dollar Index"
+    priority: high
+  - pair: EURUSD
+    description: "Euro/USD"
+    priority: high
+  - pair: USDJPY
+    description: "USD/Japanese Yen"
+    priority: high
+  - pair: USDCNH
+    description: "USD/Offshore Yuan"
+    priority: high
+  - pair: USDRUB
+    description: "USD/Russian Ruble"
+    priority: medium
+
+# --- Commodities ---
+commodities:
+  - symbol: CL
+    description: "WTI Crude Oil"
+    priority: high
+  - symbol: GC
+    description: "Gold"
+    priority: high
+  - symbol: SI
+    description: "Silver"
+    priority: medium
+  - symbol: NG
+    description: "Natural Gas"
+    priority: medium
+  - symbol: HG
+    description: "Copper"
+    priority: medium
+
+# --- Fixed Income ---
+fixed_income:
+  - symbol: TLT
+    description: "20+ Year Treasury ETF"
+    priority: high
+  - symbol: HYG
+    description: "High Yield Corporate Bond ETF"
+    priority: high
+  - symbol: LQD
+    description: "Investment Grade Corporate Bond ETF"
+    priority: medium
+
+# --- Crypto (sentiment proxy) ---
+crypto:
+  - symbol: BTC
+    description: "Bitcoin — risk appetite proxy"
+    priority: low
+
+# --- Geopolitical Watchlist Regions ---
+regions:
+  - name: "Taiwan Strait"
+    keywords: ["taiwan", "china military", "strait", "TSMC"]
+    priority: critical
+  - name: "Ukraine/Russia"
+    keywords: ["ukraine", "russia", "NATO", "sanctions"]
+    priority: high
+  - name: "Middle East"
+    keywords: ["iran", "israel", "saudi", "oil embargo", "strait of hormuz"]
+    priority: high
+  - name: "Korean Peninsula"
+    keywords: ["north korea", "DPRK", "missile test"]
+    priority: medium
+  - name: "US-China Trade"
+    keywords: ["tariff", "trade war", "export controls", "chips act"]
+    priority: high

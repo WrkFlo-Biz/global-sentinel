@@ -1,0 +1,15 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+logs/events/*.json
+logs/scorecards/*.json
+logs/risk_checks/*.json
+logs/dead_letter/*.json
+reports/**/*.md
+reports/**/*.json
+*.sqlite
+*.db
+.DS_Store
+node_modules/

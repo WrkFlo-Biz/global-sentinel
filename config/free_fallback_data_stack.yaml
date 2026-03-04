@@ -1,0 +1,87 @@
+# Global Sentinel V4.3 - Free Fallback / DIY Terminal Tier (Operator + Resilience Layer)
+
+free_fallback_data_stack:
+  enabled: true
+  tier_name: "tier_3_fallback_analyst"
+  execution_authority: "none"
+  default_mode: "confirmation_only"
+
+  sources:
+    koyfin:
+      role:
+        - market_dashboards
+        - macro_context
+        - cross_asset_sanity_checks
+      trust_tier: "fallback"
+      confidence_weight: 0.45
+      requires_primary_confirmation_for_shadow_drafts: true
+
+    tradingview:
+      role:
+        - charting
+        - technical_analysis
+        - alerting_webhooks
+        - visual_confirmation
+      trust_tier: "fallback"
+      confidence_weight: 0.50
+      requires_primary_confirmation_for_shadow_drafts: true
+
+    tikr:
+      role:
+        - filings_and_fundamentals_backup
+        - earnings_context
+      trust_tier: "fallback"
+      confidence_weight: 0.55
+      requires_primary_confirmation_for_shadow_drafts: true
+
+    sec_edgar:
+      role:
+        - primary_public_filings_source
+      trust_tier: "public_primary"
+      confidence_weight: 0.70
+      requires_primary_confirmation_for_shadow_drafts: false
+
+    fiscal_ai_finchat:
+      role:
+        - ai_fundamental_synthesis
+        - transcript_context
+        - company_comparison_assist
+      trust_tier: "fallback_ai_assist"
+      confidence_weight: 0.40
+      requires_primary_confirmation_for_shadow_drafts: true
+      notes:
+        - "Use for research acceleration, not final truth source"
+
+    yahoo_finance:
+      role:
+        - headline_monitoring
+        - basic_quote_sanity
+      trust_tier: "fallback"
+      confidence_weight: 0.35
+      requires_primary_confirmation_for_shadow_drafts: true
+
+    x_lists:
+      role:
+        - early_signal_social_monitoring
+      trust_tier: "early_signal_low_confidence"
+      confidence_weight: 0.25
+      requires_primary_confirmation_for_shadow_drafts: true
+      notes:
+        - "Treat as trigger only; confirm with primary or trusted public sources"
+
+  fallback_mode_rules:
+    activate_when:
+      - primary_feed_quorum_fail
+      - key_feed_latency_spike
+      - partial_mcp_outage
+
+    behavior:
+      - switch_to_monitor_only_or_watchlist_only
+      - apply_confidence_penalty
+      - label_outputs_low_confidence
+      - block_shadow_execution_drafts_if_quorum_fails
+
+    penalties:
+      fallback_mode_confidence_penalty: 0.15
+      fallback_only_signal_penalty: 0.20
+      social_signal_only_penalty: 0.35

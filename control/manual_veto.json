@@ -1,0 +1,7 @@
+{
+  "manual_veto": false,
+  "reason": null,
+  "set_by": null,
+  "set_at": null,
+  "notes": "Set to true to halt all shadow draft generation. Requires human action to clear."
+}

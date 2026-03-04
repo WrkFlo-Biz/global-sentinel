@@ -1,0 +1,38 @@
+{
+  "name": "late_morning_mean_reversion_eligibility_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 82.0,
+      "hormuz_velocity_drop_pct": 6.0
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.40
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.45
+    },
+    "market": {
+      "brent_change_pct_5m": 2.0,
+      "vix_change_pct_15m": 7.0,
+      "us10y_bps_move_15m": 5.0
+    },
+    "meta": {
+      "time_window_hint": "late_morning_mean_reversion"
+    }
+  },
+  "expected": {
+    "mode": "NORMAL",
+    "max_regime_probability": 0.55,
+    "shadow_execution_blocked": false,
+    "time_window_name": "late_morning_mean_reversion",
+    "time_window_hint_match": true,
+    "watchlist_only_window": false,
+    "window_shadow_execution_blocked": false,
+    "min_confidence_multiplier": 0.95,
+    "max_confidence_multiplier": 1.05,
+    "min_size_multiplier": 0.80,
+    "max_size_multiplier": 0.90,
+    "strategy_eligible": ["short_mean_reversion"],
+    "strategy_blocked": ["orb_breakout_long", "orb_breakdown_short", "gap_and_crap_puts"]
+  }
+}

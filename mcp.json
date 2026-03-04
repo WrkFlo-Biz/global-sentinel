@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "local-risk": {
+      "command": "python",
+      "args": ["src/risk/local_risk_mcp.py"],
+      "description": "Local risk gate evaluation — checks thresholds, veto, kill switch"
+    },
+    "manual-veto": {
+      "command": "python",
+      "args": ["src/risk/manual_veto_mcp.py"],
+      "description": "Manual veto and kill switch control interface"
+    },
+    "dol-bls-rss": {
+      "command": "python",
+      "args": ["src/ingest/dol_bls_rss_mcp.py"],
+      "description": "DOL/BLS labor data RSS feed ingestion"
+    },
+    "uscis-rss": {
+      "command": "python",
+      "args": ["src/ingest/uscis_rss_mcp.py"],
+      "description": "USCIS policy updates RSS feed ingestion"
+    },
+    "fallback-market-data": {
+      "command": "python",
+      "args": ["src/ingest/fallback_market_data_mcp.py"],
+      "description": "Fallback public market data (FRED, Yahoo Finance)"
+    },
+    "fallback-news": {
+      "command": "python",
+      "args": ["src/ingest/fallback_news_mcp.py"],
+      "description": "Fallback public news sources (GDELT, RSS)"
+    }
+  }
+}

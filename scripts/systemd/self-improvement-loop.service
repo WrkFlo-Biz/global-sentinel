@@ -1,0 +1,26 @@
+[Unit]
+Description=Global Sentinel V4 Self-Improvement Loop (Shadow/Staging Only)
+After=network-online.target openclaw-research.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsadmin
+Group=gsadmin
+WorkingDirectory=/home/gsadmin/global-sentinel
+EnvironmentFile=/home/gsadmin/global-sentinel/.env
+ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/self_improvement_loop.py --repo-root /home/gsadmin/global-sentinel
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/gsadmin/global-sentinel/logs
+ReadWritePaths=/home/gsadmin/global-sentinel/reports
+ReadWritePaths=/home/gsadmin/global-sentinel/control
+ReadWritePaths=/home/gsadmin/global-sentinel/config/staging
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

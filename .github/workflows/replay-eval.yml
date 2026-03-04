@@ -1,0 +1,204 @@
+name: Replay Eval (CI Smoke)
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay-ci-smoke:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+      PASS_RATE_MIN: "0.75"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Syntax check replay runner
+        run: |
+          python -m py_compile src/replay_runner.py
+
+      - name: Run replay runner on CI smoke fixtures
+        run: |
+          mkdir -p reports/openclaw_research
+          python src/replay_runner.py \
+            --repo-root . \
+            --fixtures tests/replays/ci_smoke \
+            --output reports/openclaw_research/replay_ci_smoke.json | tee reports/openclaw_research/replay_ci_smoke_stdout.txt
+
+      - name: Enforce pass-rate threshold
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          p = Path("reports/openclaw_research/replay_ci_smoke.json")
+          if not p.exists():
+              print("Replay output missing:", p)
+              sys.exit(1)
+
+          data = json.loads(p.read_text())
+          pass_rate = data.get("pass_rate")
+          total_cases = data.get("total_cases", 0)
+          status = data.get("status")
+          min_required = float(os.getenv("PASS_RATE_MIN", "0.75"))
+
+          print(f"Replay status={status} total_cases={total_cases} pass_rate={pass_rate} min_required={min_required}")
+
+          if status not in {"ok", "no_fixtures"}:
+              print("Replay status indicates failure.")
+              sys.exit(1)
+
+          if total_cases == 0:
+              print("No fixtures found in ci_smoke pack.")
+              sys.exit(1)
+
+          if pass_rate is None or float(pass_rate) < min_required:
+              print("Pass-rate threshold failed.")
+              for r in data.get("results", []):
+                  if not r.get("pass", False):
+                      print("FAILED:", r.get("name"))
+                      for chk in r.get("checks", []):
+                          if not chk.get("pass", False):
+                              print("  -", chk)
+              sys.exit(1)
+
+          print("Pass-rate threshold passed.")
+          PY
+
+      - name: Write replay CI smoke summary to PR job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path(os.environ.get("GITHUB_STEP_SUMMARY", ""))
+          replay_path = Path("reports/openclaw_research/replay_ci_smoke.json")
+
+          lines = []
+          lines.append("## Replay CI Smoke Summary")
+          lines.append("")
+
+          if not replay_path.exists():
+              lines.append("Warning: Replay output file not found: `reports/openclaw_research/replay_ci_smoke.json`")
+              summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          data = json.loads(replay_path.read_text())
+          status = data.get("status")
+          total_cases = data.get("total_cases")
+          passed_cases = data.get("passed_cases")
+          failed_cases = data.get("failed_cases")
+          pass_rate = data.get("pass_rate")
+          avg_conf = data.get("avg_confidence")
+          corr_break_count = data.get("correlation_break_count")
+          shadow_blocked_count = data.get("shadow_execution_blocked_count")
+          tw_integrated = data.get("time_window_policy_integrated", False)
+          tw_counts = data.get("time_window_counts", {})
+          win_shadow_blocked = data.get("window_shadow_blocked_count", 0)
+          watchlist_only = data.get("watchlist_only_window_count", 0)
+
+          # Top summary
+          lines.append("| Metric | Value |")
+          lines.append("|---|---:|")
+          lines.append(f"| Status | `{status}` |")
+          lines.append(f"| Total Cases | {total_cases} |")
+          lines.append(f"| Passed Cases | {passed_cases} |")
+          lines.append(f"| Failed Cases | {failed_cases} |")
+          lines.append(f"| Pass Rate | {pass_rate} |")
+          lines.append(f"| Avg Confidence | {avg_conf} |")
+          if corr_break_count is not None:
+              lines.append(f"| Correlation Break Count | {corr_break_count} |")
+          if shadow_blocked_count is not None:
+              lines.append(f"| Shadow Execution Blocked Count | {shadow_blocked_count} |")
+          lines.append(f"| Time Window Policy Integrated | {'Yes' if tw_integrated else 'No'} |")
+          if tw_integrated:
+              lines.append(f"| Window Shadow Blocked Count | {win_shadow_blocked} |")
+              lines.append(f"| Watchlist-Only Window Count | {watchlist_only} |")
+          lines.append("")
+
+          # Time window distribution
+          if tw_counts:
+              lines.append("### Time Window Distribution")
+              lines.append("")
+              lines.append("| Window | Count |")
+              lines.append("|---|---:|")
+              for wname, wcount in sorted(tw_counts.items()):
+                  lines.append(f"| `{wname}` | {wcount} |")
+              lines.append("")
+
+          # Failed checks table
+          failed_rows = []
+          for result in data.get("results", []):
+              if result.get("pass", True):
+                  continue
+              case_name = result.get("name", "unknown_case")
+              pred = result.get("prediction", {}) or {}
+              raw_mode = pred.get("mode")
+              eff_mode = pred.get("effective_mode", raw_mode)
+              prob = pred.get("regime_shift_probability")
+              conf = pred.get("confidence")
+              for chk in result.get("checks", []):
+                  if chk.get("pass", True):
+                      continue
+                  failed_rows.append({
+                      "case": case_name,
+                      "check": chk.get("check"),
+                      "expected": chk.get("expected"),
+                      "actual": chk.get("actual"),
+                      "raw_mode": raw_mode,
+                      "effective_mode": eff_mode,
+                      "prob": prob,
+                      "conf": conf,
+                  })
+
+          if failed_rows:
+              lines.append("### Failed Checks")
+              lines.append("")
+              lines.append("| Case | Check | Expected | Actual | Raw Mode | Effective Mode | Prob | Conf |")
+              lines.append("|---|---|---|---|---|---|---:|---:|")
+              for r in failed_rows:
+                  def esc(x):
+                      s = str(x)
+                      return s.replace("|", "\\|")
+                  lines.append(
+                      f"| `{esc(r['case'])}` | `{esc(r['check'])}` | `{esc(r['expected'])}` | `{esc(r['actual'])}` | "
+                      f"`{esc(r['raw_mode'])}` | `{esc(r['effective_mode'])}` | {r['prob']} | {r['conf']} |"
+                  )
+          else:
+              lines.append("No failed checks in CI smoke replay pack.")
+
+          lines.append("")
+          lines.append("<sub>Generated from `reports/openclaw_research/replay_ci_smoke.json`</sub>")
+
+          # Append (preserves any prior summary content from other steps)
+          with summary_path.open("a", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload replay artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-ci-smoke-artifacts
+          path: |
+            reports/openclaw_research/replay_ci_smoke.json
+            reports/openclaw_research/replay_ci_smoke_stdout.txt
+          retention-days: 14

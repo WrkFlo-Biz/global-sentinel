@@ -1,0 +1,25 @@
+{
+  "name": "deescalation_normal_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 98.0,
+      "hormuz_velocity_drop_pct": 0.8
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.08
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.10
+    },
+    "market": {
+      "brent_price": 78.6,
+      "brent_change_pct_5m": 0.3,
+      "vix_change_pct_15m": 0.9,
+      "us10y_bps_move_15m": 0.7
+    }
+  },
+  "expected": {
+    "mode": "NORMAL",
+    "max_regime_probability": 0.35
+  }
+}

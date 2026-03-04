@@ -1,0 +1,25 @@
+{
+  "name": "market_whipsaw_no_physical_01",
+  "snapshot": {
+    "physical": {
+      "hormuz_vessel_density_pct": 96.0,
+      "hormuz_velocity_drop_pct": 1.5
+    },
+    "alerts": {
+      "kinetic_alert_intensity": 0.18
+    },
+    "domestic": {
+      "domestic_stress_intensity": 0.30
+    },
+    "market": {
+      "brent_price": 89.8,
+      "brent_change_pct_5m": 4.5,
+      "vix_change_pct_15m": 19.0,
+      "us10y_bps_move_15m": 13.5
+    }
+  },
+  "expected": {
+    "mode": "NORMAL",
+    "max_regime_probability": 0.55
+  }
+}

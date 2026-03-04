@@ -1,0 +1,7 @@
+{
+  "kill_switch": false,
+  "reason": null,
+  "set_by": null,
+  "set_at": null,
+  "notes": "Set to true to halt ALL monitoring and agent activity. Emergency use only."
+}

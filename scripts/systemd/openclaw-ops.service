@@ -1,0 +1,29 @@
+[Unit]
+Description=Global Sentinel V4 OpenClaw-Ops Bot (Infrastructure Orchestrator)
+After=network-online.target global-sentinel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsadmin
+Group=gsadmin
+WorkingDirectory=/home/gsadmin/global-sentinel
+EnvironmentFile=/home/gsadmin/global-sentinel/.env
+ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/agent_factory.py list --bot ops
+# In production, replace ExecStart with the OpenClaw bot runner command
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-ops
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/gsadmin/global-sentinel/logs
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
