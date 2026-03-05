@@ -8,7 +8,6 @@ Applies confidence penalties for stale, conflicting, or fallback data.
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any
 
 
 class RegimeShiftScorer:
