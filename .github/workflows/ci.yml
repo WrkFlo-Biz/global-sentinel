@@ -32,6 +32,8 @@ jobs:
         run: pip install -r requirements.txt pytest
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short || echo "No tests yet"
+      - name: Risk gate smoke tests
+        run: python3 tests/replays/risk_gate_smoke/run_risk_gate_smoke.py
 
   safety-audit:
     runs-on: ubuntu-latest

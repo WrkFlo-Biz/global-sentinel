@@ -116,6 +116,9 @@ class ShadowOrderRouter:
             self._log_route_event("route_package_skipped_global_blocks", route_summary)
             return route_summary
 
+        # Enrich snapshot with live microstructure data for risk gate
+        self._enrich_microstructure(package, candidates)
+
         # rank candidates conservatively
         ranked = self._rank_candidates(candidates)
 
@@ -435,6 +438,33 @@ class ShadowOrderRouter:
             "ttl_explanation": expl,
             "runtime_flags": runtime_flags,
         }
+
+    # -------------------------
+    # Microstructure enrichment
+    # -------------------------
+    def _enrich_microstructure(self, package: Dict[str, Any], candidates: List[Dict[str, Any]]):
+        """Fetch live ADV/sigma for candidate symbols and inject into package snapshot."""
+        if not candidates:
+            return
+        # Only enrich if snapshot doesn't already have microstructure data
+        snapshot = package.get("snapshot") or {}
+        existing = snapshot.get("market_microstructure") or {}
+        candidate_symbols = [c.get("symbol") for c in candidates if c.get("symbol")]
+        missing = [s for s in candidate_symbols if s not in existing]
+        if not missing:
+            return
+        try:
+            from src.bridges.market_microstructure_bridge import MarketMicrostructureBridge
+            bridge = MarketMicrostructureBridge(self.repo_root)
+            micro = bridge.poll(symbols=missing)
+            if micro:
+                if "snapshot" not in package:
+                    package["snapshot"] = {}
+                if "market_microstructure" not in package["snapshot"]:
+                    package["snapshot"]["market_microstructure"] = {}
+                package["snapshot"]["market_microstructure"].update(micro)
+        except Exception:
+            pass  # Fail open — risk gate will handle missing data
 
     # -------------------------
     # Risk gate

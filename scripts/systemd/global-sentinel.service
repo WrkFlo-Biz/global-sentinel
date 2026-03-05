@@ -13,8 +13,6 @@ Environment=PYTHONPATH=/opt/global-sentinel
 ExecStart=/usr/bin/python3 src/monitoring/crisis_monitor.py --repo-root /opt/global-sentinel
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 # Logging
 StandardOutput=journal
