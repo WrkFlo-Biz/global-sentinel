@@ -1,0 +1,60 @@
+# config/order_ttl_policy.yaml
+schema_version: order_ttl_policy.v1
+
+defaults:
+  stale_after_minutes: 30
+  target_statuses:
+    - submitted
+    - acknowledged
+    - open
+    - partially_filled
+  shadow_only: true
+  emit_shadow_cancel_recommendations: true
+  mark_manual_review_default: false
+
+time_windows:
+  opening_rush:
+    stale_after_minutes: 8
+  opening_whipsaw_watch:
+    stale_after_minutes: 6
+  london_ny_overlap:
+    stale_after_minutes: 10
+  lunch_lull:
+    stale_after_minutes: 25
+  power_hour:
+    stale_after_minutes: 7
+  close_exhaustion_watch:
+    stale_after_minutes: 4
+  after_hours:
+    stale_after_minutes: 20
+  unknown:
+    stale_after_minutes: 30
+
+strategy_overrides:
+  opening_range_breakout:
+    stale_after_minutes: 5
+  gap_and_crap_reversion:
+    stale_after_minutes: 4
+  momentum_follow_through:
+    stale_after_minutes: 8
+  mean_reversion:
+    stale_after_minutes: 12
+  volatility_hedge:
+    stale_after_minutes: 15
+
+symbol_overrides:
+  NVDA:
+    stale_after_minutes: 3
+  TSLA:
+    stale_after_minutes: 3
+  XOM:
+    stale_after_minutes: 8
+  CAT:
+    stale_after_minutes: 10
+
+runtime_flags_mapping:
+  time_window_hint_keys:
+    - runtime_flags.time_window_hint
+    - window_context.time_window_name
+    - package_context.time_window_name
+    - order_request.strategy_context.time_window_name

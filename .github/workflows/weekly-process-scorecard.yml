@@ -1,0 +1,186 @@
+name: Weekly Process Scorecard
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"   # Sundays at 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  weekly-scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Build execution reliability / manual review / stale sweeper weekly snapshots
+        run: |
+          mkdir -p reports/weekly
+          python src/execution/execution_reliability_metrics.py \
+            --repo-root . \
+            --output-json reports/weekly/execution_reliability_metrics.json \
+            --output-md reports/weekly/execution_reliability_metrics.md
+
+          python src/reports/manual_review_queue_report.py \
+            --repo-root . \
+            --output-json reports/weekly/manual_review_queue_report.json \
+            --output-md reports/weekly/manual_review_queue_report.md
+
+          python src/execution/stale_intent_sweeper.py \
+            --repo-root . \
+            --use-time-window-ttl-policy \
+            --ttl-policy-yaml config/order_ttl_policy.yaml \
+            --output-json reports/weekly/stale_intent_sweeper_report.json \
+            --output-md reports/weekly/stale_intent_sweeper_report.md
+
+          python src/monitoring/reconciler_lag_sla_monitor.py \
+            --repo-root . \
+            --output-json reports/weekly/reconciler_lag_sla_monitor.json \
+            --output-md reports/weekly/reconciler_lag_sla_monitor.md
+
+          OWNER_ARGS=()
+          if [ -f reports/weekly/manual_review_queue_report.json ]; then
+            OWNER_ARGS+=(--manual-review-report-json reports/weekly/manual_review_queue_report.json)
+            if [ -f reports/weekly/reconciler_lag_sla_monitor.json ]; then
+              OWNER_ARGS+=(--lag-sla-report-json reports/weekly/reconciler_lag_sla_monitor.json)
+            fi
+            python src/reports/manual_review_owner_router.py \
+              "${OWNER_ARGS[@]}" \
+              --output-json reports/weekly/manual_review_owner_routing.json \
+              --output-md reports/weekly/manual_review_owner_routing.md
+          fi
+
+      - name: Build weekly scorecard
+        run: |
+          python src/reports/weekly_process_scorecard.py \
+            --repo-root . \
+            --output-json reports/weekly/scorecard_latest.json \
+            --output-md reports/weekly/scorecard_latest.md
+
+      - name: Upload scorecard artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-process-scorecard
+          path: |
+            reports/weekly/scorecard_latest.json
+            reports/weekly/scorecard_latest.md
+            reports/weekly/execution_reliability_metrics.json
+            reports/weekly/execution_reliability_metrics.md
+            reports/weekly/manual_review_queue_report.json
+            reports/weekly/manual_review_queue_report.md
+            reports/weekly/stale_intent_sweeper_report.json
+            reports/weekly/stale_intent_sweeper_report.md
+            reports/weekly/reconciler_lag_sla_monitor.json
+            reports/weekly/reconciler_lag_sla_monitor.md
+            reports/weekly/manual_review_owner_routing.json
+            reports/weekly/manual_review_owner_routing.md
+            reports/ci/ci_dashboard_summary.md
+
+      - name: Build CI dashboard summary
+        run: |
+          python scripts/ops/build_ci_dashboard_summary.py \
+            --repo-root . \
+            --output-md reports/ci/ci_dashboard_summary.md
+
+      - name: Append markdown summary to job summary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def load(path):
+              p = Path(path)
+              if not p.exists():
+                  return None
+              try:
+                  return json.loads(p.read_text(encoding="utf-8"))
+              except Exception:
+                  return None
+
+          score = load("reports/weekly/scorecard_latest.json") or {}
+          exec_rel = load("reports/weekly/execution_reliability_metrics.json") or {}
+          mr = load("reports/weekly/manual_review_queue_report.json") or {}
+          stale = load("reports/weekly/stale_intent_sweeper_report.json") or {}
+          lag_sla = load("reports/weekly/reconciler_lag_sla_monitor.json") or {}
+          owner_rt = load("reports/weekly/manual_review_owner_routing.json") or {}
+
+          lines = ["# Weekly Process + Ops Reliability Summary", ""]
+
+          if score:
+              lines.append(f"- Generated: {score.get('timestamp_utc')}")
+              lines.append(f"- {score.get('operator_summary')}")
+              lines.append("")
+
+          proc = (score.get("process_kpis") or {})
+          recon = (score.get("reconciliation_kpis") or {})
+          exec_k = (exec_rel.get("kpis") or {})
+          mr_s = (mr.get("summary") or {})
+          stale_s = (stale.get("summary") or {})
+          lag_s = (lag_sla.get("summary") or {})
+          owner_s = (owner_rt.get("summary") or {})
+
+          lines.append("## KPI Snapshot")
+          lines.append("")
+          lines.append("| Category | Metric | Value |")
+          lines.append("|---|---|---:|")
+          rows = [
+            ("Process", "avg_candidate_count_per_day", proc.get("avg_candidate_count_per_day")),
+            ("Process", "avg_sim_expected_slippage_bps", proc.get("avg_sim_expected_slippage_bps")),
+            ("Process", "avg_no_trade_rate", proc.get("avg_no_trade_rate")),
+            ("Reconciliation", "avg_reconciliation_match_rate", recon.get("avg_reconciliation_match_rate")),
+            ("Execution Reliability", "rejected_rate", exec_k.get("rejected_rate")),
+            ("Execution Reliability", "manual_review_rate", exec_k.get("manual_review_rate")),
+            ("Execution Reliability", "stale_open_like_rate", exec_k.get("stale_open_like_rate")),
+            ("Execution Reliability", "avg_reconciliation_lag_minutes", exec_k.get("avg_reconciliation_lag_minutes")),
+            ("Manual Review Queue", "manual_review_count", mr_s.get("manual_review_count")),
+            ("Manual Review Queue", "max_age_minutes", mr_s.get("max_age_minutes")),
+            ("Stale Sweeper", "stale_intent_count", stale_s.get("stale_intent_count")),
+            ("Stale Sweeper", "stale_rate", stale_s.get("stale_rate")),
+            ("Lag SLA", "avg_lag_minutes", lag_s.get("avg_lag_minutes")),
+            ("Lag SLA", "max_lag_minutes", lag_s.get("max_lag_minutes")),
+            ("Lag SLA", "severity", lag_s.get("severity")),
+            ("Owner Routing", "items_considered", owner_s.get("manual_review_items_considered")),
+            ("Owner Routing", "owner_counts", owner_s.get("owner_counts")),
+            ("Owner Routing", "lag_sla_severity", owner_s.get("lag_sla_severity")),
+          ]
+          for cat, metric, val in rows:
+              lines.append(f"| {cat} | {metric} | {val} |")
+          lines.append("")
+
+          recs = score.get("weekly_recommendations") or []
+          lines.append("## Weekly Recommendations")
+          if recs:
+              for r in recs[:10]:
+                  lines.append(f"- {r}")
+          else:
+              lines.append("- None")
+          lines.append("")
+
+          reasons = mr.get("reason_counts") or {}
+          if reasons:
+              lines.append("## Manual Review Top Reasons")
+              lines.append("")
+              lines.append("| Reason | Count |")
+              lines.append("|---|---:|")
+              for k, v in list(reasons.items())[:10]:
+                  lines.append(f"| {k} | {v} |")
+              lines.append("")
+
+          Path(".weekly_ops_summary.md").write_text("\n".join(lines), encoding="utf-8")
+          PY
+
+          cat .weekly_ops_summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/ci/ci_dashboard_summary.md ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat reports/ci/ci_dashboard_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi

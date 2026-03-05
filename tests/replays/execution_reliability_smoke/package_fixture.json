@@ -1,0 +1,99 @@
+{
+  "schema_version": "idiosyncratic_package.v1",
+  "timestamp_utc": "2026-03-04T20:45:00+00:00",
+  "package_id": "pkg-smokeexec01",
+  "package_type": "idiosyncratic_candidate_package",
+  "effective_mode": "shadow",
+  "regime_shift_probability": 0.71,
+  "time_window_adjusted_confidence": 0.68,
+  "global_blocks": [],
+  "window_context": {
+    "time_window_name": "power_hour",
+    "watchlist_only_window": false
+  },
+  "macro_context": {
+    "macro_event_quorum_pass": true,
+    "policy_release_urgency_score_max": 0.62
+  },
+  "execution_constraints": {
+    "manual_veto_required": true
+  },
+  "candidates": [
+    {
+      "candidate_id": "cand-smoke-xom",
+      "symbol": "XOM",
+      "strategy_style": "momentum_follow_through",
+      "template_key": "power_hour_continuation",
+      "direction": "long",
+      "window_name": "power_hour",
+      "instrument_types": ["equity"],
+      "confidence_score": 0.83,
+      "size_multiplier_suggestion": 0.9,
+      "themes": ["energy", "geopolitical_risk"],
+      "status": "ready",
+      "block_reasons": [],
+      "price_hints": { "decision_price": 107.25 },
+      "execution_constraints": {
+        "manual_review_required": false
+      },
+      "fill_sim_assessment": {
+        "execution_quality_class": "good",
+        "fill_feasibility_score": 0.84,
+        "reject_risk_probability": 0.06,
+        "expected_slippage_bps": 11.5,
+        "do_not_route_even_in_shadow": false
+      }
+    },
+    {
+      "candidate_id": "cand-smoke-cat",
+      "symbol": "CAT",
+      "strategy_style": "momentum_follow_through",
+      "template_key": "power_hour_continuation",
+      "direction": "long",
+      "window_name": "power_hour",
+      "instrument_types": ["equity"],
+      "confidence_score": 0.72,
+      "size_multiplier_suggestion": 0.8,
+      "themes": ["industrials", "domestic_infra"],
+      "status": "ready",
+      "block_reasons": [],
+      "price_hints": { "decision_price": 342.10 },
+      "execution_constraints": {
+        "manual_review_required": false
+      },
+      "fill_sim_assessment": {
+        "execution_quality_class": "acceptable_shadow_only",
+        "fill_feasibility_score": 0.67,
+        "reject_risk_probability": 0.14,
+        "expected_slippage_bps": 18.2,
+        "do_not_route_even_in_shadow": false
+      }
+    },
+    {
+      "candidate_id": "cand-smoke-nvda-blocked",
+      "symbol": "NVDA",
+      "strategy_style": "opening_range_breakout",
+      "template_key": "orb_breakout_long",
+      "direction": "long",
+      "window_name": "power_hour",
+      "instrument_types": ["equity"],
+      "confidence_score": 0.61,
+      "size_multiplier_suggestion": 0.7,
+      "themes": ["ai_infra", "hyperscaler_capex"],
+      "status": "ready",
+      "block_reasons": [],
+      "price_hints": { "decision_price": 1240.00 },
+      "execution_constraints": {
+        "manual_review_required": false
+      },
+      "fill_sim_assessment": {
+        "execution_quality_class": "blocked",
+        "fill_feasibility_score": 0.19,
+        "reject_risk_probability": 0.53,
+        "expected_slippage_bps": 41.0,
+        "do_not_route_even_in_shadow": true
+      }
+    }
+  ],
+  "blocked_candidates": []
+}

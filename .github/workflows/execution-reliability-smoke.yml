@@ -1,0 +1,41 @@
+name: Execution Reliability Smoke
+
+on:
+  pull_request:
+    paths:
+      - "src/execution/**"
+      - "tests/broker_conformance/**"
+      - "tests/replays/execution_reliability_smoke/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  execution-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyyaml pytest requests
+
+      - name: Broker conformance tests (mock)
+        run: |
+          BROKER_CONFORMANCE_ADAPTER=mock \
+          python -m pytest tests/broker_conformance/test_broker_adapter_contract.py -v
+
+      - name: Execution reliability smoke
+        run: |
+          python tests/replays/execution_reliability_smoke/run_smoke.py --repo-root .
+
+      - name: Upload smoke outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-reliability-smoke-out
+          path: tests/replays/execution_reliability_smoke/out/

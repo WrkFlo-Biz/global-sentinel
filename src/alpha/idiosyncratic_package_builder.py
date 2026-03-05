@@ -18,7 +18,9 @@ Outputs:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -173,6 +175,8 @@ class IdiosyncraticPackageBuilder:
         package["blocked_candidates"] = blocked_rows
         package["diversification_summary"] = self._build_diversification_summary(candidate_rows, blocked_rows)
         package["operator_notes"] = self._operator_notes(packet, package)
+        # Assign deterministic package_id for intent-binding traceability
+        package["package_id"] = self._ensure_package_id(package)
         return package
 
     def _load_watchlist(self) -> Dict[str, Any]:
@@ -319,6 +323,13 @@ class IdiosyncraticPackageBuilder:
                 else: rows.append(row)
         rows = self._rank_and_diversify(rows)
         blocked = self._rank_blocked(blocked)
+        # Assign deterministic IDs for intent-binding traceability
+        for r in rows:
+            if not r.get("candidate_id"):
+                r["candidate_id"] = self._ensure_candidate_id(r)
+        for b in blocked:
+            if not b.get("candidate_id"):
+                b["candidate_id"] = self._ensure_candidate_id(b)
         return rows, blocked
 
     def _select_strategy_templates_for_symbol(self, sym, themes, tw_name, thematic_context, strat_elig) -> List[str]:
@@ -481,6 +492,22 @@ class IdiosyncraticPackageBuilder:
             direction_counts[str(r.get("direction", "unknown"))] = direction_counts.get(str(r.get("direction", "unknown")), 0) + 1
             for inst in r.get("instrument_types", []): instrument_counts[str(inst)] = instrument_counts.get(str(inst), 0) + 1
         return {"candidate_count": len(candidates), "blocked_candidate_count": len(blocked), "theme_counts_top": dict(sorted(theme_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]), "direction_counts": direction_counts, "instrument_type_counts": instrument_counts}
+
+    def _ensure_package_id(self, package: Dict[str, Any]) -> str:
+        if package.get("package_id"):
+            return str(package["package_id"])
+        ts = str(package.get("timestamp_utc", ""))
+        ptype = str(package.get("package_type", "pkg"))
+        return f"pkg-{uuid.uuid5(uuid.NAMESPACE_URL, ts + '|' + ptype).hex[:12]}"
+
+    def _ensure_candidate_id(self, candidate: Dict[str, Any]) -> str:
+        if candidate.get("candidate_id"):
+            return str(candidate["candidate_id"])
+        sym = str(candidate.get("symbol", ""))
+        tmpl = str(candidate.get("template_key", ""))
+        direction = str(candidate.get("direction", ""))
+        digest = hashlib.sha1(f"{sym}|{tmpl}|{direction}".encode()).hexdigest()[:12]
+        return f"cand-{sym.lower()}-{digest}"
 
     def _operator_notes(self, packet, package) -> List[str]:
         notes = []

@@ -1,0 +1,22 @@
+regime_shift:
+  base_weights:
+    physical_reality: 0.45
+    kinetic_trigger: 0.25
+    domestic_stress: 0.20
+    market_transmission: 0.10
+
+crisis_trigger:
+  hormuz_vessel_density_pct_of_baseline: 50
+  brent_price_usd: 95
+  escalate_mode: "shadow"
+
+risk_gates:
+  max_portfolio_var_pct: 5.0
+  max_single_name_exposure_pct: 2.0
+  max_sector_exposure_pct: 15.0
+
+execution:
+  max_estimated_slippage_bps:
+    opening_windows: 20
+    lunch_lull: 12
+    power_hour: 22

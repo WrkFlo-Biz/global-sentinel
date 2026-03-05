@@ -1,0 +1,112 @@
+name: Execution Reliability Smoke Matrix
+
+on:
+  pull_request:
+    paths:
+      - "src/execution/**"
+      - "tests/broker_conformance/**"
+      - "tests/replays/execution_reliability_smoke/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  execution-reliability-smoke:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - baseline
+          - reject_xom
+          - timeout_cat
+          - partial_fill_cat
+          - stale_open_xom
+          - delayed_ack_xom
+          - ooo_partial_xom
+          - delayed_ack_and_ooo_xom
+
+    env:
+      BROKER_CONFORMANCE_ADAPTER: mock
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest pyyaml requests
+
+      - name: Terminology guard (submitted_orders -> bound_order_attempts)
+        run: python3 scripts/cleanup/standardize_terms.py
+
+      - name: Broker conformance tests (mock)
+        run: pytest tests/broker_conformance/test_broker_adapter_contract.py -q
+
+      - name: Fault semantic conformance tests (mock)
+        run: pytest tests/broker_conformance/test_fault_semantic_conformance.py -q
+
+      - name: "Run fault-injection smoke: ${{ matrix.scenario }}"
+        run: |
+          python tests/replays/execution_reliability_smoke/run_fault_injection_smoke.py \
+            --repo-root . \
+            --scenario "${{ matrix.scenario }}" \
+            --output-dir "tests/replays/execution_reliability_smoke/out/${{ matrix.scenario }}"
+
+      - name: Upload scenario artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-reliability-${{ matrix.scenario }}
+          path: tests/replays/execution_reliability_smoke/out/${{ matrix.scenario }}/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Post scenario summary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          scenario = "${{ matrix.scenario }}"
+          p = Path(f"tests/replays/execution_reliability_smoke/out/{scenario}/smoke_summary.json")
+          lines = [f"# Execution Reliability Smoke — {scenario}", ""]
+          if p.exists():
+              s = json.loads(p.read_text(encoding="utf-8"))
+              for k in ["status", "scenario", "scenario_package_id", "bound_order_attempt_count", "broker_rejected_count",  "skipped_candidates", "router_errors", "reconciled_count", "reconciler_errors", "stale_intent_count"]:
+                  lines.append(f"- {k}: {s.get(k)}")
+          else:
+              lines.append("- smoke_summary.json missing")
+          Path(".smoke_matrix_summary.md").write_text("\n".join(lines), encoding="utf-8")
+          PY
+          cat .smoke_matrix_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Emit scenario dashboard snippet
+        shell: bash
+        run: |
+          SNIPPET_DIR="tests/replays/execution_reliability_smoke/out/${{ matrix.scenario }}"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          scenario = "${{ matrix.scenario }}"
+          out_dir = Path(f"tests/replays/execution_reliability_smoke/out/{scenario}")
+          snippet = {"scenario": scenario, "status": "unknown"}
+          summary_p = out_dir / "smoke_summary.json"
+          if summary_p.exists():
+              s = json.loads(summary_p.read_text(encoding="utf-8"))
+              snippet["status"] = s.get("status", "unknown")
+              snippet["bound_order_attempt_count"] = s.get("bound_order_attempt_count")
+              snippet["broker_rejected_count"] = s.get("broker_rejected_count")
+              snippet["scenario_package_id"] = s.get("scenario_package_id")
+              snippet["reconciled_count"] = s.get("reconciled_count")
+              snippet["stale_intent_count"] = s.get("stale_intent_count")
+              snippet["router_errors"] = s.get("router_errors")
+              snippet["reconciler_errors"] = s.get("reconciler_errors")
+          (out_dir / "dashboard_snippet.json").write_text(
+              json.dumps(snippet, indent=2), encoding="utf-8"
+          )
+          PY

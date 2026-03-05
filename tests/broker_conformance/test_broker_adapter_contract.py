@@ -30,16 +30,25 @@ import pytest
 # -----------------------------
 @pytest.fixture
 def broker_adapter():
-    """
-    Replace this fixture in your environment with a real adapter import.
+    # Default to mock adapter for CI/local conformance tests without credentials.
+    # To override, set BROKER_CONFORMANCE_ADAPTER=alpaca_paper or tradier_sandbox and wire imports below.
+    import os
 
-    Example:
-      from src.brokers.alpaca_paper_adapter import AlpacaPaperAdapter
-      return AlpacaPaperAdapter()
+    mode = os.getenv("BROKER_CONFORMANCE_ADAPTER", "mock").strip().lower()
 
-    For now this raises to force explicit wiring.
-    """
-    pytest.skip("Wire broker_adapter fixture to your paper broker adapter implementation.")
+    if mode == "mock":
+        from tests.broker_conformance.fixtures.mock_broker_adapter import MockBrokerAdapter
+        return MockBrokerAdapter()
+
+    if mode == "alpaca_paper":
+        from src.execution.alpaca_paper_adapter import AlpacaPaperAdapter
+        return AlpacaPaperAdapter()
+
+    if mode == "tradier_sandbox":
+        from src.execution.tradier_sandbox_adapter import TradierSandboxAdapter
+        return TradierSandboxAdapter()
+
+    pytest.skip(f"Unknown BROKER_CONFORMANCE_ADAPTER={mode}")
 
 
 # -----------------------------

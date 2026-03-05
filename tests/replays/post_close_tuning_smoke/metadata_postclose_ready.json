@@ -1,0 +1,13 @@
+{
+  "intraday_session": false,
+  "market_hours_open": false,
+  "replay_evidence_refs": [
+    "tests/replays/post_close_tuning_smoke/tca_shadow_report.json",
+    "tests/replays/post_close_tuning_smoke/no_trade_quality.json",
+    "tests/replays/post_close_tuning_smoke/paper_trade_reconciliation.json"
+  ],
+  "approvals": {
+    "caio_reviewed": true,
+    "cfo_reviewed": true
+  }
+}

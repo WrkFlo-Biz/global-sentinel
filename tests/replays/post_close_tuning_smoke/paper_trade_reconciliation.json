@@ -1,0 +1,22 @@
+{
+  "schema_version": "paper_trade_reconciliation.v1",
+  "timestamp_utc": "2026-03-04T22:10:00+00:00",
+  "summary": {
+    "total_candidates": 46,
+    "matched_candidates": 17,
+    "missing_broker_matches": 29,
+    "match_rate": 0.3696,
+    "avg_expected_slippage_bps": 23.9,
+    "avg_sim_fill_feasibility_score": 0.55,
+    "avg_sim_reject_risk_probability": 0.18,
+    "actual_fill_price_available_count": 13,
+    "actual_fill_price_available_rate": 0.2826,
+    "actual_rejected_count": 3,
+    "actual_filled_or_partial_count": 8,
+    "actual_pending_or_open_count": 4,
+    "actual_canceled_or_expired_count": 2,
+    "sim_do_not_route_count": 12,
+    "sim_do_not_route_but_broker_found_count": 2
+  },
+  "operator_summary": "reconciled candidates=46 | matched=17 | match_rate low due to symbol-only linking"
+}
