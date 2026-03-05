@@ -94,6 +94,9 @@ class CrisisMonitor:
         # Heartbeat file for healthcheck
         self.heartbeat_path = self.logs_dir / "heartbeat.json"
 
+        # Alerting
+        self.alerter = self._load_alerter()
+
         # Register signal handlers
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
@@ -143,6 +146,11 @@ class CrisisMonitor:
         if kill_switch.get("active", False):
             self._log_event("kill_switch_active", {"cycle": self.cycle_count})
             self._update_heartbeat("kill_switch_active")
+            if self.alerter:
+                try:
+                    self.alerter.send_kill_switch_alert()
+                except Exception:
+                    pass
             print(f"[{iso_now()}] KILL SWITCH ACTIVE — skipping cycle")
             return
 
@@ -167,6 +175,16 @@ class CrisisMonitor:
                 "regime_shift_probability": regime_score.get("regime_shift_probability"),
             })
             print(f"[{iso_now()}] MODE TRANSITION: {self.current_mode} -> {new_mode}")
+            if self.alerter:
+                try:
+                    self.alerter.send_mode_transition(self.current_mode, new_mode, {
+                        "regime_shift_probability": regime_score.get("regime_shift_probability"),
+                        "confidence": regime_score.get("confidence"),
+                        "cycle": self.cycle_count,
+                        "evidence": regime_score.get("evidence", []),
+                    })
+                except Exception:
+                    pass
             self.current_mode = new_mode
 
         # 7. Build and persist scorecard
@@ -193,6 +211,13 @@ class CrisisMonitor:
         self.last_scorecard = scorecard
         self._persist_scorecard(scorecard)
         self._update_heartbeat("ok")
+
+        # Send scorecard summary alerts in ELEVATED/CRISIS modes
+        if self.current_mode in ("ELEVATED", "CRISIS") and self.alerter:
+            try:
+                self.alerter.send_scorecard_summary(scorecard)
+            except Exception:
+                pass
 
         print(f"[{iso_now()}] Cycle {self.cycle_count} complete — mode={self.current_mode}, "
               f"regime_p={scorecard['regime_shift_probability']:.3f}, "
@@ -384,6 +409,14 @@ class CrisisMonitor:
         if time_window.get("shadow_execution_window_blocked"):
             return False
         return True
+
+    # --- Alerting ---
+    def _load_alerter(self):
+        try:
+            from src.monitoring.alerting import AlertDispatcher
+            return AlertDispatcher(self.repo_root)
+        except Exception:
+            return None
 
     # --- Persistence ---
     def _persist_scorecard(self, scorecard: Dict[str, Any]):
