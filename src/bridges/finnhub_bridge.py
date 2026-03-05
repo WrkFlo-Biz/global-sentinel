@@ -383,8 +383,19 @@ class FinnhubBridge:
     # -------------------------
     def _load_symbols_from_watchlist(self, watchlist_cfg: Dict[str, Any]) -> List[str]:
         symbols: List[str] = []
+
+        # Try flat list format first
         wl = watchlist_cfg.get("watchlist") or watchlist_cfg.get("assets") or []
-        for item in wl:
+        if wl:
+            items = wl
+        else:
+            # Section-based format: equity_indices, aviation_travel, etc.
+            items = []
+            for section in ["equity_indices", "aviation_travel", "travel_hospitality",
+                            "supply_chain", "insurance_risk"]:
+                items.extend(watchlist_cfg.get(section, []))
+
+        for item in items:
             if not isinstance(item, dict):
                 continue
             sym = str(item.get("symbol", "")).strip()
