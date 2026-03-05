@@ -86,6 +86,27 @@ export interface GraduationReport {
   summary: { total_checks: number; passed: number; failed: number };
 }
 
+export interface PortfolioPosition {
+  symbol: string;
+  qty: number;
+  side: string;
+  avg_entry_price: number;
+  current_price: number;
+  unrealized_pl: number;
+  unrealized_plpc: number;
+  market_value: number;
+}
+
+export interface PortfolioData {
+  equity: number;
+  cash: number;
+  buying_power: number;
+  portfolio_value: number;
+  positions: PortfolioPosition[];
+  timestamp_utc: string;
+  error?: string;
+}
+
 export const api = {
   heartbeat: () => fetchJSON<Heartbeat>("/api/heartbeat"),
   controls: () => fetchJSON<Controls>("/api/controls"),
@@ -98,6 +119,7 @@ export const api = {
   graduation: () => fetchJSON<GraduationReport>("/api/graduation"),
   thresholds: () => fetchJSON<any>("/api/thresholds"),
   timeWindow: () => fetchJSON<any>("/api/time_window"),
+  portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
 };
 
 export function connectWS(onMessage: (data: any) => void): WebSocket | null {

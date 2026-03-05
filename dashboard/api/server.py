@@ -198,6 +198,62 @@ def time_window():
     return sc[0].get("time_window", {})
 
 
+@app.get("/api/portfolio")
+def portfolio():
+    """Fetch Alpaca paper account positions via the adapter."""
+    env_file = REPO_ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip())
+
+    api_key = os.getenv("ALPACA_API_KEY")
+    api_secret = os.getenv("ALPACA_SECRET_KEY")
+    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
+
+    if not api_key or not api_secret:
+        return {"error": "Alpaca credentials not configured"}
+
+    import urllib.request
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+
+    def alpaca_get(path: str) -> Any:
+        url = f"{base_url}{path}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        account = alpaca_get("/account")
+        positions_raw = alpaca_get("/positions")
+        positions = []
+        for p in positions_raw:
+            positions.append({
+                "symbol": p.get("symbol"),
+                "qty": float(p.get("qty", 0)),
+                "side": p.get("side", "long"),
+                "avg_entry_price": float(p.get("avg_entry_price", 0)),
+                "current_price": float(p.get("current_price", 0)),
+                "unrealized_pl": float(p.get("unrealized_pl", 0)),
+                "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
+                "market_value": float(p.get("market_value", 0)),
+            })
+        return {
+            "equity": float(account.get("equity", 0)),
+            "cash": float(account.get("cash", 0)),
+            "buying_power": float(account.get("buying_power", 0)),
+            "portfolio_value": float(account.get("portfolio_value", 0)),
+            "positions": positions,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket for real-time updates
 # ---------------------------------------------------------------------------

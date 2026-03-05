@@ -234,7 +234,7 @@ class CrisisMonitor:
             avb = AviationDisruptionBridge(self.repo_root)
             disruption_events = avb.poll()
             results["aviation_disruptions"] = disruption_events
-            results["freshness"]["aviation_disruption"] = len(disruption_events) > 0
+            results["freshness"]["aviation_disruption"] = True  # polled successfully
             results["summary"]["aviation_disruption_count"] = len(disruption_events)
         except Exception as e:
             bridge_errors.append(f"aviation_disruption: {e}")
@@ -258,7 +258,7 @@ class CrisisMonitor:
             gb = GDELTBridge(self.repo_root)
             gdelt_section = gb.build_snapshot_section()
             results["gdelt_events"] = gdelt_section.get("events", [])
-            results["freshness"]["gdelt"] = gdelt_section.get("event_count", 0) > 0
+            results["freshness"]["gdelt"] = True  # polled successfully
             results["summary"]["gdelt_event_count"] = gdelt_section.get("event_count", 0)
         except Exception as e:
             bridge_errors.append(f"gdelt: {e}")

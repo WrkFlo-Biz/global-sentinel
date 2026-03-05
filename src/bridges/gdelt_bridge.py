@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -28,16 +29,22 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def safe_get_json(url: str, timeout: int = 20) -> Any:
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "GlobalSentinel-GDELTBridge/1.0"}
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="ignore"))
-    except Exception:
-        return None
+def safe_get_json(url: str, timeout: int = 20, retries: int = 2) -> Any:
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "GlobalSentinel-GDELTBridge/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="ignore"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries:
+                time.sleep(5 * (attempt + 1))  # Backoff: 5s, 10s
+                continue
+            return None
+        except Exception:
+            return None
 
 
 def safe_get_text(url: str, timeout: int = 20) -> Optional[str]:

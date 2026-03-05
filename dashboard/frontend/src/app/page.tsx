@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   api, connectWS,
   type Heartbeat, type Scorecard, type TimelinePoint, type Controls,
+  type GraduationReport, type PortfolioData,
 } from "@/lib/api";
 import ModeIndicator from "@/components/ModeIndicator";
 import RegimeGauge from "@/components/RegimeGauge";
@@ -15,6 +16,8 @@ import EvidenceLog from "@/components/EvidenceLog";
 import TimeWindowBadge from "@/components/TimeWindowBadge";
 import OrderFlow from "@/components/OrderFlow";
 import AlertFeed from "@/components/AlertFeed";
+import GraduationProgress from "@/components/GraduationProgress";
+import PortfolioPanel from "@/components/PortfolioPanel";
 
 function timeAgo(ts?: string): string {
   if (!ts) return "never";
@@ -38,19 +41,23 @@ export default function Dashboard() {
   const [controls, setControls] = useState<Controls | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [graduation, setGraduation] = useState<GraduationReport | null>(null);
+  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, ord, al] = await Promise.all([
+      const [hb, sc, tl, ctrl, ord, al, grad, port] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
         api.controls().catch(() => null),
         api.orders(50).catch(() => []),
         api.alerts(30).catch(() => []),
+        api.graduation().catch(() => null),
+        api.portfolio().catch(() => null),
       ]);
       if (hb) setHeartbeat(hb);
       if (sc && !("error" in sc)) setScorecard(sc);
@@ -58,6 +65,8 @@ export default function Dashboard() {
       if (ctrl) setControls(ctrl);
       if (Array.isArray(ord)) setOrders(ord);
       if (Array.isArray(al)) setAlerts(al);
+      if (grad && !("error" in grad)) setGraduation(grad);
+      if (port && !port.error) setPortfolio(port);
       setError(null);
       setLastRefresh(new Date());
     } catch (e: any) {
@@ -166,7 +175,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Row 2: Regime Timeline Chart */}
+        {/* Row 2: Regime Timeline Chart + Evidence */}
         <div className="col-span-8 card">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xs text-gray-500 uppercase tracking-wider">Regime Probability Timeline</h2>
@@ -188,13 +197,34 @@ export default function Dashboard() {
           <RegimeChart data={timeline} />
         </div>
 
-        {/* Row 2 Right: Evidence */}
         <div className="col-span-4 card">
           <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Evidence Signals</h2>
           <EvidenceLog evidence={scorecard?.evidence || []} />
         </div>
 
-        {/* Row 3: Order Flow + Alerts */}
+        {/* Row 3: Portfolio + Graduation */}
+        <div className="col-span-7 card">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Paper Portfolio</h2>
+          <PortfolioPanel data={portfolio} />
+        </div>
+
+        <div className="col-span-5 card">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Graduation Progress</h2>
+          {graduation ? (
+            <GraduationProgress
+              stage={graduation.stage}
+              overallPass={graduation.overall_pass}
+              checks={graduation.checks}
+              summary={graduation.summary}
+            />
+          ) : (
+            <div className="text-gray-600 text-xs">
+              No graduation assessment. Run: check_graduation_criteria.py
+            </div>
+          )}
+        </div>
+
+        {/* Row 4: Order Flow + Alerts */}
         <div className="col-span-7 card">
           <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Shadow Execution Flow</h2>
           <OrderFlow orders={orders} />
