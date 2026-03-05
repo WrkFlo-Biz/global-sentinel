@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8501";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 async function fetchJSON<T>(path: string): Promise<T> {
@@ -196,9 +196,9 @@ export interface TradeAnalysis {
 }
 
 export function connectWS(onMessage: (data: any) => void): WebSocket | null {
-  const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8501")
-    .replace("http", "ws") + "/ws";
-  const wsUrl = API_KEY ? `${base}?api_key=${API_KEY}` : base;
+  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8501";
+  const wsBase = (process.env.NEXT_PUBLIC_API_URL || origin).replace("http", "ws") + "/ws";
+  const wsUrl = API_KEY ? `${wsBase}?api_key=${API_KEY}` : wsBase;
   try {
     const ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => {
