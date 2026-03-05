@@ -29,17 +29,53 @@ timing_policy:
       notes: "Treat 8:20–8:50 ET as event-risk; avoid normal momentum assumptions."
 
   windows:
+    # Global markets windows (24/7 coverage)
+    asia_session:
+      start: "18:00"
+      end: "02:59"
+      priority: "global_markets"
+      allow_shadow_drafts: true
+      use_for:
+        - global_macro_signals
+        - asia_pacific_equities
+        - fx_crosses
+        - commodity_futures
+      preferred_setups:
+        - regime_playbook
+      confidence_multiplier: 0.80
+      size_multiplier: 0.40
+      notes: "Tokyo/Shanghai/HK session. Futures and FX active. Lower liquidity for US names."
+
+    europe_premarket:
+      start: "03:00"
+      end: "06:59"
+      priority: "global_markets"
+      allow_shadow_drafts: true
+      use_for:
+        - european_equities
+        - global_macro_signals
+        - fx_crosses
+        - commodity_futures
+        - geopolitical_event_response
+      preferred_setups:
+        - regime_playbook
+      confidence_multiplier: 0.85
+      size_multiplier: 0.50
+      notes: "London/Frankfurt session. Strong FX/commodity liquidity. Geopolitical events often break here."
+
     premarket_signal_prep:
       start: "07:00"
       end: "09:29"
       priority: "signal_prep"
-      allow_shadow_drafts: false
+      allow_shadow_drafts: true
       use_for:
         - watchlist_building
         - catalyst_detection
         - futures_fx_confirmation
         - gap_mapping
+        - regime_playbook
       confidence_multiplier: 0.90
+      size_multiplier: 0.60
 
     opening_amateur_hour_cooldown:
       start: "09:30"
@@ -139,6 +175,22 @@ timing_policy:
       confidence_multiplier: 0.85
       size_multiplier: 0.00
 
+    after_hours_global:
+      start: "16:01"
+      end: "17:59"
+      priority: "global_markets"
+      allow_shadow_drafts: true
+      use_for:
+        - after_hours_earnings_reaction
+        - global_macro_signals
+        - geopolitical_event_response
+        - regime_playbook
+      preferred_setups:
+        - regime_playbook
+      confidence_multiplier: 0.75
+      size_multiplier: 0.35
+      notes: "Post-close AH session. Earnings reactions, global macro events. Lower liquidity."
+
   strategy_policies:
     orb_breakout_long:
       allowed_windows:
@@ -187,6 +239,26 @@ timing_policy:
       block_if:
         - trend_strength_too_high
         - fallback_mode
+
+    regime_playbook:
+      allowed_windows:
+        - asia_session
+        - europe_premarket
+        - premarket_signal_prep
+        - opening_amateur_hour_cooldown
+        - opening_range_breakout_window
+        - late_morning_mean_reversion
+        - lunch_lull
+        - post_lunch_reacceleration
+        - power_hour
+        - after_hours_global
+      execution_allowed: true
+      requires:
+        - regime_shift_probability
+      block_if:
+        - kill_switch
+        - manual_veto
+      notes: "Geopolitical regime-based trades run 24/7 across all global sessions."
 
     eod_fade_watchlist_only:
       allowed_windows:

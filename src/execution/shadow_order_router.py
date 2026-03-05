@@ -360,7 +360,7 @@ class ShadowOrderRouter:
             # Slightly conservative limit relative to side
             slip_bps = safe_float((fs or {}).get("expected_slippage_bps"), 10.0)
             adj = dp * (slip_bps / 10000.0)
-            limit_price = round(dp + adj, 4) if side == "buy" else round(max(dp - adj, 0.0001), 4)
+            limit_price = round(dp + adj, 2) if side == "buy" else round(max(dp - adj, 0.01), 2)
         elif exec_constraints.get("limit_price_fallback") is not None:
             limit_price = safe_float(exec_constraints.get("limit_price_fallback"))
         else:
