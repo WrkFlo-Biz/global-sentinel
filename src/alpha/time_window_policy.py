@@ -171,6 +171,27 @@ class TimeWindowPolicyEngine:
         return out
 
     # ------------------------------------------------------------------
+    # Impact multiplier for square-root market impact gate
+    # ------------------------------------------------------------------
+    def impact_multiplier(self, time_window_name: Optional[str] = None) -> float:
+        """
+        Return a multiplier for market impact estimation by time window.
+        Higher = worse impact (open/close have wider spreads and thinner books).
+        """
+        multipliers = {
+            "opening_range_breakout_window": 1.25,
+            "opening_amateur_hour_cooldown": 1.15,
+            "london_ny_overlap": 1.05,
+            "mid_morning_momentum": 1.0,
+            "lunch_lull": 0.95,
+            "afternoon_trend_continuation": 1.0,
+            "power_hour": 1.15,
+            "close_exhaustion_watch": 1.30,
+            "out_of_policy_window": 1.50,
+        }
+        return multipliers.get(str(time_window_name or ""), 1.0)
+
+    # ------------------------------------------------------------------
     # Convenience: simple classify (backward compat with string timestamp)
     # ------------------------------------------------------------------
     def classify_str(self, timestamp_utc: str) -> Dict[str, Any]:

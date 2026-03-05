@@ -16,6 +16,8 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements.txt flake8
+      - name: Terminology guard
+        run: python3 scripts/cleanup/standardize_terms.py
       - name: Lint
         run: flake8 src/ scripts/ --max-line-length=120 --ignore=E501,W503,E701,E226,E127,E402,E203
 

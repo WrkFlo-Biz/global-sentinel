@@ -53,6 +53,7 @@ class ShadowOrderRouter:
         self.adapter = self._build_adapter(self.broker_name)
         self.broker_account_id = self._infer_broker_account_id()
         self.ttl_policy_engine = self._load_ttl_policy_engine(self.repo_root / "config" / "order_ttl_policy.yaml")
+        self.risk_gate = self._load_risk_gate()
 
     # -------------------------
     # Public API
@@ -139,6 +140,24 @@ class ShadowOrderRouter:
 
             try:
                 order_req = self._candidate_to_order_request(package, cand)
+
+                # --- Risk gate check (impact budget + VaR) ---
+                gate_result = self._run_risk_gate(cand, order_req, package, route_summary)
+                if gate_result and not gate_result.get("pass", True):
+                    # Downsize if recommended cap is usable, otherwise skip
+                    cap = gate_result.get("recommended_qty_cap", 0)
+                    if cap >= 1:
+                        order_req["qty"] = max(1, int(cap))
+                        order_req["risk_gate_downsized"] = True
+                    else:
+                        route_summary["skipped_candidates"].append({
+                            "symbol": cand.get("symbol"),
+                            "candidate_id": cand.get("candidate_id"),
+                            "reason": "risk_gate_blocked",
+                            "risk_gate": gate_result,
+                        })
+                        continue
+
                 ttl_policy = self._resolve_order_ttl_policy(package, cand, order_req)
                 intent = self.registry.create_intent_from_candidate(
                     package=package,
@@ -416,6 +435,51 @@ class ShadowOrderRouter:
             "ttl_explanation": expl,
             "runtime_flags": runtime_flags,
         }
+
+    # -------------------------
+    # Risk gate
+    # -------------------------
+    def _load_risk_gate(self):
+        try:
+            from src.risk.var_gate import RiskGate
+            return RiskGate()
+        except Exception:
+            return None
+
+    def _run_risk_gate(
+        self,
+        candidate: Dict[str, Any],
+        order_req: Dict[str, Any],
+        package: Dict[str, Any],
+        route_summary: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Run risk gate if available. Returns gate result or None."""
+        if self.risk_gate is None:
+            return None
+
+        snapshot = package.get("snapshot") or {}
+        time_window_name = (package.get("window_context") or {}).get("time_window_name")
+        regime = str(package.get("effective_mode") or "normal").lower()
+        runtime_flags = package.get("runtime_flags") or {}
+
+        intent_stub = {
+            "intent_id": None,
+            "package_id": route_summary.get("package_id"),
+            "router_run_id": route_summary.get("router_run_id"),
+            "symbol": candidate.get("symbol"),
+            "order_request": order_req,
+        }
+
+        try:
+            return self.risk_gate.check_intent(
+                intent=intent_stub,
+                snapshot=snapshot,
+                time_window_name=time_window_name,
+                regime=regime,
+                runtime_flags=runtime_flags,
+            )
+        except Exception:
+            return None
 
     # -------------------------
     # Helpers
