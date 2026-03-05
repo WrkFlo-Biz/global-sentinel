@@ -126,6 +126,36 @@ class AlertDispatcher:
             "mode": mode,
         })
 
+    def send_performance_summary(self, summary: Dict[str, Any]):
+        """Send periodic shadow trading performance summary."""
+        total = summary.get("total_trades", 0)
+        win_rate = summary.get("win_rate", 0)
+        total_pnl = summary.get("total_pnl", 0)
+        pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+
+        title = f"{pnl_emoji} Shadow Performance: {total} trades, {win_rate:.0%} win rate"
+        body = (
+            f"Total P&L: ${total_pnl:+,.2f}\n"
+            f"Wins: {summary.get('wins', 0)} | Losses: {summary.get('losses', 0)}\n"
+            f"Avg Win: ${summary.get('avg_win', 0):+,.2f} | Avg Loss: ${summary.get('avg_loss', 0):+,.2f}\n"
+        )
+        pf = summary.get("profit_factor")
+        if pf is not None:
+            body += f"Profit Factor: {pf:.2f}\n"
+
+        by_sym = summary.get("by_symbol", {})
+        if by_sym:
+            body += "Top symbols:\n"
+            for sym, data in list(by_sym.items())[:5]:
+                body += f"  {sym}: {data['trades']} trades, ${data['pnl']:+,.2f}\n"
+
+        self._dispatch(title, body, level="info", extra={
+            "event": "performance_summary",
+            "total_trades": total,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+        })
+
     def send_bridge_failure(self, bridge_name: str, error: str):
         """Alert on persistent bridge failure."""
         self._dispatch(

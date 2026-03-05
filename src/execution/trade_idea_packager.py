@@ -19,6 +19,19 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# When shorting is blocked, use inverse ETFs instead
+SHORT_TO_INVERSE = {
+    "JETS": {"symbol": "JETS", "side": "long", "note": "No inverse JETS ETF available — skip"},
+    "SPY": {"symbol": "SH", "side": "long", "note": "ProShares Short S&P500"},
+    "QQQ": {"symbol": "PSQ", "side": "long", "note": "ProShares Short QQQ"},
+    "EEM": {"symbol": "EUM", "side": "long", "note": "ProShares Short MSCI EM"},
+    "HYG": {"symbol": "SJB", "side": "long", "note": "ProShares Short High Yield"},
+    "FXI": {"symbol": "YANG", "side": "long", "note": "Direxion Daily China Bear 3x"},
+    "CCL": None,  # No good inverse, skip
+    "DAL": None,  # No airline inverse ETF
+}
+
+
 class TradeIdeaPackager:
     """Converts trade analysis ideas into shadow order router packages."""
 
@@ -100,6 +113,19 @@ class TradeIdeaPackager:
             return None
 
         side = idea.get("side", "long")
+
+        # Convert short ideas to inverse ETF longs (Alpaca paper blocks many shorts)
+        if side == "short":
+            inverse = SHORT_TO_INVERSE.get(symbol)
+            if inverse is None:
+                return None  # No inverse available, skip
+            if inverse.get("note", "").startswith("No inverse"):
+                return None  # Explicitly marked as unavailable
+            symbol = inverse["symbol"]
+            side = inverse["side"]
+            idea = {**idea, "symbol": symbol, "side": side,
+                    "reason": f"{idea.get('reason', '')} [via inverse ETF: {inverse.get('note', '')}]"}
+
         direction = "bullish" if side == "long" else "bearish"
 
         # Confidence score combines historical win rate with system confidence

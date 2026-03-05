@@ -77,6 +77,22 @@ class BrokerStateReconcilerLoop:
             self._log_event("reconciler_error", {"stage": "list_open_orders", "error": str(e)})
             open_orders = []
 
+        # Snapshot positions for P&L tracking
+        try:
+            from src.execution.performance_tracker import PerformanceTracker
+            tracker = PerformanceTracker(self.repo_root)
+            positions = self.adapter.list_positions()
+            if positions:
+                tracker.snapshot_open_positions([{
+                    "symbol": p.get("symbol"),
+                    "qty": p.get("qty"),
+                    "avg_entry_price": p.get("avg_entry_price"),
+                    "current_price": p.get("market_value", 0) / max(abs(p.get("qty", 1)), 1) if p.get("qty") else 0,
+                    "unrealized_pl": p.get("unrealized_pl", 0),
+                } for p in positions])
+        except Exception:
+            pass
+
         open_orders_by_broker_id = {str(o.get("order_id")): o for o in open_orders if o.get("order_id")}
         open_orders_by_client_id = {str(o.get("client_order_id")): o for o in open_orders if o.get("client_order_id")}
 

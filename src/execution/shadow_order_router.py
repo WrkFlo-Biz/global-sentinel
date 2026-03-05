@@ -364,19 +364,21 @@ class ShadowOrderRouter:
         elif exec_constraints.get("limit_price_fallback") is not None:
             limit_price = safe_float(exec_constraints.get("limit_price_fallback"))
         else:
-            # Placeholder for mocks/smoke; real adapters should use quote snapshots
-            limit_price = 100.00
+            # No price data — use market order instead of bad limit
+            limit_price = None
 
+        order_type = "limit" if limit_price else "market"
         order_request = {
             "symbol": symbol,
             "side": side,
-            "type": "limit",
+            "type": order_type,
             "time_in_force": "day",
             "qty": qty,
-            "limit_price": limit_price,
             "extended_hours": False,
             "shadow_mode": True,
         }
+        if limit_price is not None:
+            order_request["limit_price"] = limit_price
         return order_request
 
     # -------------------------

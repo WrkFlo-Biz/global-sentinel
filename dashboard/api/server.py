@@ -189,6 +189,18 @@ def trade_analysis():
         return {"error": str(e)}
 
 
+@app.get("/api/performance")
+def performance():
+    """Shadow trading performance summary."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from src.execution.performance_tracker import PerformanceTracker
+        tracker = PerformanceTracker(REPO_ROOT)
+        return tracker.generate_summary()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/execution/orders")
 def execution_orders(limit: int = Query(default=100, le=500)):
     return load_jsonl(REPO_ROOT / "logs" / "execution" / "shadow_order_router.jsonl", limit=limit)

@@ -235,11 +235,23 @@ class CrisisMonitor:
                     "orders_submitted": shadow_result.get("submitted_open_or_ack_count", 0),
                     "candidates": len(shadow_result.get("selected_candidates", [])),
                 })
+                # Only send Telegram alert for new orders (not duplicate cycles)
                 if self.alerter:
                     try:
                         self.alerter.send_shadow_execution_alert(shadow_result, scorecard)
                     except Exception:
                         pass
+
+        # 9. Periodic performance summary (every 10 cycles)
+        if self.cycle_count % 10 == 0:
+            try:
+                from src.execution.performance_tracker import PerformanceTracker
+                tracker = PerformanceTracker(self.repo_root)
+                summary = tracker.generate_summary()
+                if summary.get("total_trades", 0) > 0 and self.alerter:
+                    self.alerter.send_performance_summary(summary)
+            except Exception:
+                pass
 
         print(f"[{iso_now()}] Cycle {self.cycle_count} complete — mode={self.current_mode}, "
               f"regime_p={scorecard['regime_shift_probability']:.3f}, "
@@ -440,6 +452,9 @@ class CrisisMonitor:
             from src.execution.trade_idea_packager import TradeIdeaPackager
             from src.execution.shadow_order_router import ShadowOrderRouter
 
+            # Check for existing open orders to avoid duplicates
+            existing_symbols = self._get_open_order_symbols()
+
             # Get previous mode for transition detection
             scorecards_dir = self.repo_root / "logs" / "scorecards"
             prev_files = sorted(scorecards_dir.glob("scorecard_*.json"), reverse=True)
@@ -458,6 +473,15 @@ class CrisisMonitor:
 
             if analysis.get("error") or not analysis.get("trade_ideas"):
                 return None
+
+            # Filter out symbols we already have open orders/positions for
+            if existing_symbols:
+                analysis["trade_ideas"] = [
+                    idea for idea in analysis["trade_ideas"]
+                    if idea.get("symbol") not in existing_symbols
+                ]
+                if not analysis["trade_ideas"]:
+                    return None
 
             # Package ideas into router format
             packager = TradeIdeaPackager()
@@ -485,6 +509,26 @@ class CrisisMonitor:
             self._log_event("shadow_execution_error", {"error": str(e), "cycle": self.cycle_count})
             print(f"[{iso_now()}] Shadow execution error: {e}", file=sys.stderr)
             return None
+
+    def _get_open_order_symbols(self) -> set:
+        """Get symbols with existing open orders or positions to avoid duplicates."""
+        symbols = set()
+        try:
+            from src.execution.alpaca_paper_adapter import AlpacaPaperAdapter
+            adapter = AlpacaPaperAdapter()
+            # Check open orders
+            for order in adapter.list_open_orders():
+                sym = order.get("symbol")
+                if sym:
+                    symbols.add(sym)
+            # Check positions
+            for pos in adapter.list_positions():
+                sym = pos.get("symbol")
+                if sym:
+                    symbols.add(sym)
+        except Exception:
+            pass
+        return symbols
 
     # --- Alerting ---
     def _load_alerter(self):

@@ -124,7 +124,24 @@ export const api = {
   timeWindow: () => fetchJSON<any>("/api/time_window"),
   portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
   tradeAnalysis: () => fetchJSON<TradeAnalysis>("/api/trade-analysis"),
+  performance: () => fetchJSON<PerformanceData>("/api/performance"),
 };
+
+export interface PerformanceData {
+  timestamp_utc?: string;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl_per_trade: number;
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number | null;
+  by_symbol: Record<string, { trades: number; wins: number; pnl: number }>;
+  open_positions_snapshot?: any;
+  error?: string;
+}
 
 export interface TradeIdea {
   symbol: string;

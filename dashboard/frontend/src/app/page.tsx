@@ -19,6 +19,7 @@ import AlertFeed from "@/components/AlertFeed";
 import GraduationProgress from "@/components/GraduationProgress";
 import PortfolioPanel from "@/components/PortfolioPanel";
 import TradeAnalysisPanel from "@/components/TradeAnalysisPanel";
+import PerformancePanel from "@/components/PerformancePanel";
 
 function timeAgo(ts?: string): string {
   if (!ts) return "never";
@@ -45,13 +46,14 @@ export default function Dashboard() {
   const [graduation, setGraduation] = useState<GraduationReport | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [tradeAnalysis, setTradeAnalysis] = useState<TradeAnalysis | null>(null);
+  const [performance, setPerformance] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, ord, al, grad, port, ta] = await Promise.all([
+      const [hb, sc, tl, ctrl, ord, al, grad, port, ta, perf] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
@@ -61,6 +63,7 @@ export default function Dashboard() {
         api.graduation().catch(() => null),
         api.portfolio().catch(() => null),
         api.tradeAnalysis().catch(() => null),
+        api.performance().catch(() => null),
       ]);
       if (hb) setHeartbeat(hb);
       if (sc && !("error" in sc)) setScorecard(sc);
@@ -71,6 +74,7 @@ export default function Dashboard() {
       if (grad && !("error" in grad)) setGraduation(grad);
       if (port && !port.error) setPortfolio(port);
       if (ta && !ta.error) setTradeAnalysis(ta);
+      if (perf && !perf.error) setPerformance(perf);
       setError(null);
       setLastRefresh(new Date());
     } catch (e: any) {
@@ -206,13 +210,18 @@ export default function Dashboard() {
           <EvidenceLog evidence={scorecard?.evidence || []} />
         </div>
 
-        {/* Row 3: Portfolio + Graduation */}
-        <div className="col-span-7 card">
+        {/* Row 3: Portfolio + Performance + Graduation */}
+        <div className="col-span-5 card">
           <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Paper Portfolio</h2>
           <PortfolioPanel data={portfolio} />
         </div>
 
-        <div className="col-span-5 card">
+        <div className="col-span-4 card">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Shadow Performance</h2>
+          <PerformancePanel data={performance} />
+        </div>
+
+        <div className="col-span-3 card">
           <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Graduation Progress</h2>
           {graduation ? (
             <GraduationProgress
