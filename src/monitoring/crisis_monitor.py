@@ -227,6 +227,18 @@ class CrisisMonitor:
             bridge_errors.append(f"market_microstructure: {e}")
             results["freshness"]["market_microstructure"] = False
 
+        # GDELT bridge (free, no API key)
+        try:
+            from src.bridges.gdelt_bridge import GDELTBridge
+            gb = GDELTBridge(self.repo_root)
+            gdelt_section = gb.build_snapshot_section()
+            results["gdelt_events"] = gdelt_section.get("events", [])
+            results["freshness"]["gdelt"] = gdelt_section.get("event_count", 0) > 0
+            results["summary"]["gdelt_event_count"] = gdelt_section.get("event_count", 0)
+        except Exception as e:
+            bridge_errors.append(f"gdelt: {e}")
+            results["freshness"]["gdelt"] = False
+
         # Finnhub bridge
         try:
             from src.bridges.finnhub_bridge import FinnhubBridge
@@ -241,14 +253,25 @@ class CrisisMonitor:
 
         # FRED bridge
         try:
-            from src.bridges.fred_bridge import FredBridge
-            frb = FredBridge(self.repo_root)
+            from src.bridges.fred_bridge import FREDBridge
+            frb = FREDBridge(self.repo_root)
             fred_packets = frb.poll()
             results["fred"] = fred_packets
             results["freshness"]["fred"] = len(fred_packets) > 0
         except Exception as e:
             bridge_errors.append(f"fred: {e}")
             results["freshness"]["fred"] = False
+
+        # EIA bridge
+        try:
+            from src.bridges.eia_bridge import EIABridge
+            eb = EIABridge(self.repo_root)
+            eia_packets = eb.poll()
+            results["eia"] = eia_packets
+            results["freshness"]["eia"] = len(eia_packets) > 0
+        except Exception as e:
+            bridge_errors.append(f"eia: {e}")
+            results["freshness"]["eia"] = False
 
         results["bridge_errors"] = bridge_errors
         fresh_count = sum(1 for v in results["freshness"].values() if v)
@@ -263,8 +286,10 @@ class CrisisMonitor:
             "timestamp_utc": iso_now(),
             "market_microstructure": bridge_results.get("market_microstructure", {}),
             "aviation_disruptions": bridge_results.get("aviation_disruptions", []),
+            "gdelt_events": bridge_results.get("gdelt_events", []),
             "finnhub": bridge_results.get("finnhub", []),
             "fred": bridge_results.get("fred", []),
+            "eia": bridge_results.get("eia", []),
             "data_freshness": bridge_results.get("freshness", {}),
             "fallback_mode": bridge_results.get("fallback_mode", False),
             "controls": {
@@ -275,19 +300,20 @@ class CrisisMonitor:
             "portfolio": {},  # populated when paper/live trading is active
         }
 
-    # --- Regime scoring (simplified) ---
+    # --- Regime scoring ---
     def _score_regime(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from src.scoring.regime_shift import RegimeShiftScorer
             scorer = RegimeShiftScorer(self.thresholds)
             return scorer.score(snapshot)
-        except Exception:
-            # Fallback: score based on disruption event severity
+        except Exception as e:
+            # Fallback: basic heuristic if scorer fails to load
+            self._log_event("regime_scorer_fallback", {"error": str(e)})
             disruptions = snapshot.get("aviation_disruptions", [])
             high_severity = sum(1 for d in disruptions if d.get("severity") == "high")
             medium_severity = sum(1 for d in disruptions if d.get("severity") == "medium")
 
-            base_p = 0.15  # baseline
+            base_p = 0.15
             base_p += high_severity * 0.08
             base_p += medium_severity * 0.03
             base_p = min(base_p, 0.95)
