@@ -75,6 +75,16 @@ class AlertDispatcher:
             "confidence": confidence,
         })
 
+    def send_startup_alert(self):
+        """Alert when the crisis monitor starts up."""
+        self._dispatch(
+            "🚀 Global Sentinel Started",
+            "Crisis Monitor is online and beginning monitoring cycles.\n"
+            f"Dashboard: http://20.124.180.8:8501",
+            level="info",
+            extra={"event": "startup"},
+        )
+
     def send_kill_switch_alert(self):
         """Alert when kill switch is activated."""
         self._dispatch(
@@ -83,6 +93,38 @@ class AlertDispatcher:
             level="critical",
             extra={"event": "kill_switch"},
         )
+
+    def send_shadow_execution_alert(
+        self,
+        route_result: Dict[str, Any],
+        scorecard: Dict[str, Any],
+    ):
+        """Alert when shadow orders are submitted."""
+        submitted = route_result.get("submitted_open_or_ack_count", 0)
+        rejected = route_result.get("broker_rejected_count", 0)
+        mode = scorecard.get("mode", "UNKNOWN")
+        regime_p = scorecard.get("regime_shift_probability", 0)
+
+        title = f"📊 Shadow Orders: {submitted} submitted"
+
+        body = (
+            f"Mode: {mode} | Regime P: {regime_p:.3f}\n"
+            f"Submitted: {submitted} | Rejected: {rejected}\n"
+        )
+
+        for cand in route_result.get("selected_candidates", []):
+            body += f"  • {cand.get('symbol')} ({cand.get('direction', '?')}) — conf: {cand.get('confidence_score', 0):.2f}\n"
+
+        if route_result.get("skipped_candidates"):
+            skipped = len(route_result["skipped_candidates"])
+            body += f"Skipped: {skipped} candidates\n"
+
+        self._dispatch(title, body, level="info", extra={
+            "event": "shadow_execution",
+            "submitted": submitted,
+            "rejected": rejected,
+            "mode": mode,
+        })
 
     def send_bridge_failure(self, bridge_name: str, error: str):
         """Alert on persistent bridge failure."""

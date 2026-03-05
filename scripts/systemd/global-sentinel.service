@@ -10,7 +10,7 @@ Group=openclaw
 WorkingDirectory=/opt/global-sentinel
 EnvironmentFile=-/opt/global-sentinel/.env
 Environment=PYTHONPATH=/opt/global-sentinel
-ExecStart=/usr/bin/python3 src/monitoring/crisis_monitor.py --repo-root /opt/global-sentinel
+ExecStart=/usr/bin/python3 -u src/monitoring/crisis_monitor.py --repo-root /opt/global-sentinel
 Restart=on-failure
 RestartSec=30
 

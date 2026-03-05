@@ -105,6 +105,13 @@ class CrisisMonitor:
         """Main loop. Runs until SIGTERM/SIGINT."""
         print(f"[{iso_now()}] Crisis Monitor starting (mode={self.current_mode})")
 
+        # Send startup notification
+        if self.alerter:
+            try:
+                self.alerter.send_startup_alert()
+            except Exception:
+                pass
+
         while self.running:
             try:
                 self._run_cycle()
@@ -218,6 +225,21 @@ class CrisisMonitor:
                 self.alerter.send_scorecard_summary(scorecard)
             except Exception:
                 pass
+
+        # 8. Shadow execution: generate trade ideas and route to paper broker
+        if scorecard.get("shadow_execution_eligible"):
+            shadow_result = self._run_shadow_execution(scorecard, bridge_results)
+            if shadow_result and shadow_result.get("submitted_open_or_ack_count", 0) > 0:
+                self._log_event("shadow_orders_submitted", {
+                    "cycle": self.cycle_count,
+                    "orders_submitted": shadow_result.get("submitted_open_or_ack_count", 0),
+                    "candidates": len(shadow_result.get("selected_candidates", [])),
+                })
+                if self.alerter:
+                    try:
+                        self.alerter.send_shadow_execution_alert(shadow_result, scorecard)
+                    except Exception:
+                        pass
 
         print(f"[{iso_now()}] Cycle {self.cycle_count} complete — mode={self.current_mode}, "
               f"regime_p={scorecard['regime_shift_probability']:.3f}, "
@@ -409,6 +431,60 @@ class CrisisMonitor:
         if time_window.get("shadow_execution_window_blocked"):
             return False
         return True
+
+    # --- Shadow Execution ---
+    def _run_shadow_execution(self, scorecard: Dict[str, Any], bridge_results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Run trade analysis → package → shadow order routing."""
+        try:
+            from src.alpha.trade_analysis_engine import TradeAnalysisEngine
+            from src.execution.trade_idea_packager import TradeIdeaPackager
+            from src.execution.shadow_order_router import ShadowOrderRouter
+
+            # Get previous mode for transition detection
+            scorecards_dir = self.repo_root / "logs" / "scorecards"
+            prev_files = sorted(scorecards_dir.glob("scorecard_*.json"), reverse=True)
+            prev_mode = None
+            if len(prev_files) > 1:
+                try:
+                    prev_sc = json.loads(prev_files[1].read_text(encoding="utf-8"))
+                    prev_mode = prev_sc.get("mode")
+                except Exception:
+                    pass
+
+            # Generate trade analysis
+            micro = bridge_results.get("market_microstructure", {})
+            engine = TradeAnalysisEngine(self.repo_root)
+            analysis = engine.analyze(scorecard, previous_mode=prev_mode, microstructure=micro)
+
+            if analysis.get("error") or not analysis.get("trade_ideas"):
+                return None
+
+            # Package ideas into router format
+            packager = TradeIdeaPackager()
+            package = packager.build_package(
+                trade_analysis=analysis,
+                scorecard=scorecard,
+                microstructure=micro,
+                max_ideas=3,  # conservative: max 3 ideas per cycle
+            )
+
+            if not package.get("candidates") or package.get("global_blocks"):
+                return None
+
+            # Route through shadow order router
+            router = ShadowOrderRouter(self.repo_root)
+            result = router.route_package(
+                package=package,
+                max_orders=3,
+                min_confidence=0.3,
+            )
+
+            return result
+
+        except Exception as e:
+            self._log_event("shadow_execution_error", {"error": str(e), "cycle": self.cycle_count})
+            print(f"[{iso_now()}] Shadow execution error: {e}", file=sys.stderr)
+            return None
 
     # --- Alerting ---
     def _load_alerter(self):
