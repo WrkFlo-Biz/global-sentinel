@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   api, connectWS,
   type Heartbeat, type Scorecard, type TimelinePoint, type Controls,
-  type GraduationReport, type PortfolioData,
+  type GraduationReport, type PortfolioData, type TradeAnalysis,
 } from "@/lib/api";
 import ModeIndicator from "@/components/ModeIndicator";
 import RegimeGauge from "@/components/RegimeGauge";
@@ -18,6 +18,7 @@ import OrderFlow from "@/components/OrderFlow";
 import AlertFeed from "@/components/AlertFeed";
 import GraduationProgress from "@/components/GraduationProgress";
 import PortfolioPanel from "@/components/PortfolioPanel";
+import TradeAnalysisPanel from "@/components/TradeAnalysisPanel";
 
 function timeAgo(ts?: string): string {
   if (!ts) return "never";
@@ -43,13 +44,14 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [graduation, setGraduation] = useState<GraduationReport | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
+  const [tradeAnalysis, setTradeAnalysis] = useState<TradeAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, ord, al, grad, port] = await Promise.all([
+      const [hb, sc, tl, ctrl, ord, al, grad, port, ta] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
@@ -58,6 +60,7 @@ export default function Dashboard() {
         api.alerts(30).catch(() => []),
         api.graduation().catch(() => null),
         api.portfolio().catch(() => null),
+        api.tradeAnalysis().catch(() => null),
       ]);
       if (hb) setHeartbeat(hb);
       if (sc && !("error" in sc)) setScorecard(sc);
@@ -67,6 +70,7 @@ export default function Dashboard() {
       if (Array.isArray(al)) setAlerts(al);
       if (grad && !("error" in grad)) setGraduation(grad);
       if (port && !port.error) setPortfolio(port);
+      if (ta && !ta.error) setTradeAnalysis(ta);
       setError(null);
       setLastRefresh(new Date());
     } catch (e: any) {
@@ -224,7 +228,18 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Row 4: Order Flow + Alerts */}
+        {/* Row 4: Trade Analysis */}
+        <div className="col-span-12 card">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs text-gray-500 uppercase tracking-wider">Trade Analysis & Suggestions</h2>
+            <span className="text-[10px] text-yellow-500 bg-yellow-950/20 px-2 py-0.5 rounded border border-yellow-900/30">
+              ADVISORY ONLY — Shadow Mode
+            </span>
+          </div>
+          <TradeAnalysisPanel data={tradeAnalysis} />
+        </div>
+
+        {/* Row 5: Order Flow + Alerts */}
         <div className="col-span-7 card">
           <h2 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Shadow Execution Flow</h2>
           <OrderFlow orders={orders} />

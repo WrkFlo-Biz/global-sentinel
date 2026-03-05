@@ -1,7 +1,10 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8501";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const headers: Record<string, string> = {};
+  if (API_KEY) headers["X-API-Key"] = API_KEY;
+  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", headers });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -120,11 +123,65 @@ export const api = {
   thresholds: () => fetchJSON<any>("/api/thresholds"),
   timeWindow: () => fetchJSON<any>("/api/time_window"),
   portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
+  tradeAnalysis: () => fetchJSON<TradeAnalysis>("/api/trade-analysis"),
 };
 
+export interface TradeIdea {
+  symbol: string;
+  side: string;
+  reason: string;
+  historical_win_rate: number;
+  confidence_adjusted_score: number;
+  current_price?: number;
+  daily_vol_pct?: number;
+  entry?: number;
+  target?: number;
+  stop?: number;
+  risk_reward?: number;
+}
+
+export interface SectorRotation {
+  sector: string;
+  signal: string;
+  strength: number;
+  rationale: string;
+  symbols: string[];
+}
+
+export interface HistoricalExample {
+  event: string;
+  result: string;
+}
+
+export interface TradeAnalysis {
+  timestamp_utc: string;
+  mode: string;
+  regime_p: number;
+  transition: string;
+  playbook_thesis: string;
+  trade_ideas: TradeIdea[];
+  sector_analysis: SectorRotation[];
+  risk_assessment: {
+    regime_p: number;
+    confidence: number;
+    mode: string;
+    position_sizing: string;
+    max_position_pct: number;
+    time_window: string;
+    window_quality: string;
+    risk_factors: string[];
+  };
+  historical_examples: HistoricalExample[];
+  evidence_summary: string[];
+  confidence: number;
+  advisory_only: boolean;
+  error?: string;
+}
+
 export function connectWS(onMessage: (data: any) => void): WebSocket | null {
-  const wsUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8501")
+  const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8501")
     .replace("http", "ws") + "/ws";
+  const wsUrl = API_KEY ? `${base}?api_key=${API_KEY}` : base;
   try {
     const ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => {

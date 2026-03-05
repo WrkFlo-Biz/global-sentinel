@@ -20,11 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
+API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
 
 app = FastAPI(title="Global Sentinel Dashboard API", version="5.1")
 
@@ -34,6 +36,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    """Require API key for /api/ endpoints when GS_DASHBOARD_API_KEY is set."""
+    if API_KEY and request.url.path.startswith("/api/"):
+        key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        if key != API_KEY:
+            return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +156,37 @@ def bridge_status():
         "fallback_mode": card.get("fallback_mode_status", False),
         "timestamp_utc": card.get("timestamp_utc"),
     }
+
+
+@app.get("/api/trade-analysis")
+def trade_analysis():
+    """Generate trade ideas from current regime state and historical patterns."""
+    cards = load_scorecards(limit=2)
+    if not cards:
+        return {"error": "no scorecards"}
+
+    current = cards[-1]
+    prev_mode = cards[-2].get("mode") if len(cards) > 1 else None
+
+    # Load microstructure cache
+    micro = {}
+    cache_dir = REPO_ROOT / "logs" / "bridge_cache" / "market_microstructure"
+    if cache_dir.exists():
+        cache_files = sorted(cache_dir.glob("microstructure_*.json"), reverse=True)
+        if cache_files:
+            try:
+                cache_data = json.loads(cache_files[0].read_text(encoding="utf-8"))
+                micro = cache_data.get("symbols", {})
+            except Exception:
+                pass
+
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from src.alpha.trade_analysis_engine import TradeAnalysisEngine
+        engine = TradeAnalysisEngine(REPO_ROOT)
+        return engine.analyze(current, previous_mode=prev_mode, microstructure=micro)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/execution/orders")

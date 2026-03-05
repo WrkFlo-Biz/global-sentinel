@@ -86,9 +86,9 @@ regions:
   - name: "Ukraine/Russia"
     keywords: ["ukraine", "russia", "NATO", "sanctions"]
     priority: high
-  - name: "Middle East"
-    keywords: ["iran", "israel", "saudi", "oil embargo", "strait of hormuz"]
-    priority: high
+  - name: "Middle East / Iran"
+    keywords: ["iran", "israel", "saudi", "oil embargo", "strait of hormuz", "persian gulf", "irgc", "iran war", "iran sanctions", "iran nuclear", "hamas", "hezbollah"]
+    priority: critical
   - name: "Korean Peninsula"
     keywords: ["north korea", "DPRK", "missile test"]
     priority: medium
@@ -192,6 +192,88 @@ supply_chain:
     description: "UPS — global logistics"
     priority: medium
     sector: logistics
+
+# --- Gasoline & Refining (War/Supply Disruption) ---
+gasoline_refining:
+  - symbol: UGA
+    description: "United States Gasoline Fund ETF"
+    priority: high
+    sector: gasoline
+  - symbol: VLO
+    description: "Valero Energy — largest US refiner"
+    priority: high
+    sector: refining
+  - symbol: MPC
+    description: "Marathon Petroleum — refining & midstream"
+    priority: high
+    sector: refining
+  - symbol: PSX
+    description: "Phillips 66 — refining & chemicals"
+    priority: high
+    sector: refining
+  - symbol: PBF
+    description: "PBF Energy — refining, Strait of Hormuz exposure"
+    priority: medium
+    sector: refining
+  - symbol: HFC
+    description: "HF Sinclair — refining"
+    priority: medium
+    sector: refining
+  - symbol: DK
+    description: "Delek US Holdings — refining"
+    priority: medium
+    sector: refining
+  - symbol: CTRA
+    description: "Coterra Energy — nat gas/oil production"
+    priority: medium
+    sector: upstream
+  - symbol: XOP
+    description: "SPDR Oil & Gas Exploration ETF"
+    priority: high
+    sector: energy_etf
+  - symbol: XLE
+    description: "Energy Select Sector SPDR ETF"
+    priority: high
+    sector: energy_etf
+
+# --- Defense & Military Industry (Geopolitical Sensitivity) ---
+defense_military:
+  - symbol: ITA
+    description: "iShares US Aerospace & Defense ETF"
+    priority: high
+    sector: defense_etf
+  - symbol: PPA
+    description: "Invesco Aerospace & Defense ETF"
+    priority: high
+    sector: defense_etf
+  - symbol: HII
+    description: "Huntington Ingalls — naval shipbuilding"
+    priority: high
+    sector: defense
+  - symbol: LHX
+    description: "L3Harris Technologies — C4ISR, electronic warfare"
+    priority: high
+    sector: defense
+  - symbol: LDOS
+    description: "Leidos Holdings — defense IT & intelligence"
+    priority: medium
+    sector: defense
+  - symbol: KTOS
+    description: "Kratos Defense — drones, missile defense"
+    priority: medium
+    sector: defense
+  - symbol: PLTR
+    description: "Palantir — defense AI & intelligence"
+    priority: high
+    sector: defense_tech
+  - symbol: AVAV
+    description: "AeroVironment — tactical drones, loitering munitions"
+    priority: medium
+    sector: defense
+  - symbol: RKLB
+    description: "Rocket Lab — defense space launches"
+    priority: medium
+    sector: defense_space
 
 # --- Insurance (War/Catastrophe Risk) ---
 insurance_risk:

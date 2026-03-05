@@ -7,10 +7,10 @@ last_updated: "2026-03-04"
 
 # --- Operating Mode Thresholds ---
 mode_thresholds:
-  normal_to_elevated: 0.45
-  elevated_to_crisis: 0.75
-  crisis_to_elevated: 0.65   # hysteresis: lower than entry
-  elevated_to_normal: 0.35   # hysteresis: lower than entry
+  normal_to_elevated: 0.35
+  elevated_to_crisis: 0.65
+  crisis_to_elevated: 0.55   # hysteresis: lower than entry
+  elevated_to_normal: 0.25   # hysteresis: lower than entry
 
 # --- Hysteresis ---
 hysteresis:

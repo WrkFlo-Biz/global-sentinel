@@ -89,11 +89,23 @@ class RegimeShiftScorer:
         components["liquidity_stress"] = liq["score"]
         freshness["liquidity_stress"] = liq.get("fresh", False)
 
+        # --- Volatility regime multiplier ---
+        # When avg vol crosses thresholds, amplify the composite score
+        vol_score = components.get("market_volatility", 0)
+        vol_multiplier = 1.0
+        if vol_score >= 0.9:       # crisis-level vol (>4% avg)
+            vol_multiplier = 1.4
+        elif vol_score >= 0.6:     # elevated vol (>2.5% avg)
+            vol_multiplier = 1.2
+        elif vol_score >= 0.35:    # normal-high vol (>1.5% avg)
+            vol_multiplier = 1.1
+
         # --- Composite weighted sum ---
         regime_prob = sum(
             components.get(k, 0) * self.weights.get(k, 0)
             for k in self.weights
         )
+        regime_prob *= vol_multiplier
         regime_prob = max(0.0, min(1.0, regime_prob))
 
         # --- Confidence ---

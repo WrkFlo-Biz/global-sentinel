@@ -1,0 +1,19 @@
+[Unit]
+Description=Global Sentinel Broker Reconciler
+After=network.target global-sentinel.service
+Wants=global-sentinel.service
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=/opt/global-sentinel/.env
+Environment=BROKER_ADAPTER=alpaca_paper
+Environment=RECONCILER_LOOP_SECONDS=60
+ExecStart=/usr/bin/python3 src/execution/broker_state_reconciler_loop.py --repo-root /opt/global-sentinel
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
