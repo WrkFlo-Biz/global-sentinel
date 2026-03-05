@@ -13,7 +13,8 @@ Purpose:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Tuple
+import json  # noqa: F401
+from typing import Any, Dict, Optional, Tuple  # noqa: F401
 
 import yaml
 

@@ -5,6 +5,8 @@ Produces executive-ready flash memos when regime conditions warrant.
 Separates observed facts from inferences. Cites data freshness and confidence.
 """
 
+import json  # noqa: F401
+from datetime import datetime, timezone  # noqa: F401
 from pathlib import Path
 
 

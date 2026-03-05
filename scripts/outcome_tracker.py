@@ -7,6 +7,7 @@ Stores attribution logs and metrics.
 """
 
 import json
+import sys  # noqa: F401
 from datetime import datetime, timezone
 from pathlib import Path
 

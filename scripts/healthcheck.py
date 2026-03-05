@@ -8,6 +8,7 @@ Returns exit code 0 if healthy, 1 if degraded, 2 if critical.
 import json
 import os
 import sys
+import time  # noqa: F401
 from datetime import datetime, timezone
 from pathlib import Path
 

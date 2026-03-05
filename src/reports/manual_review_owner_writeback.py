@@ -21,7 +21,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional  # noqa: F401
 
 
 def iso_now() -> str:

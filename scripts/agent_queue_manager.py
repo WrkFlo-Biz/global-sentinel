@@ -6,7 +6,9 @@ Dynamic scaling based on queue depth, latency, and failure rates.
 """
 
 import json
+import os  # noqa: F401
 import threading
+import time  # noqa: F401
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path

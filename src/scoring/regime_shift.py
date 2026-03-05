@@ -5,6 +5,11 @@ Computes a composite regime shift probability from multiple signal sources.
 Applies confidence penalties for stale, conflicting, or fallback data.
 """
 
+import os  # noqa: F401
+import time  # noqa: F401
+from datetime import datetime, timezone  # noqa: F401
+from typing import Any  # noqa: F401
+
 
 class RegimeShiftScorer:
     """Weighted composite scorer for geopolitical regime shift probability."""

@@ -5,6 +5,7 @@ Public news sources (GDELT, RSS) as fallback when premium news APIs are unavaila
 """
 
 import json
+import os  # noqa: F401
 import sys
 from datetime import datetime, timezone
 
