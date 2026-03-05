@@ -1,0 +1,103 @@
+{
+  "status": "ok",
+  "total": 19,
+  "passed": 19,
+  "failed": 0,
+  "results": [
+    {
+      "name": "small_qty_DAL_passes",
+      "passed": true,
+      "detail": "pass=True, qty=500, adv=12M, cap=680272.11"
+    },
+    {
+      "name": "small_qty_BA_passes",
+      "passed": true,
+      "detail": "pass=True, qty=300, adv=6M"
+    },
+    {
+      "name": "small_qty_SPY_passes",
+      "passed": true,
+      "detail": "pass=True, qty=2000, adv=80M"
+    },
+    {
+      "name": "large_qty_UAL_blocked",
+      "passed": true,
+      "detail": "pass=False, qty=150000, adv=8M, participation=1.875%"
+    },
+    {
+      "name": "huge_qty_UAL_500k_blocked",
+      "passed": true,
+      "detail": "pass=False, qty=500000, adv=8M"
+    },
+    {
+      "name": "downsize_UAL_has_cap",
+      "passed": true,
+      "detail": "pass=False, recommended_qty_cap=320000.0"
+    },
+    {
+      "name": "downsize_ZIM_100k_has_cap",
+      "passed": true,
+      "detail": "pass=False, recommended_qty_cap=21258.5"
+    },
+    {
+      "name": "missing_micro_empty_snapshot_blocked",
+      "passed": true,
+      "detail": "pass=False (expected False for fail-closed)"
+    },
+    {
+      "name": "missing_micro_symbol_not_in_snapshot_blocked",
+      "passed": true,
+      "detail": "pass=False (expected False for fail-closed)"
+    },
+    {
+      "name": "missing_micro_zero_adv_blocked",
+      "passed": true,
+      "detail": "pass=False (expected False for fail-closed)"
+    },
+    {
+      "name": "missing_micro_zero_sigma_blocked",
+      "passed": true,
+      "detail": "pass=False (expected False for fail-closed)"
+    },
+    {
+      "name": "time_window_opening_rush_ZIM_12000",
+      "passed": true,
+      "detail": "pass=True, cap=21258.5, window=opening_rush"
+    },
+    {
+      "name": "time_window_lunch_lull_ZIM_12000",
+      "passed": true,
+      "detail": "pass=True, cap=21258.5, window=lunch_lull"
+    },
+    {
+      "name": "time_window_power_hour_ZIM_12000",
+      "passed": true,
+      "detail": "pass=False, cap=5533.76, window=power_hour"
+    },
+    {
+      "name": "midday_lull_more_permissive_than_power_hour",
+      "passed": true,
+      "detail": "midday_lull pass=True, power_hour pass=False"
+    },
+    {
+      "name": "regime_normal_ZIM_6000",
+      "passed": true,
+      "detail": "pass=True, cap=21258.5, regime=normal"
+    },
+    {
+      "name": "regime_elevated_ZIM_6000",
+      "passed": true,
+      "detail": "pass=True, cap=9448.22, regime=elevated"
+    },
+    {
+      "name": "regime_crisis_ZIM_6000",
+      "passed": true,
+      "detail": "pass=False, cap=3401.36, regime=crisis"
+    },
+    {
+      "name": "normal_passes_crisis_fails",
+      "passed": true,
+      "detail": "normal pass=True, crisis pass=False"
+    }
+  ]
+}

@@ -95,3 +95,129 @@ regions:
   - name: "US-China Trade"
     keywords: ["tariff", "trade war", "export controls", "chips act"]
     priority: high
+
+# --- Aviation & Travel (War/Geopolitical Disruption) ---
+aviation_travel:
+  - symbol: DAL
+    description: "Delta Air Lines"
+    priority: high
+    sector: aviation
+  - symbol: UAL
+    description: "United Airlines Holdings"
+    priority: high
+    sector: aviation
+  - symbol: AAL
+    description: "American Airlines Group"
+    priority: high
+    sector: aviation
+  - symbol: LUV
+    description: "Southwest Airlines"
+    priority: medium
+    sector: aviation
+  - symbol: JBLU
+    description: "JetBlue Airways"
+    priority: medium
+    sector: aviation
+  - symbol: JETS
+    description: "US Global Jets ETF"
+    priority: high
+    sector: aviation_etf
+  - symbol: BA
+    description: "Boeing — defense/commercial aviation"
+    priority: high
+    sector: aerospace_defense
+  - symbol: RTX
+    description: "RTX Corp (Raytheon) — defense"
+    priority: high
+    sector: aerospace_defense
+  - symbol: LMT
+    description: "Lockheed Martin — defense"
+    priority: high
+    sector: aerospace_defense
+  - symbol: GD
+    description: "General Dynamics — defense"
+    priority: medium
+    sector: aerospace_defense
+  - symbol: NOC
+    description: "Northrop Grumman — defense"
+    priority: medium
+    sector: aerospace_defense
+
+# --- Travel & Hospitality (Geopolitical Sensitivity) ---
+travel_hospitality:
+  - symbol: MAR
+    description: "Marriott International"
+    priority: medium
+    sector: hotels
+  - symbol: HLT
+    description: "Hilton Worldwide"
+    priority: medium
+    sector: hotels
+  - symbol: BKNG
+    description: "Booking Holdings"
+    priority: high
+    sector: online_travel
+  - symbol: EXPE
+    description: "Expedia Group"
+    priority: medium
+    sector: online_travel
+  - symbol: ABNB
+    description: "Airbnb"
+    priority: medium
+    sector: online_travel
+  - symbol: CCL
+    description: "Carnival Corp — cruise lines"
+    priority: medium
+    sector: cruise
+  - symbol: RCL
+    description: "Royal Caribbean — cruise lines"
+    priority: medium
+    sector: cruise
+
+# --- Supply Chain / Shipping (War Disruption) ---
+supply_chain:
+  - symbol: ZIM
+    description: "ZIM Integrated Shipping — Red Sea/Houthi exposure"
+    priority: high
+    sector: shipping
+  - symbol: MATX
+    description: "Matson Inc — Pacific shipping"
+    priority: medium
+    sector: shipping
+  - symbol: FDX
+    description: "FedEx — global logistics"
+    priority: medium
+    sector: logistics
+  - symbol: UPS
+    description: "UPS — global logistics"
+    priority: medium
+    sector: logistics
+
+# --- Insurance (War/Catastrophe Risk) ---
+insurance_risk:
+  - symbol: AIG
+    description: "AIG — war/aviation insurance exposure"
+    priority: medium
+    sector: insurance
+  - symbol: BRK-B
+    description: "Berkshire Hathaway — reinsurance exposure"
+    priority: medium
+    sector: insurance
+
+# --- Geopolitical Watchlist Regions (Expanded) ---
+regions_expanded:
+  - name: "Red Sea / Suez Canal"
+    keywords: ["houthi", "red sea", "suez canal", "bab el-mandeb", "shipping disruption"]
+    priority: critical
+  - name: "Black Sea / Grain Corridor"
+    keywords: ["black sea", "grain corridor", "odessa", "sevastopol"]
+    priority: high
+  - name: "Arctic / Northern Sea Route"
+    keywords: ["arctic route", "northern sea route", "polar shipping"]
+    priority: low
+  - name: "South China Sea"
+    keywords: ["south china sea", "spratly", "paracel", "freedom of navigation"]
+    priority: high
+  - name: "Aviation Disruptions"
+    keywords: ["airspace closure", "no-fly zone", "flight diversion", "NOTAM", "aviation ban", "flight cancellation"]
+    priority: high

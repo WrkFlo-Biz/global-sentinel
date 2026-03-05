@@ -1,0 +1,53 @@
+{
+  "package_id": "pkg-risk-gate-smoke-001",
+  "pipeline_run_id": "run-rg-smoke-001",
+  "created_utc": "2026-03-05T12:00:00Z",
+  "thesis": "Aviation sector geopolitical risk rotation — fuel cost shock scenario",
+  "candidates": [
+    {
+      "candidate_id": "cand-dal-001",
+      "symbol": "DAL",
+      "side": "buy",
+      "qty": 500,
+      "confidence": 0.92,
+      "edge_bps": 35.0,
+      "thesis": "Delta Air Lines — strong domestic load factor insulates from fuel shock"
+    },
+    {
+      "candidate_id": "cand-ual-002",
+      "symbol": "UAL",
+      "side": "buy",
+      "qty": 150000,
+      "confidence": 0.85,
+      "edge_bps": 28.0,
+      "thesis": "United Airlines — oversized position to test impact gate blocking"
+    },
+    {
+      "candidate_id": "cand-spy-003",
+      "symbol": "SPY",
+      "side": "sell",
+      "qty": 2000,
+      "confidence": 0.78,
+      "edge_bps": 12.0,
+      "thesis": "SPY hedge — broad market beta reduction"
+    },
+    {
+      "candidate_id": "cand-zim-004",
+      "symbol": "ZIM",
+      "side": "buy",
+      "qty": 8000,
+      "confidence": 0.70,
+      "edge_bps": 45.0,
+      "thesis": "ZIM Shipping — low-ADV name, moderate position should trigger gate"
+    },
+    {
+      "candidate_id": "cand-ba-005",
+      "symbol": "BA",
+      "side": "buy",
+      "qty": 300,
+      "confidence": 0.60,
+      "edge_bps": 20.0,
+      "thesis": "Boeing — defense upside from geopolitical tension"
+    }
+  ]
+}

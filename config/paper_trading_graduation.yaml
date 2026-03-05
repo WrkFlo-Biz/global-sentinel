@@ -1,0 +1,127 @@
+# Global Sentinel V5.1 - Paper Trading Graduation Criteria
+# Quantitative thresholds for mode transitions
+# All criteria must be met simultaneously for promotion
+
+version: "5.1"
+
+# --- Shadow -> Paper Promotion ---
+shadow_to_paper:
+  description: "Graduate from shadow (mock) to paper trading with real broker APIs"
+  minimum_observation_days: 14
+
+  execution_reliability:
+    min_bound_order_attempt_count: 100
+    max_broker_reject_rate: 0.10          # < 10% rejection rate
+    max_stale_intent_rate: 0.15           # < 15% stale intents
+    max_reconciler_lag_minutes_avg: 5.0   # avg lag < 5 min
+    max_reconciler_lag_minutes_max: 15.0  # max lag < 15 min
+    min_submit_success_rate: 0.85         # > 85% submit success
+
+  risk_gate_quality:
+    max_impact_budget_utilization_avg: 0.60   # avg impact < 60% of budget
+    max_participation_rate_breach_count: 0     # zero participation breaches
+    max_risk_gate_block_rate: 0.40            # < 40% blocked by risk gate
+
+  process_quality:
+    min_daily_decision_review_coverage: 0.80  # reviews for 80%+ of trading days
+    min_tca_report_coverage: 0.70             # TCA reports for 70%+ of days
+    max_no_trade_rate: 0.80                   # not trading > 80% of opportunities
+    min_avg_candidate_confidence: 0.55        # avg confidence > 0.55
+
+  data_freshness:
+    min_bridge_quorum_pass_rate: 0.90         # quorum passing 90%+ of cycles
+    max_fallback_mode_rate: 0.15              # fallback mode < 15% of cycles
+
+  incident_history:
+    max_incident_mode_activations: 2          # max 2 incident triggers in window
+    max_kill_switch_activations: 0            # zero kill switch activations
+    max_manual_veto_overrides: 3              # max 3 manual veto uses
+
+  approval:
+    requires_human_approval: true
+    approval_channel: "telegram"
+    approvers: ["moses"]
+
+# --- Paper -> Live Promotion ---
+paper_to_live:
+  description: "Graduate from paper trading to live trading with real capital"
+  minimum_observation_days: 30
+
+  execution_reliability:
+    min_bound_order_attempt_count: 500
+    max_broker_reject_rate: 0.05          # < 5% rejection rate
+    max_stale_intent_rate: 0.10           # < 10% stale intents
+    max_reconciler_lag_minutes_avg: 3.0   # avg lag < 3 min
+    max_reconciler_lag_minutes_max: 10.0  # max lag < 10 min
+    min_submit_success_rate: 0.92         # > 92% submit success
+    min_fill_rate: 0.60                   # > 60% of submitted orders filled
+
+  performance:
+    min_sharpe_ratio: 0.5                 # minimum Sharpe (annualized, paper P&L)
+    max_max_drawdown_pct: 8.0             # max drawdown < 8%
+    min_win_rate: 0.45                    # > 45% winning trades
+    min_profit_factor: 1.1                # gross profit / gross loss > 1.1
+
+  risk_gate_quality:
+    max_impact_budget_utilization_avg: 0.50
+    max_participation_rate_breach_count: 0
+    max_var_breach_count: 0               # zero VaR breaches
+    max_exposure_breach_count: 0          # zero exposure breaches
+
+  process_quality:
+    min_daily_decision_review_coverage: 0.90
+    min_tca_report_coverage: 0.85
+    min_reconciliation_match_rate: 0.85
+    max_manual_review_backlog_hours: 2.0  # no items older than 2 hours
+
+  incident_history:
+    max_incident_mode_activations: 1
+    max_kill_switch_activations: 0
+    max_manual_veto_overrides: 1
+    required_postmortem_coverage: 1.0     # all incidents must have postmortems
+
+  capital_controls:
+    initial_max_gross_exposure_usd: 10000     # start with $10K max
+    initial_max_single_position_usd: 2000     # max $2K per position
+    initial_max_daily_loss_usd: 500           # hard stop-loss $500/day
+    ramp_schedule:
+      - days_after_live: 7
+        max_gross_exposure_usd: 25000
+      - days_after_live: 30
+        max_gross_exposure_usd: 50000
+      - days_after_live: 90
+        max_gross_exposure_usd: 100000
+
+  approval:
+    requires_human_approval: true
+    approval_channel: "telegram"
+    approvers: ["moses"]
+    requires_written_risk_acknowledgment: true
+
+# --- Emergency Demotion ---
+demotion_triggers:
+  live_to_paper:
+    - condition: "daily_loss_exceeds_max"
+      action: "immediate_demotion_to_paper"
+      notification: "telegram_alert"
+    - condition: "broker_reject_rate_above_0.15"
+      action: "demotion_after_2_consecutive_sessions"
+    - condition: "kill_switch_activated"
+      action: "immediate_demotion_to_paper"
+    - condition: "reconciler_lag_critical"
+      action: "pause_new_orders_until_resolved"
+    - condition: "incident_mode_3_times_in_week"
+      action: "demotion_to_paper_pending_review"
+
+  paper_to_shadow:
+    - condition: "broker_reject_rate_above_0.20"
+      action: "demotion_after_1_session"
+    - condition: "data_quorum_fail_rate_above_0.30"
+      action: "demotion_until_bridges_stable"
+
+# --- Graduation Checker Schedule ---
+check_schedule:
+  frequency: "daily_post_close"
+  report_path: "reports/weekly/graduation_assessment.json"
+  notify_on_eligible: true
+  notification_channel: "telegram"

@@ -1,15 +1,16 @@
 [Unit]
-Description=Global Sentinel V4 Crisis Monitor
-After=network-online.target
+Description=Global Sentinel V5 Crisis Monitor
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=gsadmin
-Group=gsadmin
-WorkingDirectory=/home/gsadmin/global-sentinel
-EnvironmentFile=/home/gsadmin/global-sentinel/.env
-ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python src/crisis_monitor.py
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 src/monitoring/crisis_monitor.py --repo-root /opt/global-sentinel
 Restart=on-failure
 RestartSec=30
 StartLimitIntervalSec=600
@@ -23,9 +24,9 @@ SyslogIdentifier=global-sentinel
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/gsadmin/global-sentinel/logs
-ReadWritePaths=/home/gsadmin/global-sentinel/reports
-ReadWritePaths=/home/gsadmin/global-sentinel/control
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/opt/global-sentinel/control
 ReadWritePaths=/tmp
 
 [Install]
