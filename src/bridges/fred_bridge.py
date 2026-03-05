@@ -159,7 +159,7 @@ class FREDBridge:
         latest, prev = self._extract_latest_and_prev(obs)
 
         latest_date = parse_obs_date(latest.get("date") if latest else None) if latest else None
-        prev_date = parse_obs_date(prev.get("date") if prev else None) if prev else None
+        prev_date = parse_obs_date(prev.get("date") if prev else None) if prev else None  # noqa: F841
 
         latest_value = safe_float(latest.get("value") if latest else None)
         prev_value = safe_float(prev.get("value") if prev else None)

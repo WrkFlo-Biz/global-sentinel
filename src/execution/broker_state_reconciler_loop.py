@@ -209,7 +209,7 @@ class BrokerStateReconcilerLoop:
     ) -> List[str]:
         notes = []
         order_req = intent.get("order_request") or {}
-        cand_ctx = intent.get("candidate_context") or {}
+        intent.get("candidate_context")  # noqa: F841
 
         # Symbol mismatch
         if order_req.get("symbol") and broker_order.get("symbol") and str(order_req["symbol"]) != str(broker_order["symbol"]):

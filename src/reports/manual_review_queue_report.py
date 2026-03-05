@@ -73,8 +73,8 @@ class ManualReviewQueueReport:
 
         for r in manual:
             created = parse_ts(r.get("timestamp_utc")) or parse_ts(((r.get("audit") or {}).get("created_at_utc")))
-            updated = parse_ts(((r.get("audit") or {}).get("updated_at_utc")))
-            last_recon = parse_ts(((r.get("reconciliation") or {}).get("last_reconciled_at_utc")))
+            parse_ts(((r.get("audit") or {}).get("updated_at_utc")))  # noqa: F841
+            parse_ts(((r.get("reconciliation") or {}).get("last_reconciled_at_utc")))  # noqa: F841
 
             age_min = None
             if created:

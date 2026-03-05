@@ -5,7 +5,6 @@ Standard: submitted_orders -> bound_order_attempts
 """
 
 from pathlib import Path
-import sys
 
 FORBIDDEN = [
     "submitted_orders",

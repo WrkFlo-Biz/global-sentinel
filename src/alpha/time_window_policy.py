@@ -328,7 +328,7 @@ def main() -> None:
     print(f"Event risk mode: {policy['event_risk_mode']}")
     print(f"Overlaps: {policy['overlap_states']}")
     print(f"Guardrail blocks: {policy['window_guardrail_blocks']}")
-    print(f"\nStrategy eligibility:")
+    print("\nStrategy eligibility:")
     for sname, sinfo in policy.get("strategy_eligibility", {}).items():
         status = "ELIGIBLE" if sinfo["eligible"] else f"BLOCKED ({', '.join(sinfo['reasons_blocked'])})"
         print(f"  {sname}: {status}")

@@ -18,9 +18,8 @@ Optional:
 from __future__ import annotations
 
 import os
-import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import requests
 
@@ -209,7 +208,7 @@ class AlpacaPaperAdapter:
         url = f"{self.base_url}{path}"
         try:
             resp = self.session.request(method=method, url=url, params=params, json=json_body, timeout=20)
-        except requests.Timeout as e:
+        except requests.Timeout:
             raise BrokerAdapterError("timeout", f"Timeout calling {path}", retryable=True, context={"operation": op, **(context or {})})
         except requests.RequestException as e:
             raise BrokerAdapterError("transient_network", str(e), retryable=True, context={"operation": op, **(context or {})})

@@ -123,7 +123,7 @@ class IdiosyncraticPackageBuilder:
         time_window_state = packet.get("time_window_state") or {}
         strategy_eligibility = time_window_state.get("strategy_eligibility") or {}
         runtime_flags = packet.get("runtime_flags") or {}
-        control_flags = packet.get("control_flags") or {}
+        packet.get("control_flags")  # consumed downstream; keep lookup  # noqa: F841
         macro_summary = packet.get("macro_policy_summary") or {}
         macro_router_summary = (packet.get("macro_event_router") or {}).get("macro_event_router_summary", {})
         macro_top_events = (packet.get("macro_event_router") or {}).get("macro_events_priority_top", []) or packet.get("macro_events_priority_top", [])

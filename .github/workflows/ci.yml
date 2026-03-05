@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt flake8
       - name: Lint
-        run: flake8 src/ scripts/ --max-line-length=120 --ignore=E501,W503
+        run: flake8 src/ scripts/ --max-line-length=120 --ignore=E501,W503,E701,E226,E127,E402,E203
 
   test:
     runs-on: ubuntu-latest

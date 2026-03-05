@@ -5,10 +5,6 @@ Computes a composite regime shift probability from multiple signal sources.
 Applies confidence penalties for stale, conflicting, or fallback data.
 """
 
-import os
-import time
-from datetime import datetime, timezone
-
 
 class RegimeShiftScorer:
     """Weighted composite scorer for geopolitical regime shift probability."""

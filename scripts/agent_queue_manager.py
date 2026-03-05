@@ -6,9 +6,7 @@ Dynamic scaling based on queue depth, latency, and failure rates.
 """
 
 import json
-import os
 import threading
-import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
