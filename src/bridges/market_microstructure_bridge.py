@@ -94,7 +94,8 @@ class MarketMicrostructureBridge:
         dict_sections = [
             "cybersecurity", "shipping_maritime", "uranium_nuclear",
             "agriculture_food", "leveraged_volatility", "insurance_reinsurance",
-            "oil_majors", "ai_infrastructure", "ai_software",
+            "oil_majors", "midstream_pipelines", "natgas_lng",
+            "ai_infrastructure", "ai_software",
             "ai_disrupted", "robotics_autonomous",
         ]
         for section in dict_sections:

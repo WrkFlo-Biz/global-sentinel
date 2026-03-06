@@ -83,6 +83,9 @@ commodity_futures:
   - symbol: CL=F
     description: "WTI Crude Oil Futures"
     priority: critical
+  - symbol: BZ=F
+    description: "Brent Crude Oil Futures"
+    priority: critical
   - symbol: GC=F
     description: "Gold Futures"
     priority: critical
@@ -94,6 +97,12 @@ commodity_futures:
     priority: high
   - symbol: HG=F
     description: "Copper Futures"
+    priority: medium
+  - symbol: RB=F
+    description: "RBOB Gasoline Futures (crack spread component)"
+    priority: high
+  - symbol: HO=F
+    description: "Heating Oil Futures (distillate proxy)"
     priority: medium
 
 # --- Currencies ---
@@ -447,9 +456,21 @@ insurance_reinsurance:
 
 # --- Oil Majors ---
 oil_majors:
-  symbols: [XOM, CVX, COP, OXY, SLB]
+  symbols: [XOM, CVX, COP, OXY, SLB, HAL, BKR]
   priority: critical
-  keywords: ["oil production", "OPEC", "crude oil", "supply cut"]
+  keywords: ["oil production", "OPEC", "crude oil", "supply cut", "brent", "oil services"]
+
+# --- Midstream / Pipelines (oil supply chain derivative) ---
+midstream_pipelines:
+  symbols: [ET, EPD, WMB, KMI, MPLX, OKE, TRGP]
+  priority: medium
+  keywords: ["pipeline", "midstream", "LNG export", "natural gas transport", "oil transport"]
+
+# --- Natural Gas / LNG Producers ---
+natgas_lng:
+  symbols: [AR, EQT, RRC, LNG, GLNG, TELL]
+  priority: medium
+  keywords: ["natural gas", "LNG", "liquefied natural gas", "gas export", "gas storage"]
 
 # --- AI Infrastructure & Semiconductors (Technology Revolution Tailwind) ---
 ai_infrastructure:

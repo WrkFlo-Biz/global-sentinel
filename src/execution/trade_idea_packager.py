@@ -40,6 +40,12 @@ HARD_TO_BORROW = {
     # Add symbols here if Alpaca rejects short orders for them
 }
 
+# Symbols permanently blocked from new buy/short ideas.
+# These will be filtered out in _idea_to_candidate() before any packaging.
+# Add symbols here that are truly toxic or broken — NOT for strategy disagreements.
+# EUM/EEM are NOT blocklisted: let them compete on merit via normal scoring.
+SYMBOL_BLOCKLIST: set = set()
+
 
 class TradeIdeaPackager:
     """Converts trade analysis ideas into shadow order router packages."""
@@ -513,6 +519,44 @@ class TradeIdeaPackager:
                 if small_large_ratio > 2.0:
                     boost["small_cap_stress"] = -0.04  # Small caps stressed = risk-off
 
+            # --- 17. Oil Supply Shock & Derivative Effects ---
+            # Direct oil: CL=F (WTI), BZ=F (Brent), USO
+            # Derivative: airlines hurt by fuel costs, refiners benefit from crack spreads
+            cl_vol = (micro_data.get("CL=F", {}) or {}).get("sigma_daily_pct", 0)
+            bz_vol = (micro_data.get("BZ=F", {}) or {}).get("sigma_daily_pct", 0)
+            uso_vol = (micro_data.get("USO", {}) or {}).get("sigma_daily_pct", 0)
+            oil_vols = [v for v in [cl_vol, bz_vol, uso_vol] if v > 0]
+            if oil_vols:
+                avg_oil_vol = sum(oil_vols) / len(oil_vols)
+                if avg_oil_vol > 4.0:
+                    boost["oil_supply_shock"] = -0.10  # Extreme oil vol = supply shock
+                elif avg_oil_vol > 2.5:
+                    boost["oil_vol_elevated"] = -0.05  # Elevated oil vol = caution
+
+                # Brent-WTI spread (if both available) — widening = supply disruption
+                cl_price = (micro_data.get("CL=F", {}) or {}).get("last_price", 0)
+                bz_price = (micro_data.get("BZ=F", {}) or {}).get("last_price", 0)
+                if cl_price > 0 and bz_price > 0:
+                    brent_wti_spread = bz_price - cl_price
+                    if brent_wti_spread > 8.0:
+                        boost["brent_wti_blow"] = -0.06  # Wide Brent-WTI = supply disruption
+                    elif brent_wti_spread > 5.0:
+                        boost["brent_wti_wide"] = -0.03
+
+                # Derivative: airline vol spike when oil spikes = fuel cost stress
+                jets_vol = (micro_data.get("JETS", {}) or {}).get("sigma_daily_pct", 0)
+                if jets_vol > 3.0 and avg_oil_vol > 2.0:
+                    boost["airline_fuel_stress"] = -0.05  # Airlines stressed by oil
+
+                # Refiner vol as crack spread proxy
+                vlo_vol = (micro_data.get("VLO", {}) or {}).get("sigma_daily_pct", 0)
+                mpc_vol = (micro_data.get("MPC", {}) or {}).get("sigma_daily_pct", 0)
+                refiner_vols = [v for v in [vlo_vol, mpc_vol] if v > 0]
+                if refiner_vols and avg_oil_vol > 2.0:
+                    avg_refiner = sum(refiner_vols) / len(refiner_vols)
+                    if avg_refiner > 3.0:
+                        boost["refiner_crack_spread"] = 0.05  # Refiner vol with oil vol = crack spread widening
+
         return boost
 
     def _idea_to_candidate(
@@ -529,6 +573,10 @@ class TradeIdeaPackager:
         """Convert a single trade idea to a router candidate with time-window awareness."""
         symbol = idea.get("symbol")
         if not symbol:
+            return None
+
+        # Block symbols on the permanent blocklist
+        if symbol.upper() in SYMBOL_BLOCKLIST:
             return None
 
         side = idea.get("side", "long")

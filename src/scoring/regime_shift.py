@@ -163,18 +163,37 @@ class RegimeShiftScorer:
     # --- Signal Scoring Methods ---
 
     def _score_geopolitical_tension(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        """Score from aviation disruptions + GDELT events."""
+        """Score from aviation disruptions + GDELT events.
+
+        NOTE: The aviation_disruption bridge aggressively deduplicates articles
+        (48h seen_hashes window), so subsequent polls often return an empty list
+        even though disruptions are ongoing.  Similarly the GDELT bridge may
+        return 0 events due to API rate limits or transient errors.
+
+        We therefore also consult ``snapshot["data_freshness"]`` — when a bridge
+        reports *fresh* (i.e., it polled successfully) we treat that as evidence
+        the geopolitical picture is at least "baseline active" and apply a floor.
+        """
         disruptions = snapshot.get("aviation_disruptions", [])
         gdelt_events = snapshot.get("gdelt_events", [])
         evidence = []
 
+        # Check bridge-level freshness flags (set by crisis_monitor regardless
+        # of whether the bridge returned new/deduplicated events).
+        data_freshness = snapshot.get("data_freshness", {})
+        aviation_bridge_fresh = data_freshness.get("aviation_disruption", False)
+        gdelt_bridge_fresh = data_freshness.get("gdelt", False)
+
         score = 0.0
 
         # Aviation disruptions: severity-weighted
-        if disruptions:
-            high = sum(1 for d in disruptions if d.get("severity") == "high")
-            medium = sum(1 for d in disruptions if d.get("severity") == "medium")
-            low = sum(1 for d in disruptions if d.get("severity") == "low")
+        if isinstance(disruptions, list) and disruptions:
+            high = sum(1 for d in disruptions
+                       if isinstance(d, dict) and d.get("severity") == "high")
+            medium = sum(1 for d in disruptions
+                         if isinstance(d, dict) and d.get("severity") == "medium")
+            low = sum(1 for d in disruptions
+                      if isinstance(d, dict) and d.get("severity") == "low")
 
             # Each high disruption adds significant signal
             score += high * 0.15
@@ -182,14 +201,21 @@ class RegimeShiftScorer:
             score += low * 0.02
 
             for d in disruptions[:3]:
-                evidence.append(d.get("title", "disruption event"))
+                if isinstance(d, dict):
+                    evidence.append(d.get("title", "disruption event"))
 
         # GDELT events: tone-weighted
-        if gdelt_events:
+        if isinstance(gdelt_events, list) and gdelt_events:
             negative_tone_sum = 0.0
             event_count = 0
             for evt in gdelt_events:
+                if not isinstance(evt, dict):
+                    continue
                 tone = evt.get("avg_tone", 0.0)
+                try:
+                    tone = float(tone)
+                except (TypeError, ValueError):
+                    tone = 0.0
                 if tone < -3.0:  # Significantly negative tone
                     negative_tone_sum += abs(tone)
                     event_count += 1
@@ -201,8 +227,19 @@ class RegimeShiftScorer:
                 avg_negative = negative_tone_sum / event_count
                 score += min(avg_negative / 10.0, 0.5) * (min(event_count, 20) / 20.0)
 
+        # --- Baseline floor ---
+        # When bridges polled successfully (fresh=True) but returned empty data
+        # (deduplication / rate limits), we still know the geopolitical monitoring
+        # pipeline is alive.  Apply a small baseline so the component never
+        # reports 0.0 when bridges are operational — same pattern as yield_curve.
+        bridges_alive = aviation_bridge_fresh or gdelt_bridge_fresh
+        if score < 0.05 and bridges_alive:
+            score = 0.05
+            if not evidence:
+                evidence.append("geopolitical bridges active (baseline)")
+
         score = min(score, 1.0)
-        fresh = bool(disruptions or gdelt_events)
+        fresh = bool(disruptions or gdelt_events or bridges_alive)
 
         return {"score": round(score, 4), "fresh": fresh, "evidence": evidence}
 
@@ -263,17 +300,59 @@ class RegimeShiftScorer:
         return {"score": round(score, 4), "fresh": True}
 
     def _score_commodity_shock(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        """Score from commodity-related symbols in microstructure."""
+        """Score from commodity vol + EIA inventories + supply chain derivative effects.
+
+        Layers:
+        - Direct: crude (CL=F, BZ=F, USO), nat gas (NG=F), gasoline (RB=F), metals
+        - 1st derivative: refiners, oil majors, oil services
+        - 2nd derivative: airlines (fuel cost), shipping (bunker fuel), pipelines
+        """
         micro = snapshot.get("market_microstructure", {})
-        commodity_symbols = {"USO", "GLD", "SLV", "COPX", "XLE", "XOP"}
-        found = {s: micro[s] for s in commodity_symbols if s in micro}
+        evidence = []
+
+        direct = {"USO", "GLD", "SLV", "COPX", "XLE", "XOP", "UGA", "CL=F", "BZ=F", "NG=F", "RB=F", "HO=F"}
+        first_deriv = {"VLO", "MPC", "PSX", "PBF", "XOM", "CVX", "COP", "OXY", "SLB", "HAL", "BKR"}
+        second_deriv = {"JETS", "DAL", "UAL", "AAL", "ZIM", "ET", "EPD", "WMB"}
+
+        all_syms = direct | first_deriv | second_deriv
+        found = {s: micro[s] for s in all_syms if s in micro}
 
         if not found:
-            return {"score": 0.15, "fresh": False}
+            return {"score": 0.15, "fresh": False, "evidence": []}
 
-        avg_sigma = sum(d.get("sigma_daily_pct", 0) for d in found.values()) / len(found)
-        score = min(avg_sigma / 4.0, 1.0)  # 4% daily vol = max commodity shock
-        return {"score": round(score, 4), "fresh": True}
+        direct_vols = [found[s].get("sigma_daily_pct", 0) for s in direct if s in found]
+        deriv_vols = [found[s].get("sigma_daily_pct", 0) for s in first_deriv | second_deriv if s in found]
+
+        direct_avg = sum(direct_vols) / len(direct_vols) if direct_vols else 0
+        deriv_avg = sum(deriv_vols) / len(deriv_vols) if deriv_vols else 0
+
+        blended = direct_avg * 0.7 + deriv_avg * 0.3
+        score = min(blended / 4.0, 1.0)
+
+        if direct_avg > 3.0:
+            evidence.append(f"Commodity vol elevated: {direct_avg:.1f}%")
+        if deriv_avg > 2.5:
+            evidence.append(f"Supply chain derivative vol: {deriv_avg:.1f}%")
+
+        # EIA inventory swings as supply shock signal
+        for pkt in (snapshot.get("eia") or []):
+            if not isinstance(pkt, dict):
+                continue
+            meta = pkt.get("parsing_meta", {})
+            if not isinstance(meta, dict):
+                continue
+            delta = meta.get("delta")
+            name = meta.get("series_name", "")
+            if isinstance(delta, (int, float)) and abs(delta) > 3.0:
+                score = min(score + 0.15, 1.0)
+                evidence.append(f"EIA {name}: {'draw' if delta < 0 else 'build'} {abs(delta):.1f}M bbl")
+            elif isinstance(delta, (int, float)) and abs(delta) > 1.5:
+                score = min(score + 0.05, 1.0)
+
+        if score < 0.05:
+            score = 0.05
+
+        return {"score": round(score, 4), "fresh": True, "evidence": evidence[:5]}
 
     def _score_policy_uncertainty(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Score from Finnhub headline pressure."""
@@ -634,48 +713,98 @@ class RegimeShiftScorer:
 
     def _score_policy_signals(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Score from Fed Board, White House, Treasury OFAC, and BLS data.
-        Policy shifts signal regime changes before markets price them."""
+
+        Bridge output format: each bridge's poll() returns a **list** of
+        macro_policy_event packets (dicts with event_type, headline,
+        rate_regime_shock_candidate, policy_release_urgency_score, etc.).
+        The snapshot stores them as-is under their respective keys.
+        """
         evidence: List[str] = []
         score = 0.0
         any_fresh = False
 
-        # Fed Board signals
-        fed = snapshot.get("fed_board", {})
-        if isinstance(fed, dict) and fed.get("fresh", False):
-            any_fresh = True
-            events = fed.get("events", fed.get("releases", []))
-            if isinstance(events, list) and events:
-                score += min(len(events) * 0.05, 0.2)
-                evidence.append(f"Fed Board: {len(events)} recent policy signals")
+        def _coerce_packet_list(raw) -> List[Dict[str, Any]]:
+            """Normalise bridge data to a list of packets regardless of shape."""
+            if isinstance(raw, list):
+                return [p for p in raw if isinstance(p, dict)]
+            if isinstance(raw, dict):
+                # Legacy dict-with-nested-lists or single packet
+                if "packets" in raw:
+                    return [p for p in raw["packets"] if isinstance(p, dict)]
+                return [raw]
+            return []
 
-        # White House policy
-        wh = snapshot.get("whitehouse_policy", {})
-        if isinstance(wh, dict) and wh.get("fresh", False):
+        # --- Fed Board signals ---
+        fed_packets = _coerce_packet_list(snapshot.get("fed_board"))
+        if fed_packets:
             any_fresh = True
-            actions = wh.get("executive_orders", wh.get("actions", wh.get("events", [])))
-            if isinstance(actions, list) and actions:
-                score += min(len(actions) * 0.05, 0.2)
-                evidence.append(f"White House: {len(actions)} policy actions")
+            # Filter to real content packets (skip error packets)
+            content = [p for p in fed_packets if p.get("schema_version", "").startswith("macro_policy_event") and "error" not in p]
+            rate_regime_count = sum(1 for p in content if p.get("rate_regime_shock_candidate"))
+            urgency_sum = sum(float(p.get("policy_release_urgency_score", 0)) for p in content)
 
-        # Treasury OFAC sanctions
-        ofac = snapshot.get("treasury_ofac", {})
-        if isinstance(ofac, dict) and ofac.get("fresh", False):
-            any_fresh = True
-            sanctions = ofac.get("new_designations", ofac.get("sanctions", ofac.get("entries", [])))
-            if isinstance(sanctions, list) and sanctions:
-                score += min(len(sanctions) * 0.08, 0.3)
-                evidence.append(f"OFAC: {len(sanctions)} new sanctions designations")
+            if content:
+                score += min(len(content) * 0.02 + rate_regime_count * 0.04, 0.2)
+                if urgency_sum > 0:
+                    score += min(urgency_sum / 20.0, 0.05)
+                evidence.append(f"Fed Board: {len(content)} signals ({rate_regime_count} rate-sensitive)")
 
-        # BLS releases (jobs, CPI, etc.)
-        bls = snapshot.get("bls_releases", {})
-        if isinstance(bls, dict) and bls.get("fresh", False):
+        # --- White House policy ---
+        wh_packets = _coerce_packet_list(snapshot.get("whitehouse_policy"))
+        if wh_packets:
             any_fresh = True
-            releases = bls.get("releases", bls.get("series", []))
-            if isinstance(releases, (list, dict)):
-                count = len(releases) if isinstance(releases, list) else len(releases.keys())
-                if count:
-                    score += min(count * 0.03, 0.15)
-                    evidence.append(f"BLS: {count} economic data releases")
+            content = [p for p in wh_packets if p.get("schema_version", "").startswith("macro_policy_event") and "error" not in p]
+            exec_actions = [p for p in content if p.get("event_type") == "executive_policy_action"]
+            rate_regime_count = sum(1 for p in content if p.get("rate_regime_shock_candidate"))
+
+            if content:
+                score += min(len(exec_actions) * 0.04 + (len(content) - len(exec_actions)) * 0.01, 0.2)
+                if rate_regime_count:
+                    score += min(rate_regime_count * 0.03, 0.1)
+                label = f"{len(content)} items"
+                if exec_actions:
+                    label += f", {len(exec_actions)} executive actions"
+                evidence.append(f"White House: {label}")
+
+        # --- Treasury OFAC sanctions ---
+        ofac_packets = _coerce_packet_list(snapshot.get("treasury_ofac"))
+        if ofac_packets:
+            any_fresh = True
+            content = [p for p in ofac_packets if p.get("schema_version", "").startswith("macro_policy_event") and "error" not in p]
+            sanctions = [p for p in content if p.get("event_type") == "treasury_sanctions_or_regulatory_action"]
+            rate_regime_count = sum(1 for p in content if p.get("rate_regime_shock_candidate"))
+
+            if content:
+                score += min(len(sanctions) * 0.04 + (len(content) - len(sanctions)) * 0.01, 0.3)
+                if rate_regime_count:
+                    score += min(rate_regime_count * 0.03, 0.1)
+                evidence.append(f"OFAC/Treasury: {len(sanctions)} sanctions signals, {len(content)} total")
+
+        # --- BLS releases (jobs, CPI, etc.) ---
+        bls_packets = _coerce_packet_list(snapshot.get("bls_releases"))
+        if bls_packets:
+            any_fresh = True
+            content = [p for p in bls_packets if p.get("schema_version", "").startswith("macro_policy_event") and "error" not in p]
+            inflation = [p for p in content if p.get("event_type") == "inflation_release"]
+            labor = [p for p in content if p.get("event_type") == "labor_release"]
+            rate_regime_count = sum(1 for p in content if p.get("rate_regime_shock_candidate"))
+
+            if content:
+                score += min(len(inflation) * 0.04 + len(labor) * 0.03 + max(len(content) - len(inflation) - len(labor), 0) * 0.01, 0.15)
+                if rate_regime_count:
+                    score += min(rate_regime_count * 0.02, 0.05)
+                parts = []
+                if inflation:
+                    parts.append(f"{len(inflation)} inflation")
+                if labor:
+                    parts.append(f"{len(labor)} labor")
+                parts.append(f"{len(content)} total")
+                evidence.append(f"BLS: {', '.join(parts)}")
+
+        # Baseline floor: if any bridge returned data but conditions are calm,
+        # register above zero so the component isn't invisible.
+        if any_fresh and score < 0.05:
+            score = 0.05
 
         score = max(0.0, min(1.0, score))
         return {"score": round(score, 4), "fresh": any_fresh, "evidence": evidence}
