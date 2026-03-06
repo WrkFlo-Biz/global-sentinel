@@ -531,6 +531,19 @@ class CrisisMonitor:
             bridge_errors.append(f"bls_releases: {e}")
             results["freshness"]["bls_releases"] = False
 
+        # Exa AI Search bridge (real-time news & disruption search)
+        try:
+            from src.bridges.exa_search_bridge import ExaSearchBridge
+            exb = ExaSearchBridge(self.repo_root)
+            exa_section = exb.build_snapshot_section()
+            results["exa_search"] = exa_section.get("packets", [])
+            results["freshness"]["exa_search"] = exa_section.get("fresh", False)
+            results["summary"]["exa_packet_count"] = exa_section.get("packet_count", 0)
+            results["summary"]["exa_high_severity"] = exa_section.get("high_severity_count", 0)
+        except Exception as e:
+            bridge_errors.append(f"exa_search: {e}")
+            results["freshness"]["exa_search"] = False
+
         results["bridge_errors"] = bridge_errors
         fresh_count = sum(1 for v in results["freshness"].values() if v)
         total_bridges = len(results["freshness"])
@@ -556,6 +569,7 @@ class CrisisMonitor:
             "treasury_ofac": bridge_results.get("treasury_ofac", {}),
             "whitehouse_policy": bridge_results.get("whitehouse_policy", {}),
             "bls_releases": bridge_results.get("bls_releases", {}),
+            "exa_search": bridge_results.get("exa_search", []),
             "data_freshness": bridge_results.get("freshness", {}),
             "fallback_mode": bridge_results.get("fallback_mode", False),
             "controls": {

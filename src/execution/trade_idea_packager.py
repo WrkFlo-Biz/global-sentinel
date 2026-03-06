@@ -390,6 +390,24 @@ class TradeIdeaPackager:
                     elif draw < -5.0:
                         boost["eia_large_build"] = -0.04  # Large build = bearish energy
 
+        # --- 12b. Exa AI Search — Real-time News & Disruption Signals ---
+        exa_packets = signals.get("exa_search", [])
+        if isinstance(exa_packets, list) and len(exa_packets) > 0:
+            high_impact = sum(1 for p in exa_packets
+                              if isinstance(p, dict) and p.get("severity") == "high")
+            medium_impact = sum(1 for p in exa_packets
+                                if isinstance(p, dict) and p.get("severity") == "medium")
+            rate_shock = sum(1 for p in exa_packets
+                             if isinstance(p, dict) and p.get("rate_regime_shock_candidate"))
+            if high_impact >= 3:
+                boost["exa_crisis_alert"] = -0.12  # Multiple high-impact breaking stories
+            elif high_impact >= 1:
+                boost["exa_high_impact"] = -0.06  # At least one high-impact story
+            elif medium_impact >= 3:
+                boost["exa_elevated_news"] = -0.03  # Several medium-impact stories
+            if rate_shock >= 2:
+                boost["exa_rate_shock"] = -0.05  # Multiple rate regime candidates
+
         # --- 13. GDELT Geopolitical Event Intensity ---
         gdelt_events = signals.get("gdelt_events", [])
         if isinstance(gdelt_events, list) and len(gdelt_events) > 0:
