@@ -98,14 +98,54 @@ export interface PortfolioPosition {
   unrealized_pl: number;
   unrealized_plpc: number;
   market_value: number;
+  account?: string;
 }
 
-export interface PortfolioData {
+export interface PortfolioAccountError {
+  label: string;
+  error: string;
+}
+
+export interface PortfolioAccountDetail {
+  label: string;
+  status?: string;
   equity: number;
   cash: number;
   buying_power: number;
   portfolio_value: number;
   positions: PortfolioPosition[];
+  position_count: number;
+  timestamp_utc?: string;
+  error?: string;
+}
+
+export interface PortfolioConsistency {
+  account_count_requested: number;
+  account_count_success: number;
+  account_count_error: number;
+  position_count_total: number;
+  position_count_total_from_accounts?: number;
+  position_count_by_account: Record<string, number>;
+  requested_accounts?: string[];
+  accounts_match_requested?: boolean;
+  positions_match_total?: boolean;
+  has_account_errors?: boolean;
+}
+
+export interface PortfolioData {
+  schema_version?: string;
+  status?: string;
+  equity: number;
+  cash: number;
+  buying_power: number;
+  portfolio_value: number;
+  positions: PortfolioPosition[];
+  accounts?: PortfolioAccountDetail[];
+  account_errors?: PortfolioAccountError[];
+  position_count_total?: number;
+  position_count_by_account?: Record<string, number>;
+  account_count?: number;
+  consistency?: PortfolioConsistency;
   timestamp_utc: string;
   error?: string;
 }
@@ -145,6 +185,62 @@ export interface ExecutionModeData {
   bot_permissions: Record<string, any>;
 }
 
+export interface ExecutionRoutingSummary {
+  event_count: number;
+  processed_candidate_count: number;
+  submit_attempt_count: number;
+  submit_success_count: number;
+  broker_rejected_count: number;
+  skipped_count: number;
+  error_count: number;
+  candidate_conversion_rate: number;
+  broker_accept_rate: number;
+  skip_or_block_rate: number;
+  block_reason_category_counts: Record<string, number>;
+  raw_block_reason_counts: Record<string, number>;
+}
+
+export interface ExecutionLiveOrderAccountSummary {
+  order_count_total: number;
+  filled: number;
+  partially_filled: number;
+  open: number;
+  rejected: number;
+  canceled: number;
+  expired: number;
+  other: number;
+  fill_rate_any: number;
+  fill_rate_full: number;
+}
+
+export interface ExecutionLiveOrdersSummary {
+  status: string;
+  lookback_hours: number;
+  sample_window_start_utc: string;
+  account_count: number;
+  order_count_total: number;
+  filled_count: number;
+  partially_filled_count: number;
+  open_count: number;
+  rejected_count: number;
+  canceled_count: number;
+  expired_count: number;
+  other_count: number;
+  fill_rate_any: number;
+  fill_rate_full: number;
+  open_rate: number;
+  by_account: Record<string, ExecutionLiveOrderAccountSummary>;
+  raw_status_counts: Record<string, number>;
+  account_errors: Array<{ label: string; error: string }>;
+}
+
+export interface ExecutionSummary {
+  schema_version: string;
+  timestamp_utc: string;
+  routing: ExecutionRoutingSummary;
+  live_orders: ExecutionLiveOrdersSummary;
+}
+
 export const api = {
   heartbeat: () => fetchJSON<Heartbeat>("/api/heartbeat"),
   controls: () => fetchJSON<Controls>("/api/controls"),
@@ -153,6 +249,10 @@ export const api = {
   bridges: () => fetchJSON<any>("/api/bridges"),
   orders: (limit = 50) => fetchJSON<any[]>(`/api/execution/orders?limit=${limit}`),
   bindings: (limit = 50) => fetchJSON<any[]>(`/api/execution/bindings?limit=${limit}`),
+  executionSummary: (routerLimit = 100, brokerLimit = 100, lookbackHours = 24) =>
+    fetchJSON<ExecutionSummary>(
+      `/api/execution/summary?router_limit=${routerLimit}&broker_limit=${brokerLimit}&lookback_hours=${lookbackHours}`,
+    ),
   alerts: (limit = 30) => fetchJSON<any[]>(`/api/alerts?limit=${limit}`),
   graduation: () => fetchJSON<GraduationReport>("/api/graduation"),
   thresholds: () => fetchJSON<any>("/api/thresholds"),

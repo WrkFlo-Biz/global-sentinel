@@ -6,7 +6,7 @@ import {
   type Heartbeat, type Scorecard, type TimelinePoint, type Controls,
   type GraduationReport, type PortfolioData, type TradeAnalysis,
   type ConsciousnessData, type ExecutionModeData, type PoliticianAlphaData,
-  type DashboardLayout, type DashboardWidget,
+  type DashboardLayout, type DashboardWidget, type ExecutionSummary,
 } from "@/lib/api";
 import ModeIndicator from "@/components/ModeIndicator";
 import RegimeGauge from "@/components/RegimeGauge";
@@ -92,11 +92,13 @@ const DEFAULT_ROWS = [
 ];
 
 export default function Dashboard() {
+  const REFRESH_MS = 10000;
   const [heartbeat, setHeartbeat] = useState<Heartbeat | null>(null);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [controls, setControls] = useState<Controls | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
+  const [executionSummary, setExecutionSummary] = useState<ExecutionSummary | null>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [graduation, setGraduation] = useState<GraduationReport | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -113,12 +115,13 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, ord, al, grad, port, ta, perf, cons, execMode, polAlpha, ly] = await Promise.all([
+      const [hb, sc, tl, ctrl, ord, execSummary, al, grad, port, ta, perf, cons, execMode, polAlpha, ly] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
         api.controls().catch(() => null),
         api.orders(50).catch(() => []),
+        api.executionSummary(100, 100, 24).catch(() => null),
         api.alerts(30).catch(() => []),
         api.graduation().catch(() => null),
         api.portfolio().catch(() => null),
@@ -134,6 +137,7 @@ export default function Dashboard() {
       if (Array.isArray(tl)) setTimeline(tl);
       if (ctrl) setControls(ctrl);
       if (Array.isArray(ord)) setOrders(ord);
+      if (execSummary) setExecutionSummary(execSummary);
       if (Array.isArray(al)) setAlerts(al);
       if (grad && !("error" in grad)) setGraduation(grad);
       if (port && !port.error) setPortfolio(port);
@@ -154,7 +158,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    const interval = setInterval(fetchAll, REFRESH_MS);
 
     const ws = connectWS((data) => {
       if (data.heartbeat) setHeartbeat(data.heartbeat);
@@ -268,7 +272,7 @@ export default function Dashboard() {
       case "consciousness":
         return <ConsciousnessPanel data={consciousness} />;
       case "order_success_rate":
-        return <OrderSuccessRate orders={orders} />;
+        return <OrderSuccessRate summary={executionSummary} />;
       case "sector_exposure":
         return <SectorExposure portfolio={portfolio} />;
       case "graduation":

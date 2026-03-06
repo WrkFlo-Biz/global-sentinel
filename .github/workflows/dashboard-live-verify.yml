@@ -1,0 +1,48 @@
+name: Dashboard Live Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      dashboard_url:
+        description: Dashboard base URL
+        required: true
+        default: http://20.124.180.8:8501
+
+jobs:
+  live-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install frontend dependencies
+        working-directory: dashboard/frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: dashboard/frontend
+        run: npm run build
+
+      - name: Verify secret is configured
+        env:
+          GS_DASHBOARD_API_KEY: ${{ secrets.GS_DASHBOARD_API_KEY }}
+        run: |
+          if [ -z "$GS_DASHBOARD_API_KEY" ]; then
+            echo "GS_DASHBOARD_API_KEY secret is required for live dashboard verification." >&2
+            exit 1
+          fi
+
+      - name: Run live dashboard deploy check
+        env:
+          GS_DASHBOARD_API_KEY: ${{ secrets.GS_DASHBOARD_API_KEY }}
+        run: |
+          python3 scripts/verify/live_dashboard_deploy_check.py \
+            --url "${{ inputs.dashboard_url }}" \
+            --api-key "$GS_DASHBOARD_API_KEY"

@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -86,6 +86,362 @@ def load_scorecards(limit: int = 200) -> List[Dict[str, Any]]:
         except Exception:
             continue
     return cards
+
+
+# ---------------------------------------------------------------------------
+# Dual Alpaca Account Helpers
+# ---------------------------------------------------------------------------
+
+def _load_env():
+    """Load .env once per request if not already loaded."""
+    env_file = REPO_ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+def _get_alpaca_accounts() -> List[Dict[str, Any]]:
+    """Return credential dicts for all configured Alpaca paper accounts."""
+    _load_env()
+    accounts = []
+
+    # Primary account (day_trade)
+    key1 = os.getenv("ALPACA_API_KEY")
+    sec1 = os.getenv("ALPACA_SECRET_KEY")
+    url1 = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
+    if key1 and sec1:
+        accounts.append({
+            "label": "day_trade",
+            "api_key": key1,
+            "api_secret": sec1,
+            "base_url": url1,
+        })
+
+    # Also check DAYTRADE-specific keys (may be same as primary)
+    key_dt = os.getenv("ALPACA_API_KEY_DAYTRADE")
+    sec_dt = os.getenv("ALPACA_SECRET_KEY_DAYTRADE")
+    if key_dt and sec_dt and key_dt != key1:
+        accounts.append({
+            "label": "day_trade_2",
+            "api_key": key_dt,
+            "api_secret": sec_dt,
+            "base_url": os.getenv("ALPACA_BASE_URL_DAYTRADE", "https://paper-api.alpaca.markets/v2"),
+        })
+
+    # Medium/Long account
+    key_ml = os.getenv("ALPACA_API_KEY_MEDLONG")
+    sec_ml = os.getenv("ALPACA_SECRET_KEY_MEDLONG")
+    if key_ml and sec_ml:
+        accounts.append({
+            "label": "medium_long",
+            "api_key": key_ml,
+            "api_secret": sec_ml,
+            "base_url": os.getenv("ALPACA_BASE_URL_MEDLONG", "https://paper-api.alpaca.markets/v2"),
+        })
+
+    return accounts
+
+
+def _fetch_alpaca_account(acct: Dict[str, str]) -> Dict[str, Any]:
+    """Fetch account info + positions for a single Alpaca account."""
+    import urllib.request
+    import urllib.error
+    headers = {
+        "APCA-API-KEY-ID": acct["api_key"],
+        "APCA-API-SECRET-KEY": acct["api_secret"],
+    }
+    base = acct["base_url"]
+
+    # Rate limiter for this account's API key
+    try:
+        from src.utils.rate_limiter import get_limiter, retry_with_backoff
+        limiter = get_limiter(acct["api_key"], max_rpm=180)
+    except ImportError:
+        limiter = None
+
+    def _get(path: str) -> Any:
+        def _do():
+            if limiter:
+                limiter.acquire(timeout=30.0)
+            url = f"{base}{path}"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        try:
+            return retry_with_backoff(_do, max_retries=2, base_delay=1.0)
+        except Exception:
+            return _do()
+
+    account = _get("/account")
+    positions_raw = _get("/positions")
+    positions = []
+    for p in positions_raw:
+        positions.append({
+            "symbol": p.get("symbol"),
+            "qty": float(p.get("qty", 0)),
+            "side": p.get("side", "long"),
+            "avg_entry_price": float(p.get("avg_entry_price", 0)),
+            "current_price": float(p.get("current_price", 0)),
+            "unrealized_pl": float(p.get("unrealized_pl", 0)),
+            "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
+            "market_value": float(p.get("market_value", 0)),
+        })
+    return {
+        "label": acct["label"],
+        "account_number": account.get("account_number", ""),
+        "equity": float(account.get("equity", 0)),
+        "cash": float(account.get("cash", 0)),
+        "buying_power": float(account.get("buying_power", 0)),
+        "portfolio_value": float(account.get("portfolio_value", 0)),
+        "positions": positions,
+        "position_count": len(positions),
+        "status": "ok",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _fetch_alpaca_history(acct: Dict[str, str], period: str, timeframe: str) -> Dict[str, Any]:
+    """Fetch portfolio history for a single Alpaca account."""
+    import urllib.request
+    headers = {
+        "APCA-API-KEY-ID": acct["api_key"],
+        "APCA-API-SECRET-KEY": acct["api_secret"],
+    }
+
+    try:
+        from src.utils.rate_limiter import get_limiter, retry_with_backoff
+        limiter = get_limiter(acct["api_key"], max_rpm=180)
+    except ImportError:
+        limiter = None
+
+    def _do():
+        if limiter:
+            limiter.acquire(timeout=30.0)
+        url = f"{acct['base_url']}/account/portfolio/history?period={period}&timeframe={timeframe}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        return retry_with_backoff(_do, max_retries=2, base_delay=1.0)
+    except Exception:
+        return _do()
+
+
+def _merge_portfolio_histories(histories: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge per-account Alpaca portfolio history into one combined equity curve."""
+    valid_histories = {
+        label: hist
+        for label, hist in histories.items()
+        if isinstance(hist, dict) and hist.get("timestamp") and hist.get("equity")
+    }
+    if not valid_histories:
+        return {"accounts": histories, "error": "No valid history from any account"}
+
+    all_timestamps = sorted({
+        int(ts)
+        for hist in valid_histories.values()
+        for ts in (hist.get("timestamp") or [])
+        if ts is not None
+    })
+    if not all_timestamps:
+        return {"accounts": histories, "error": "No valid history from any account"}
+
+    per_account_points: Dict[str, Dict[int, Dict[str, float]]] = {}
+    per_account_base: Dict[str, float] = {}
+
+    for label, hist in valid_histories.items():
+        timestamps = hist.get("timestamp") or []
+        equities = hist.get("equity") or []
+        profits = hist.get("profit_loss") or []
+        profit_pcts = hist.get("profit_loss_pct") or []
+        base_value = float(hist.get("base_value") or 0.0)
+        point_map: Dict[int, Dict[str, float]] = {}
+        for idx, raw_ts in enumerate(timestamps):
+            if raw_ts is None:
+                continue
+            ts = int(raw_ts)
+            eq = float(equities[idx]) if idx < len(equities) and equities[idx] is not None else 0.0
+            pl = float(profits[idx]) if idx < len(profits) and profits[idx] is not None else 0.0
+            plpc = (
+                float(profit_pcts[idx])
+                if idx < len(profit_pcts) and profit_pcts[idx] is not None
+                else 0.0
+            )
+            point_map[ts] = {
+                "equity": eq,
+                "profit_loss": pl,
+                "profit_loss_pct": plpc,
+            }
+        per_account_points[label] = point_map
+        if base_value > 0:
+            per_account_base[label] = base_value
+        elif timestamps and equities:
+            per_account_base[label] = float(equities[0] or 0.0)
+        else:
+            per_account_base[label] = 0.0
+
+    merged_timestamp: List[int] = []
+    merged_equity: List[float] = []
+    merged_profit_loss: List[float] = []
+    merged_profit_loss_pct: List[float] = []
+    combined_base_value = sum(per_account_base.values())
+
+    last_seen_by_account: Dict[str, Dict[str, float]] = {}
+    for ts in all_timestamps:
+        total_equity = 0.0
+        total_profit_loss = 0.0
+        contributing_accounts = 0
+
+        for label, point_map in per_account_points.items():
+            if ts in point_map:
+                last_seen_by_account[label] = point_map[ts]
+            point = last_seen_by_account.get(label)
+            if point is None:
+                continue
+            total_equity += float(point.get("equity") or 0.0)
+            total_profit_loss += float(point.get("profit_loss") or 0.0)
+            contributing_accounts += 1
+
+        if contributing_accounts == 0:
+            continue
+
+        merged_timestamp.append(ts)
+        merged_equity.append(total_equity)
+        merged_profit_loss.append(total_profit_loss)
+        base = combined_base_value or total_equity
+        merged_profit_loss_pct.append((total_profit_loss / base) if base else 0.0)
+
+    timeframe = next((hist.get("timeframe") for hist in valid_histories.values() if hist.get("timeframe")), "1D")
+    return {
+        "timestamp": merged_timestamp,
+        "equity": merged_equity,
+        "profit_loss": merged_profit_loss,
+        "profit_loss_pct": merged_profit_loss_pct,
+        "base_value": combined_base_value or (merged_equity[0] if merged_equity else 0.0),
+        "timeframe": timeframe,
+        "accounts": histories,
+    }
+
+
+def _fetch_alpaca_orders(acct: Dict[str, str], limit: int = 100, status: str = "all") -> List[Dict[str, Any]]:
+    """Fetch recent orders for a single Alpaca account."""
+    import urllib.parse
+    import urllib.request
+
+    headers = {
+        "APCA-API-KEY-ID": acct["api_key"],
+        "APCA-API-SECRET-KEY": acct["api_secret"],
+    }
+
+    try:
+        from src.utils.rate_limiter import get_limiter, retry_with_backoff
+        limiter = get_limiter(acct["api_key"], max_rpm=180)
+    except ImportError:
+        limiter = None
+
+    def _do():
+        if limiter:
+            limiter.acquire(timeout=30.0)
+        params = urllib.parse.urlencode({
+            "status": status,
+            "direction": "desc",
+            "nested": "false",
+            "limit": max(1, min(limit, 500)),
+        })
+        url = f"{acct['base_url']}/orders?{params}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        return retry_with_backoff(_do, max_retries=2, base_delay=1.0)
+    except Exception:
+        return _do()
+
+
+def _parse_iso_utc(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _alpaca_order_timestamp(order: Dict[str, Any]) -> Optional[datetime]:
+    for key in ("submitted_at", "created_at", "updated_at", "filled_at"):
+        parsed = _parse_iso_utc(order.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _normalize_live_order_status(raw_status: Any) -> str:
+    status = str(raw_status or "").lower()
+    if status == "filled":
+        return "filled"
+    if status == "partially_filled":
+        return "partially_filled"
+    if status in {"rejected"}:
+        return "rejected"
+    if status in {"canceled", "cancelled"}:
+        return "canceled"
+    if status in {"expired"}:
+        return "expired"
+    if status in {
+        "new",
+        "accepted",
+        "pending",
+        "pending_new",
+        "accepted_for_bidding",
+        "accepted_for_execution",
+        "pending_replace",
+        "pending_cancel",
+        "replaced",
+        "done_for_day",
+        "stopped",
+        "suspended",
+        "calculated",
+    }:
+        return "open"
+    return "other"
+
+
+def _derived_skip_reason(item: Dict[str, Any]) -> str:
+    reason = str(item.get("reason") or item.get("error") or "unknown")
+    if reason == "risk_gate_blocked":
+        failed_gates = []
+        for gate in ((item.get("risk_gate") or {}).get("gates") or []):
+            if gate.get("pass", True) is False:
+                failed_gates.append(str(gate.get("gate") or gate.get("reason") or "unknown"))
+        if failed_gates:
+            return f"risk_gate:{'+'.join(sorted(set(failed_gates)))}"
+    return reason
+
+
+def _categorize_execution_reason(reason: str) -> str:
+    low = reason.lower()
+    if "risk_gate" in low or "impact_budget" in low or "exposure" in low or "var" in low:
+        return "Risk Gate"
+    if "max_orders" in low or "max orders" in low or "capacity" in low:
+        return "Capacity"
+    if "confidence" in low:
+        return "Confidence"
+    if "short" in low or "shortable" in low:
+        return "Shortability"
+    if "manual_review" in low or "manual review" in low:
+        return "Manual Review"
+    if "watchlist" in low or "time_window" in low or "window" in low:
+        return "Time Window"
+    if "data" in low or "missing" in low or "microstructure" in low:
+        return "Data / Market Data"
+    return "Other"
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +572,182 @@ def execution_intents(limit: int = Query(default=100, le=500)):
     return load_jsonl(REPO_ROOT / "logs" / "execution" / "order_intents.jsonl", limit=limit)
 
 
+@app.get("/api/execution/summary")
+def execution_summary(
+    router_limit: int = Query(default=100, ge=1, le=500),
+    broker_limit: int = Query(default=100, ge=1, le=500),
+    lookback_hours: int = Query(default=24, ge=1, le=168),
+):
+    router_events = load_jsonl(REPO_ROOT / "logs" / "execution" / "shadow_order_router.jsonl", limit=router_limit)
+
+    processed_candidate_count = 0
+    submit_attempt_count = 0
+    submit_success_count = 0
+    broker_rejected_count = 0
+    skipped_count = 0
+    error_count = 0
+    event_count = 0
+    raw_block_reason_counts: Dict[str, int] = {}
+    block_reason_category_counts: Dict[str, int] = {}
+
+    for event in router_events:
+        if event.get("event_type") != "route_package_complete":
+            continue
+
+        payload = event.get("payload") or {}
+        event_count += 1
+
+        event_submit_attempt_count = int(payload.get("submit_attempt_count") or 0)
+        event_submit_success_count = payload.get("submitted_open_or_ack_count")
+        if event_submit_success_count is None:
+            event_submit_success_count = payload.get("broker_acknowledged_count")
+        if event_submit_success_count is None:
+            event_submit_success_count = max(
+                event_submit_attempt_count - int(payload.get("broker_rejected_count") or 0),
+                0,
+            )
+        event_submit_success_count = int(event_submit_success_count or 0)
+
+        event_broker_rejected_count = int(payload.get("broker_rejected_count") or 0)
+        event_skipped = list(payload.get("skipped_candidates") or [])
+        event_errors = list(payload.get("errors") or [])
+        event_error_count = len(event_errors)
+        event_skipped_count = len(event_skipped)
+        event_candidate_count = int(payload.get("candidate_count_in_package") or 0)
+        if event_candidate_count <= 0:
+            event_candidate_count = (
+                event_submit_success_count
+                + event_broker_rejected_count
+                + event_skipped_count
+                + event_error_count
+            )
+
+        processed_candidate_count += event_candidate_count
+        submit_attempt_count += event_submit_attempt_count
+        submit_success_count += event_submit_success_count
+        broker_rejected_count += event_broker_rejected_count
+        skipped_count += event_skipped_count
+        error_count += event_error_count
+
+        for item in event_skipped + event_errors:
+            derived_reason = _derived_skip_reason(item)
+            raw_block_reason_counts[derived_reason] = raw_block_reason_counts.get(derived_reason, 0) + 1
+            category = _categorize_execution_reason(derived_reason)
+            block_reason_category_counts[category] = block_reason_category_counts.get(category, 0) + 1
+
+    broker_attempt_total = submit_success_count + broker_rejected_count
+    candidate_conversion_rate = submit_success_count / max(processed_candidate_count, 1)
+    broker_accept_rate = submit_success_count / max(broker_attempt_total, 1) if broker_attempt_total else 0.0
+    skip_or_block_rate = (skipped_count + error_count) / max(processed_candidate_count, 1)
+
+    live_orders: Dict[str, Any] = {
+        "status": "unavailable",
+        "lookback_hours": lookback_hours,
+        "sample_window_start_utc": (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat(),
+        "account_count": 0,
+        "order_count_total": 0,
+        "filled_count": 0,
+        "partially_filled_count": 0,
+        "open_count": 0,
+        "rejected_count": 0,
+        "canceled_count": 0,
+        "expired_count": 0,
+        "other_count": 0,
+        "fill_rate_any": 0.0,
+        "fill_rate_full": 0.0,
+        "open_rate": 0.0,
+        "by_account": {},
+        "raw_status_counts": {},
+        "account_errors": [],
+    }
+
+    accounts = _get_alpaca_accounts()
+    if accounts:
+        live_orders["account_count"] = len(accounts)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        success_count = 0
+
+        for acct in accounts:
+            try:
+                rows = _fetch_alpaca_orders(acct, limit=broker_limit, status="all")
+                filtered_orders = []
+                status_counts: Dict[str, int] = {
+                    "filled": 0,
+                    "partially_filled": 0,
+                    "open": 0,
+                    "rejected": 0,
+                    "canceled": 0,
+                    "expired": 0,
+                    "other": 0,
+                }
+                raw_status_counts: Dict[str, int] = {}
+
+                for row in rows:
+                    order_ts = _alpaca_order_timestamp(row)
+                    if order_ts is not None and order_ts < cutoff:
+                        continue
+                    filtered_orders.append(row)
+                    raw_status = str(row.get("status") or "unknown").lower()
+                    raw_status_counts[raw_status] = raw_status_counts.get(raw_status, 0) + 1
+                    normalized = _normalize_live_order_status(raw_status)
+                    status_counts[normalized] += 1
+
+                success_count += 1
+                live_orders["order_count_total"] += len(filtered_orders)
+                for key, value in status_counts.items():
+                    live_orders[f"{key}_count"] += value
+                for raw_status, value in raw_status_counts.items():
+                    live_orders["raw_status_counts"][raw_status] = live_orders["raw_status_counts"].get(raw_status, 0) + value
+
+                order_count_total = len(filtered_orders)
+                live_orders["by_account"][acct["label"]] = {
+                    "order_count_total": order_count_total,
+                    **status_counts,
+                    "fill_rate_any": round(
+                        (status_counts["filled"] + status_counts["partially_filled"]) / max(order_count_total, 1),
+                        4,
+                    ) if order_count_total else 0.0,
+                    "fill_rate_full": round(status_counts["filled"] / max(order_count_total, 1), 4) if order_count_total else 0.0,
+                }
+            except Exception as e:
+                live_orders["account_errors"].append({"label": acct["label"], "error": str(e)})
+
+        if success_count == len(accounts):
+            live_orders["status"] = "ok"
+        elif success_count > 0:
+            live_orders["status"] = "partial"
+        else:
+            live_orders["status"] = "error"
+
+        total_live_orders = max(live_orders["order_count_total"], 1)
+        live_orders["fill_rate_any"] = round(
+            (live_orders["filled_count"] + live_orders["partially_filled_count"]) / total_live_orders,
+            4,
+        ) if live_orders["order_count_total"] else 0.0
+        live_orders["fill_rate_full"] = round(live_orders["filled_count"] / total_live_orders, 4) if live_orders["order_count_total"] else 0.0
+        live_orders["open_rate"] = round(live_orders["open_count"] / total_live_orders, 4) if live_orders["order_count_total"] else 0.0
+
+    return {
+        "schema_version": "dashboard.execution_summary.v1",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "routing": {
+            "event_count": event_count,
+            "processed_candidate_count": processed_candidate_count,
+            "submit_attempt_count": submit_attempt_count,
+            "submit_success_count": submit_success_count,
+            "broker_rejected_count": broker_rejected_count,
+            "skipped_count": skipped_count,
+            "error_count": error_count,
+            "candidate_conversion_rate": round(candidate_conversion_rate, 4),
+            "broker_accept_rate": round(broker_accept_rate, 4),
+            "skip_or_block_rate": round(skip_or_block_rate, 4),
+            "block_reason_category_counts": block_reason_category_counts,
+            "raw_block_reason_counts": raw_block_reason_counts,
+        },
+        "live_orders": live_orders,
+    }
+
+
 @app.get("/api/alerts")
 def alerts(limit: int = Query(default=50, le=200)):
     return load_jsonl(REPO_ROOT / "logs" / "events" / "alerts.jsonl", limit=limit)
@@ -314,99 +846,134 @@ def time_window():
 
 
 @app.get("/api/portfolio-history")
-def portfolio_history(period: str = Query("1M"), timeframe: str = Query("1D")):
+def portfolio_history(period: str = Query("1M"), timeframe: str = Query("1D"), account: str = Query("all")):
     """Fetch Alpaca paper portfolio history for equity curve.
-    period: 1D, 1W, 1M, 3M, 1A   timeframe: 1H, 1D"""
-    env_file = REPO_ROOT / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
-    api_key = os.getenv("ALPACA_API_KEY")
-    api_secret = os.getenv("ALPACA_SECRET_KEY")
-    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
-
-    if not api_key or not api_secret:
-        return {"error": "Alpaca credentials not configured"}
-
-    # Validate inputs
+    period: 1D, 1W, 1M, 3M, 1A   timeframe: 1H, 1D
+    account: all | day_trade | medium_long"""
     if period not in ("1D", "1W", "1M", "3M", "1A"):
         period = "1M"
     if timeframe not in ("1H", "1D"):
         timeframe = "1D"
 
-    import urllib.request
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
-    }
+    accounts = _get_alpaca_accounts()
+    if not accounts:
+        return {"error": "Alpaca credentials not configured"}
 
-    try:
-        url = f"{base_url}/account/portfolio/history?period={period}&timeframe={timeframe}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            hist = json.loads(resp.read().decode("utf-8"))
-        return hist
-    except Exception as e:
-        return {"error": str(e)}
+    if account != "all":
+        accounts = [a for a in accounts if a["label"] == account]
+        if not accounts:
+            return {"error": f"Account '{account}' not found"}
+
+    # If single account requested, return raw history
+    if len(accounts) == 1:
+        try:
+            return _fetch_alpaca_history(accounts[0], period, timeframe)
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Multi-account: return per-account histories
+    results = {}
+    for acct in accounts:
+        try:
+            results[acct["label"]] = _fetch_alpaca_history(acct, period, timeframe)
+        except Exception as e:
+            results[acct["label"]] = {"error": str(e)}
+
+    return _merge_portfolio_histories(results)
 
 
 @app.get("/api/portfolio")
-def portfolio():
-    """Fetch Alpaca paper account positions via the adapter."""
-    env_file = REPO_ROOT / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
-    api_key = os.getenv("ALPACA_API_KEY")
-    api_secret = os.getenv("ALPACA_SECRET_KEY")
-    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
-
-    if not api_key or not api_secret:
+def portfolio(account: str = Query("all")):
+    """Fetch Alpaca paper account positions. Supports dual accounts.
+    account: all | day_trade | medium_long"""
+    accounts = _get_alpaca_accounts()
+    if not accounts:
         return {"error": "Alpaca credentials not configured"}
 
-    import urllib.request
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
-    }
+    if account != "all":
+        accounts = [a for a in accounts if a["label"] == account]
+        if not accounts:
+            return {"error": f"Account '{account}' not found"}
 
-    def alpaca_get(path: str) -> Any:
-        url = f"{base_url}{path}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+    all_positions = []
+    total_equity = 0.0
+    total_cash = 0.0
+    total_buying_power = 0.0
+    total_portfolio_value = 0.0
+    account_details = []
+    account_errors = []
+    position_count_by_account: Dict[str, int] = {}
+    requested_accounts = [acct["label"] for acct in accounts]
 
-    try:
-        account = alpaca_get("/account")
-        positions_raw = alpaca_get("/positions")
-        positions = []
-        for p in positions_raw:
-            positions.append({
-                "symbol": p.get("symbol"),
-                "qty": float(p.get("qty", 0)),
-                "side": p.get("side", "long"),
-                "avg_entry_price": float(p.get("avg_entry_price", 0)),
-                "current_price": float(p.get("current_price", 0)),
-                "unrealized_pl": float(p.get("unrealized_pl", 0)),
-                "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
-                "market_value": float(p.get("market_value", 0)),
+    for acct in accounts:
+        try:
+            data = _fetch_alpaca_account(acct)
+            total_equity += data["equity"]
+            total_cash += data["cash"]
+            total_buying_power += data["buying_power"]
+            total_portfolio_value += data["portfolio_value"]
+            # Tag positions with account label
+            for p in data["positions"]:
+                p["account"] = data["label"]
+            all_positions.extend(data["positions"])
+            position_count_by_account[data["label"]] = data.get("position_count", len(data["positions"]))
+            account_details.append(data)
+        except Exception as e:
+            position_count_by_account[acct["label"]] = 0
+            account_errors.append({"label": acct["label"], "error": str(e)})
+            account_details.append({
+                "label": acct["label"],
+                "status": "error",
+                "error": str(e),
+                "equity": 0.0,
+                "cash": 0.0,
+                "buying_power": 0.0,
+                "portfolio_value": 0.0,
+                "positions": [],
+                "position_count": 0,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             })
-        return {
-            "equity": float(account.get("equity", 0)),
-            "cash": float(account.get("cash", 0)),
-            "buying_power": float(account.get("buying_power", 0)),
-            "portfolio_value": float(account.get("portfolio_value", 0)),
-            "positions": positions,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception as e:
-        return {"error": str(e)}
+
+    account_count_success = sum(1 for detail in account_details if detail.get("status") != "error")
+    account_count_error = len(account_errors)
+    position_count_total_from_accounts = sum(position_count_by_account.values())
+
+    if not account_details:
+        status = "error"
+    elif account_count_error == len(account_details):
+        status = "error"
+    elif account_errors:
+        status = "partial"
+    else:
+        status = "ok"
+
+    return {
+        "schema_version": "dashboard.portfolio.v1",
+        "status": status,
+        "equity": total_equity,
+        "cash": total_cash,
+        "buying_power": total_buying_power,
+        "portfolio_value": total_portfolio_value,
+        "positions": all_positions,
+        "accounts": account_details,
+        "account_errors": account_errors,
+        "position_count_total": len(all_positions),
+        "position_count_by_account": position_count_by_account,
+        "account_count": len(accounts),
+        "consistency": {
+            "account_count_requested": len(accounts),
+            "account_count_success": account_count_success,
+            "account_count_error": account_count_error,
+            "position_count_total": len(all_positions),
+            "position_count_total_from_accounts": position_count_total_from_accounts,
+            "position_count_by_account": position_count_by_account,
+            "requested_accounts": requested_accounts,
+            "accounts_match_requested": len(account_details) == len(accounts),
+            "positions_match_total": position_count_total_from_accounts == len(all_positions),
+            "has_account_errors": bool(account_errors),
+        },
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
