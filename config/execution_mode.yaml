@@ -1,0 +1,81 @@
+# Global Sentinel — Execution Mode Configuration
+# Controls dual-strategy assignment, auto/manual modes, and bot ownership
+
+version: "1.0"
+last_updated: "2026-03-05"
+
+# --- Strategy Definitions ---
+strategies:
+  day_trade:
+    description: "Short-term intraday trades, flat by EOD"
+    bot: "mo2darkbot"
+    bot_username: "@mo2darkbot"
+    holding_period: "day"
+    profit_target_pct: 10.0
+    stop_loss_pct: 0.5
+    trailing_stop_activation_pct: 5.0
+    eod_flatten: true
+    eod_flatten_time: "15:45"  # ET
+    max_positions: 999
+    max_orders_per_cycle: 999
+    max_ideas_per_cycle: 999
+    time_in_force: "day"
+    extended_hours: true
+
+  medium_long:
+    description: "Medium to long-term holds based on macro trends"
+    bot: "mo2drkbot"
+    bot_username: "@mo2drkbot"
+    holding_period: "swing"
+    profit_target_pct: 50.0
+    stop_loss_pct: 2.0
+    trailing_stop_activation_pct: 10.0
+    eod_flatten: false
+    max_positions: 999
+    max_orders_per_cycle: 999
+    max_ideas_per_cycle: 999
+    time_in_force: "gtc"
+    extended_hours: false
+
+# --- Execution Mode ---
+# "auto" = submit orders automatically 24/7 when optimal opportunities arise
+# "manual" = send order summary + upside analysis to Telegram, wait for approval
+execution_mode:
+  day_trade: "auto"
+  medium_long: "auto"
+
+# --- Telegram Notifications ---
+notifications:
+  # Hourly position updates with P&L from entry
+  hourly_position_update: true
+  hourly_update_interval_minutes: 60
+
+  # Instant alerts on new order submission
+  instant_order_alerts: true
+
+  # Include upside/profit analysis in order notifications
+  include_upside_analysis: true
+
+  # Summary includes: current price, entry price, P&L %, $ P&L, upside remaining
+  position_update_fields:
+    - symbol
+    - strategy
+    - entry_price
+    - current_price
+    - pnl_pct
+    - pnl_usd
+    - upside_target
+    - stop_loss
+    - hold_duration
+
+# --- Bot Permissions ---
+# When execution_mode is "manual", bots can submit orders on user approval
+bot_permissions:
+  mo2darkbot:
+    can_submit_orders: true
+    strategy: "day_trade"
+    requires_approval_in_manual: true
+  mo2drkbot:
+    can_submit_orders: true
+    strategy: "medium_long"
+    requires_approval_in_manual: true

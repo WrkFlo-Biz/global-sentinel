@@ -22,6 +22,13 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', ui-monospace, monospace;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Mobile card padding */
+@media (max-width: 767px) {
+  .card { padding: 12px; }
 }
 
 /* Scrollbar */
@@ -45,3 +52,19 @@ body {
   padding: 16px;
 }
 .card:hover { background: var(--bg-card-hover); }
+
+/* Dynamic grid columns for layout API — Tailwind can't generate these dynamically */
+@media (min-width: 768px) {
+  [data-cols="1"]  { grid-column: span 1; }
+  [data-cols="2"]  { grid-column: span 2; }
+  [data-cols="3"]  { grid-column: span 3; }
+  [data-cols="4"]  { grid-column: span 4; }
+  [data-cols="5"]  { grid-column: span 5; }
+  [data-cols="6"]  { grid-column: span 6; }
+  [data-cols="7"]  { grid-column: span 7; }
+  [data-cols="8"]  { grid-column: span 8; }
+  [data-cols="9"]  { grid-column: span 9; }
+  [data-cols="10"] { grid-column: span 10; }
+  [data-cols="11"] { grid-column: span 11; }
+  [data-cols="12"] { grid-column: span 12; }
+}

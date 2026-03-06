@@ -110,6 +110,41 @@ export interface PortfolioData {
   error?: string;
 }
 
+export interface ConsciousnessData {
+  timestamp_utc: string;
+  source: string;
+  max_z: number;
+  mean_z: number;
+  node_count: number;
+  coherence_level: string; // "random" | "low" | "moderate" | "high" | "extreme"
+  regional_z: Record<string, number>;
+  regional_spikes: Array<{
+    region: string;
+    z_score: number;
+    level: string;
+    predicted_markets: string[];
+    market_zone: string;
+  }>;
+  evidence: string[];
+  narrative_velocity?: number;
+  dominant_narrative?: string;
+  sentinel_signal?: string;
+}
+
+export interface ExecutionModeData {
+  strategies: Record<string, {
+    description: string;
+    bot: string;
+    bot_username: string;
+    holding_period: string;
+    profit_target_pct: number;
+    stop_loss_pct: number;
+    max_positions: number;
+  }>;
+  execution_mode: Record<string, string>;  // "auto" | "manual"
+  bot_permissions: Record<string, any>;
+}
+
 export const api = {
   heartbeat: () => fetchJSON<Heartbeat>("/api/heartbeat"),
   controls: () => fetchJSON<Controls>("/api/controls"),
@@ -125,6 +160,25 @@ export const api = {
   portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
   tradeAnalysis: () => fetchJSON<TradeAnalysis>("/api/trade-analysis"),
   performance: () => fetchJSON<PerformanceData>("/api/performance"),
+  consciousness: () => fetchJSON<ConsciousnessData>("/api/consciousness"),
+  politicianAlpha: () => fetchJSON<PoliticianAlphaData>("/api/politician-alpha"),
+  executionMode: () => fetchJSON<ExecutionModeData>("/api/execution-mode"),
+  setExecutionMode: (strategy: string, mode: string) =>
+    fetch(`${API_BASE}/api/execution-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
+      body: JSON.stringify({ strategy, mode }),
+    }).then(r => r.json()),
+  approveOrders: (strategy: string, action: string) =>
+    fetch(`${API_BASE}/api/telegram/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
+      body: JSON.stringify({ strategy, action }),
+    }).then(r => r.json()),
+  pendingOrders: () => fetchJSON<any>("/api/pending-orders"),
+  gssTimeline: (limit = 100) => fetchJSON<GSSTimelinePoint[]>(`/api/gss-timeline?limit=${limit}`),
+  gssLatest: () => fetchJSON<GSSLatest>("/api/gss-latest"),
+  dashboardLayout: () => fetchJSON<DashboardLayout>("/api/dashboard/layout"),
 };
 
 export interface PerformanceData {
@@ -149,6 +203,7 @@ export interface TradeIdea {
   reason: string;
   historical_win_rate: number;
   confidence_adjusted_score: number;
+  holding_period?: string;
   current_price?: number;
   daily_vol_pct?: number;
   entry?: number;
@@ -192,6 +247,84 @@ export interface TradeAnalysis {
   evidence_summary: string[];
   confidence: number;
   advisory_only: boolean;
+  error?: string;
+}
+
+export interface PoliticianAlphaWhaleTrade {
+  politician: string;
+  symbol: string;
+  transaction_type: string;
+  amount: string;
+  transaction_date: string;
+  committee: string;
+  score: number;
+  chamber: string;
+}
+
+export interface PoliticianAlphaCommitteeSignal {
+  committee: string;
+  symbol: string;
+  trade_count: number;
+  influence_weight: number;
+}
+
+export interface PoliticianAlphaData {
+  timestamp_utc: string;
+  fresh: boolean;
+  source: string;
+  reason?: string;
+  political_alpha_scores: Record<string, number>;
+  top_whale_trades: PoliticianAlphaWhaleTrade[];
+  committee_signals: PoliticianAlphaCommitteeSignal[];
+  aggregate_sentiment: string;
+  total_trades_analyzed: number;
+  tracked_symbols_with_activity: number;
+  error?: string;
+}
+
+export interface GSSTimelinePoint {
+  timestamp_utc: string;
+  z_score: number;
+  narrative_velocity: number;
+  vix: number;
+  regime_p: number;
+  confidence: number;
+  gss_signal: string;
+  mode: string;
+}
+
+export interface GSSLatest {
+  timestamp_utc?: string;
+  gss_signal: string;
+  action?: string;
+  reason?: string;
+  confidence?: number;
+  field_data?: { z_score: number; coherence_level: string; regional_spikes: any[] };
+  narrative_data?: { velocity: number; dominant_narrative: string };
+  execution_data?: { vix: number; gamma_exposure: number; put_call_ratio: number };
+  hedge_recommendations?: any[];
+  margin_status?: any;
+  error?: string;
+}
+
+export interface DashboardWidget {
+  id: string;
+  cols: number;
+  title: string;
+  visible: boolean;
+  badge?: string;
+}
+
+export interface DashboardRow {
+  id: string;
+  widgets: DashboardWidget[];
+}
+
+export interface DashboardLayout {
+  version: number;
+  updated_at: string;
+  updated_by: string;
+  rows: DashboardRow[];
   error?: string;
 }
 

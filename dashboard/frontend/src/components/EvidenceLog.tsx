@@ -6,7 +6,7 @@ export default function EvidenceLog({ evidence }: { evidence: string[] }) {
   }
 
   return (
-    <div className="space-y-1 max-h-[200px] overflow-y-auto">
+    <div className="space-y-1 max-h-[400px] overflow-y-auto">
       {evidence.map((e, i) => (
         <div key={i} className="flex items-start gap-2 text-xs py-1">
           <span className="text-cyan-500 mt-0.5 shrink-0">&#x25B8;</span>

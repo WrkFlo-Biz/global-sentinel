@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "updated_at": "2026-03-06T00:00:00Z",
+  "updated_by": "initial",
+  "rows": [
+    {
+      "id": "row_equity_portfolio",
+      "widgets": [
+        {"id": "portfolio", "cols": 5, "title": "Portfolio", "visible": true},
+        {"id": "equity_curve", "cols": 7, "title": "Equity Curve", "visible": true}
+      ]
+    },
+    {
+      "id": "row_exec_perf_pnl",
+      "widgets": [
+        {"id": "execution_mode", "cols": 3, "title": "Execution Mode", "visible": true},
+        {"id": "performance", "cols": 3, "title": "Performance", "visible": true},
+        {"id": "pnl_waterfall", "cols": 6, "title": "P&L Waterfall — By Symbol", "visible": true}
+      ]
+    },
+    {
+      "id": "row_trades_orders",
+      "widgets": [
+        {"id": "trade_analysis", "cols": 7, "title": "Trade Analysis & Orders", "visible": true, "badge": "ADVISORY ONLY — Shadow Mode"},
+        {"id": "order_flow", "cols": 5, "title": "Order Flow", "visible": true}
+      ]
+    },
+    {
+      "id": "row_regime_radar_controls",
+      "widgets": [
+        {"id": "regime_gauge", "cols": 3, "title": "Regime Probability", "visible": true},
+        {"id": "component_radar", "cols": 3, "title": "Risk Radar", "visible": true},
+        {"id": "component_bars", "cols": 3, "title": "Component Scores", "visible": true},
+        {"id": "system_controls", "cols": 3, "title": "System Controls", "visible": true}
+      ]
+    },
+    {
+      "id": "row_gss_regime_timeline",
+      "widgets": [
+        {"id": "gss_signal_graph", "cols": 6, "title": "GSS Econophysics — Three-Layer Signal Graph", "visible": true},
+        {"id": "regime_timeline", "cols": 6, "title": "Regime Probability Timeline", "visible": true}
+      ]
+    },
+    {
+      "id": "row_evidence_alpha_alerts",
+      "widgets": [
+        {"id": "evidence_log", "cols": 4, "title": "Evidence Signals", "visible": true},
+        {"id": "politician_alpha", "cols": 4, "title": "Capitol Whale — Politician Alpha", "visible": true},
+        {"id": "alert_feed", "cols": 4, "title": "Alert Feed", "visible": true}
+      ]
+    },
+    {
+      "id": "row_drawdown_consciousness_orders",
+      "widgets": [
+        {"id": "drawdown_chart", "cols": 5, "title": "Drawdown from Peak", "visible": true},
+        {"id": "consciousness", "cols": 3, "title": "Consciousness", "visible": true},
+        {"id": "order_success_rate", "cols": 4, "title": "Order Success Rate", "visible": true}
+      ]
+    },
+    {
+      "id": "row_sector_exposure",
+      "widgets": [
+        {"id": "sector_exposure", "cols": 12, "title": "Sector & Asset Class Exposure", "visible": true}
+      ]
+    },
+    {
+      "id": "row_graduation",
+      "widgets": [
+        {"id": "graduation", "cols": 12, "title": "Graduation Progress", "visible": true}
+      ]
+    }
+  ]
+}

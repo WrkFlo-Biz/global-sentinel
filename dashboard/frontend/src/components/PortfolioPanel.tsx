@@ -43,7 +43,7 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
   return (
     <div>
       {/* Account summary */}
-      <div className="grid grid-cols-4 gap-2 mb-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
         {[
           { label: "Equity", value: formatUSD(data.equity) },
           { label: "Cash", value: formatUSD(data.cash) },

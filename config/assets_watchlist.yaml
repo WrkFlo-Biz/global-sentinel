@@ -3,14 +3,23 @@
 
 version: "4.0"
 
-# --- Equity Indices ---
+# --- Equity Indices & Index ETFs ---
 equity_indices:
   - symbol: SPY
     description: "S&P 500 ETF"
-    priority: high
+    priority: critical
   - symbol: QQQ
     description: "Nasdaq 100 ETF"
+    priority: critical
+  - symbol: DIA
+    description: "Dow Jones Industrial Average ETF"
     priority: high
+  - symbol: IWM
+    description: "Russell 2000 Small Cap ETF"
+    priority: high
+  - symbol: MDY
+    description: "S&P MidCap 400 ETF"
+    priority: medium
   - symbol: EEM
     description: "Emerging Markets ETF"
     priority: medium
@@ -22,7 +31,70 @@ equity_indices:
     priority: high
   - symbol: VIX
     description: "CBOE Volatility Index"
+    priority: critical
+  - symbol: XLF
+    description: "Financial Select Sector SPDR"
     priority: high
+  - symbol: XLK
+    description: "Technology Select Sector SPDR"
+    priority: high
+  - symbol: XLI
+    description: "Industrial Select Sector SPDR"
+    priority: medium
+  - symbol: XLU
+    description: "Utilities Select Sector SPDR"
+    priority: medium
+  - symbol: XLP
+    description: "Consumer Staples Select Sector SPDR"
+    priority: medium
+
+# --- Index Futures (via ETF proxies for Yahoo/Finnhub) ---
+index_futures:
+  - symbol: ES=F
+    description: "S&P 500 E-mini Futures"
+    priority: critical
+  - symbol: NQ=F
+    description: "Nasdaq 100 E-mini Futures"
+    priority: critical
+  - symbol: YM=F
+    description: "Dow Jones E-mini Futures"
+    priority: high
+  - symbol: RTY=F
+    description: "Russell 2000 E-mini Futures"
+    priority: high
+
+# --- Treasury Futures (via ETF proxies) ---
+treasury_futures:
+  - symbol: ZN=F
+    description: "10-Year Treasury Note Futures"
+    priority: critical
+  - symbol: ZB=F
+    description: "30-Year Treasury Bond Futures"
+    priority: high
+  - symbol: ZF=F
+    description: "5-Year Treasury Note Futures"
+    priority: high
+  - symbol: ZT=F
+    description: "2-Year Treasury Note Futures"
+    priority: high
+
+# --- Commodity Futures ---
+commodity_futures:
+  - symbol: CL=F
+    description: "WTI Crude Oil Futures"
+    priority: critical
+  - symbol: GC=F
+    description: "Gold Futures"
+    priority: critical
+  - symbol: SI=F
+    description: "Silver Futures"
+    priority: medium
+  - symbol: NG=F
+    description: "Natural Gas Futures"
+    priority: high
+  - symbol: HG=F
+    description: "Copper Futures"
+    priority: medium
 
 # --- Currencies ---
 currencies:
@@ -60,16 +132,49 @@ commodities:
     description: "Copper"
     priority: medium
 
-# --- Fixed Income ---
+# --- Fixed Income / Treasury Yield Curve ---
 fixed_income:
+  - symbol: BIL
+    description: "SPDR 1-3 Month T-Bill ETF (cash proxy)"
+    priority: medium
+  - symbol: SHV
+    description: "iShares Short Treasury Bond ETF (0-1Y)"
+    priority: medium
+  - symbol: SHY
+    description: "iShares 1-3 Year Treasury ETF (2Y yield proxy)"
+    priority: critical
+  - symbol: IEI
+    description: "iShares 3-7 Year Treasury ETF (5Y yield proxy)"
+    priority: high
+  - symbol: IEF
+    description: "iShares 7-10 Year Treasury ETF (10Y yield proxy)"
+    priority: critical
   - symbol: TLT
-    description: "20+ Year Treasury ETF"
+    description: "iShares 20+ Year Treasury ETF (long bond)"
+    priority: critical
+  - symbol: TLH
+    description: "iShares 10-20 Year Treasury ETF"
+    priority: medium
+  - symbol: GOVT
+    description: "iShares US Treasury Bond ETF (full curve)"
+    priority: high
+  - symbol: TIP
+    description: "iShares TIPS Bond ETF (inflation-protected)"
     priority: high
   - symbol: HYG
-    description: "High Yield Corporate Bond ETF"
+    description: "High Yield Corporate Bond ETF (credit stress)"
+    priority: critical
+  - symbol: JNK
+    description: "SPDR Bloomberg High Yield Bond ETF"
     priority: high
   - symbol: LQD
     description: "Investment Grade Corporate Bond ETF"
+    priority: high
+  - symbol: AGG
+    description: "iShares Core US Aggregate Bond ETF"
+    priority: medium
+  - symbol: EMB
+    description: "iShares JP Morgan USD Emerging Markets Bond ETF"
     priority: medium
 
 # --- Crypto (sentiment proxy) ---
@@ -303,3 +408,71 @@ regions_expanded:
   - name: "Aviation Disruptions"
     keywords: ["airspace closure", "no-fly zone", "flight diversion", "NOTAM", "aviation ban", "flight cancellation"]
     priority: high
+
+# --- Cybersecurity ---
+cybersecurity:
+  symbols: [PANW, CRWD, FTNT, ZS, HACK, CIBR]
+  priority: high
+  keywords: ["cyberattack", "cyber warfare", "ransomware", "state-sponsored hack"]
+
+# --- Shipping & Maritime ---
+shipping_maritime:
+  symbols: [ZIM, GOGL, INSW, STNG, FRO]
+  priority: critical
+  keywords: ["strait of hormuz", "shipping disruption", "tanker attack", "naval blockade", "red sea"]
+
+# --- Uranium & Nuclear ---
+uranium_nuclear:
+  symbols: [URA, CCJ, UUUU, LEU]
+  priority: high
+  keywords: ["uranium", "nuclear program", "enrichment", "nuclear deal", "IAEA"]
+
+# --- Agriculture & Food ---
+agriculture_food:
+  symbols: [DBA, WEAT, CORN]
+  priority: medium
+  keywords: ["food shortage", "grain disruption", "agricultural supply", "fertilizer crisis"]
+
+# --- Leveraged & Volatility ---
+leveraged_volatility:
+  symbols: [UVXY, SQQQ, SPXU, TQQQ, SDOW]
+  priority: high
+  keywords: ["volatility spike", "VIX surge", "market crash", "circuit breaker"]
+
+# --- Insurance & Reinsurance ---
+insurance_reinsurance:
+  symbols: [RE, RNR, ACGL]
+  priority: medium
+  keywords: ["war risk premium", "insurance loss", "catastrophe bond"]
+
+# --- Oil Majors ---
+oil_majors:
+  symbols: [XOM, CVX, COP, OXY, SLB]
+  priority: critical
+  keywords: ["oil production", "OPEC", "crude oil", "supply cut"]
+
+# --- AI Infrastructure & Semiconductors (Technology Revolution Tailwind) ---
+ai_infrastructure:
+  symbols: [NVDA, AMD, AVGO, TSM, SMCI, MRVL, ARM, INTC, MU, ANET]
+  priority: critical
+  keywords: ["AI infrastructure", "GPU demand", "data center", "AI chip", "semiconductor",
+             "AI spending", "hyperscaler", "NVIDIA earnings", "AI capex", "chip export ban"]
+
+# --- AI Software & Applications ---
+ai_software:
+  symbols: [MSFT, GOOGL, META, AMZN, CRM, NOW, SNOW, PLTR, AI, PATH]
+  priority: high
+  keywords: ["AI model", "large language model", "AI enterprise", "AI adoption",
+             "AI revenue", "generative AI", "AI agents", "AI automation"]
+
+# --- AI-Disrupted Sectors (Short/Hedge Candidates) ---
+ai_disrupted:
+  symbols: [CHGG, UPWK, LMND, LC]
+  priority: medium
+  keywords: ["AI replacement", "AI disruption", "job displacement", "automation threat"]
+
+# --- Robotics & Autonomous Systems ---
+robotics_autonomous:
+  symbols: [ISRG, TER, IRBT, RKLB, JOBY, LUNR]
+  priority: medium
+  keywords: ["robotics", "autonomous", "drone warfare", "autonomous weapons", "self-driving"]

@@ -27,6 +27,9 @@ rsync -avz --delete \
     --exclude 'reports/' \
     --exclude '.pytest_cache/' \
     --exclude 'tests/replays/*/out/' \
+    --exclude '.env' \
+    --exclude 'node_modules/' \
+    --exclude '.next/' \
     -e "ssh -o StrictHostKeyChecking=no" \
     . "${SSH_USER}@${VM_IP}:${REMOTE_DIR}/"
 

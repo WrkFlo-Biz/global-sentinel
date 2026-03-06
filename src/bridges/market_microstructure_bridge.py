@@ -78,11 +78,29 @@ class MarketMicrostructureBridge:
     def _extract_symbols(self) -> List[str]:
         """Extract all equity symbols from watchlist."""
         syms = set()
-        for section in ["equity_indices", "aviation_travel", "travel_hospitality",
-                        "supply_chain", "insurance_risk", "fixed_income"]:
+        # Pull from ALL watchlist sections with individual items
+        list_sections = [
+            "equity_indices", "index_futures", "treasury_futures",
+            "commodity_futures", "aviation_travel", "travel_hospitality",
+            "supply_chain", "insurance_risk", "fixed_income",
+            "gasoline_refining", "defense_military",
+        ]
+        for section in list_sections:
             for item in self.watchlist.get(section, []):
                 s = item.get("symbol")
                 if s:
+                    syms.add(str(s))
+        # Pull from sections that use {symbols: [...]} format
+        dict_sections = [
+            "cybersecurity", "shipping_maritime", "uranium_nuclear",
+            "agriculture_food", "leveraged_volatility", "insurance_reinsurance",
+            "oil_majors", "ai_infrastructure", "ai_software",
+            "ai_disrupted", "robotics_autonomous",
+        ]
+        for section in dict_sections:
+            section_data = self.watchlist.get(section, {})
+            if isinstance(section_data, dict):
+                for s in section_data.get("symbols", []):
                     syms.add(str(s))
         return sorted(syms)
 

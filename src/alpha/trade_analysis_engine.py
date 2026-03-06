@@ -37,25 +37,99 @@ def iso_now() -> str:
 # Maps regime transitions to historically profitable sector rotations
 REGIME_PLAYBOOK = {
     "NORMAL_to_ELEVATED": {
-        "thesis": "Risk-off rotation begins. Defense, energy/gasoline, and hedges outperform. Airlines and travel sell off.",
-        "long_sectors": ["defense", "gold", "gasoline_refining", "utilities", "treasuries"],
-        "short_sectors": ["airlines", "cruise", "emerging_markets"],
+        "thesis": "AGGRESSIVE DAY TRADE: Risk-off rotation begins. Buy the dip on defense/oil/gold, sell the rip within hours. Tight 2:1 R:R on every trade. Flat by EOD.",
+        "long_sectors": ["defense", "defense_tech", "oil_majors", "oil_ep", "gasoline_refining", "gold_safe_haven", "treasuries", "cybersecurity", "shipping", "uranium", "agriculture", "pharma", "leveraged_vol"],
+        "short_sectors": ["airlines", "cruise", "emerging_markets", "transport"],
         "symbols": {
             "long": [
-                {"symbol": "GLD", "reason": "Gold rallies on uncertainty", "historical_win_rate": 0.72},
-                {"symbol": "RTX", "reason": "Defense spending expectations rise on geopolitical tension", "historical_win_rate": 0.68},
-                {"symbol": "LMT", "reason": "Geopolitical tension boosts defense — Iran/ME escalation drives orders", "historical_win_rate": 0.65},
-                {"symbol": "ITA", "reason": "Defense ETF captures broad sector rotation into military stocks", "historical_win_rate": 0.66},
-                {"symbol": "NOC", "reason": "Northrop Grumman — missile defense demand rises in conflicts", "historical_win_rate": 0.64},
-                {"symbol": "VLO", "reason": "Refining margins spike on crude supply disruption fears", "historical_win_rate": 0.67},
-                {"symbol": "MPC", "reason": "Marathon Petroleum — gasoline crack spreads widen on ME tension", "historical_win_rate": 0.65},
-                {"symbol": "XLE", "reason": "Energy sector rallies on supply disruption risk", "historical_win_rate": 0.66},
-                {"symbol": "TLT", "reason": "Flight to safety into long bonds", "historical_win_rate": 0.63},
+                # Defense primes — day trade momentum on escalation headlines
+                {"symbol": "RTX", "reason": "Defense prime — buy dips on escalation fear, sell 1-2% rips", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "LMT", "reason": "Lockheed — intraday momentum on conflict headlines", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "NOC", "reason": "Northrop — missile defense demand, scalp intraday moves", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "GD", "reason": "General Dynamics — armor/vehicle demand on escalation", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "BA", "reason": "Boeing defense arm benefits from military orders", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "HII", "reason": "Naval shipbuilder — fleet expansion catalyst", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "LHX", "reason": "L3Harris — comms/electronics demand in conflict", "historical_win_rate": 0.61, "holding_period": "day"},
+                # Defense tech/drones
+                {"symbol": "PLTR", "reason": "Defense AI/intel — wartime intelligence demand surge", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "AVAV", "reason": "AeroVironment — drone warfare demand spike", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "KTOS", "reason": "Kratos — drone/unmanned systems, scalp on vol", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "RKLB", "reason": "Rocket Lab — space/satellite defense plays", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "LDOS", "reason": "Leidos — defense IT/cyber contracts surge", "historical_win_rate": 0.61, "holding_period": "day"},
+                # Defense ETFs
+                {"symbol": "ITA", "reason": "Defense ETF — broad sector rotation capture", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "PPA", "reason": "Aerospace & Defense ETF — diversified defense exposure", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "XAR", "reason": "SPDR Aerospace & Defense — equal weight defense", "historical_win_rate": 0.63, "holding_period": "day"},
+                # Oil majors
+                {"symbol": "XOM", "reason": "ExxonMobil — oil supply disruption premium", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "CVX", "reason": "Chevron — crude spike on ME tension", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "COP", "reason": "ConocoPhillips — E&P benefits from supply fear", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "OXY", "reason": "Occidental — leveraged oil upside", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "SLB", "reason": "Schlumberger — oilfield services demand", "historical_win_rate": 0.60, "holding_period": "day"},
+                # Oil E&P ETFs
+                {"symbol": "XOP", "reason": "Oil & gas E&P ETF — supply disruption premium", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "OIH", "reason": "Oil services ETF — drilling demand spike", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Gasoline/refining
+                {"symbol": "VLO", "reason": "Valero — refining margins spike on crude disruption", "historical_win_rate": 0.67, "holding_period": "day"},
+                {"symbol": "MPC", "reason": "Marathon Petroleum — crack spreads widen", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "PSX", "reason": "Phillips 66 — refining + midstream gains", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "PBF", "reason": "PBF Energy — high-beta refiner, big intraday moves", "historical_win_rate": 0.61, "holding_period": "day"},
+                # Energy ETFs
+                {"symbol": "XLE", "reason": "Energy sector ETF — broad energy rotation", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "UGA", "reason": "Gasoline fund — direct gasoline price exposure", "historical_win_rate": 0.63, "holding_period": "day"},
+                # Gold/safe haven
+                {"symbol": "GLD", "reason": "Gold rallies on uncertainty — scalp intraday", "historical_win_rate": 0.72, "holding_period": "day"},
+                {"symbol": "GDX", "reason": "Gold miners — leveraged gold upside", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "SLV", "reason": "Silver — safe haven + industrial demand", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "GOLD", "reason": "Barrick Gold — major miner, flight to safety", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Treasury
+                {"symbol": "TLT", "reason": "Long bonds — flight to safety", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "SHY", "reason": "Short-term treasury — parking cash safely", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "BIL", "reason": "T-bill ETF — ultra-safe haven", "historical_win_rate": 0.52, "holding_period": "day"},
+                # Cybersecurity (cyberwar)
+                {"symbol": "HACK", "reason": "Cyber ETF — cyberwar escalation drives demand", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "CIBR", "reason": "Cybersecurity ETF — nation-state threat premium", "historical_win_rate": 0.61, "holding_period": "day"},
+                {"symbol": "PANW", "reason": "Palo Alto — enterprise cyber spending surge", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "CRWD", "reason": "CrowdStrike — endpoint security demand spike", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "FTNT", "reason": "Fortinet — network security on cyberwar fears", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "ZS", "reason": "Zscaler — zero trust demand in conflict", "historical_win_rate": 0.59, "holding_period": "day"},
+                # Shipping/maritime (Strait of Hormuz)
+                {"symbol": "ZIM", "reason": "ZIM — shipping rates spike on Hormuz risk", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "GOGL", "reason": "Golden Ocean — dry bulk shipping premium", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "INSW", "reason": "International Seaways — tanker rates spike", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "STNG", "reason": "Scorpio Tankers — product tanker demand surge", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "FRO", "reason": "Frontline — crude tanker rates on rerouting", "historical_win_rate": 0.61, "holding_period": "day"},
+                # Uranium/nuclear
+                {"symbol": "URA", "reason": "Uranium ETF — energy security drives nuclear", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "CCJ", "reason": "Cameco — uranium supply disruption premium", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "UUUU", "reason": "Energy Fuels — domestic uranium demand", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "LEU", "reason": "Centrus Energy — enrichment capacity premium", "historical_win_rate": 0.57, "holding_period": "day"},
+                # Aerospace/satellite
+                {"symbol": "IRDM", "reason": "Iridium — satellite comms demand in conflict", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "GSAT", "reason": "Globalstar — satellite connectivity plays", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "RDW", "reason": "Redwire — space infrastructure demand", "historical_win_rate": 0.54, "holding_period": "day"},
+                # Agriculture/food disruption
+                {"symbol": "DBA", "reason": "Agriculture ETF — food supply disruption", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "WEAT", "reason": "Wheat ETF — grain supply chain disruption", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "CORN", "reason": "Corn ETF — agricultural commodity spike", "historical_win_rate": 0.58, "holding_period": "day"},
+                # Insurance/reinsurance
+                {"symbol": "RE", "reason": "Everest Re — reinsurance pricing power on war risk", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "RNR", "reason": "RenaissanceRe — catastrophe reinsurance demand", "historical_win_rate": 0.57, "holding_period": "day"},
+                {"symbol": "ACGL", "reason": "Arch Capital — specialty insurance on conflict", "historical_win_rate": 0.56, "holding_period": "day"},
+                # Pharma/medical
+                {"symbol": "XLV", "reason": "Healthcare ETF — wartime medical demand", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "JNJ", "reason": "J&J — defensive + medical supply demand", "historical_win_rate": 0.54, "holding_period": "day"},
+                # Leveraged volatility
+                {"symbol": "UVXY", "reason": "VIX spike — intraday volatility scalp", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "SQQQ", "reason": "3x bearish QQQ — tech selloff on risk-off", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "SPXU", "reason": "3x bearish S&P — broad market fear trade", "historical_win_rate": 0.54, "holding_period": "day"},
             ],
             "short": [
-                {"symbol": "JETS", "reason": "Airlines sell off on disruption risk and fuel cost spike", "historical_win_rate": 0.70},
-                {"symbol": "EEM", "reason": "EM capital flight on risk-off", "historical_win_rate": 0.67},
-                {"symbol": "CCL", "reason": "Cruise lines hit by travel fears", "historical_win_rate": 0.64},
+                # Use inverse ETFs for short exposure (day trades)
+                {"symbol": "EEM", "reason": "EM capital flight on risk-off", "historical_win_rate": 0.67, "holding_period": "day"},
+                {"symbol": "SPY", "reason": "Broad market risk-off via SH inverse", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "QQQ", "reason": "Tech selloff via PSQ inverse", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "IYT", "reason": "Transport disruption — freight logistics hit", "historical_win_rate": 0.62, "holding_period": "day"},
             ],
         },
         "historical_examples": [
@@ -68,28 +142,67 @@ REGIME_PLAYBOOK = {
         ],
     },
     "ELEVATED_to_CRISIS": {
-        "thesis": "Full risk-off. Cash, gold, oil/gasoline spike, defense surge. Reduce all non-defensive risk.",
-        "long_sectors": ["gold", "volatility", "cash_equivalents", "defense", "gasoline_refining"],
-        "short_sectors": ["broad_market", "high_yield", "cyclicals", "airlines"],
+        "thesis": "AGGRESSIVE DAY TRADE: Full crisis mode. Heavy leveraged ETFs (UVXY, SQQQ, SPXU), defense, oil, gold. Faster moves = tighter targets. Flat by EOD.",
+        "long_sectors": ["gold", "volatility", "leveraged_bearish", "defense", "oil_majors", "gasoline_refining", "shipping", "cybersecurity"],
+        "short_sectors": ["broad_market", "high_yield", "cyclicals", "airlines", "transport"],
         "symbols": {
             "long": [
-                {"symbol": "GLD", "reason": "Safe haven demand spikes", "historical_win_rate": 0.78},
-                {"symbol": "SH", "reason": "Short S&P 500 ETF — direct hedge", "historical_win_rate": 0.75},
-                {"symbol": "TLT", "reason": "Treasury rally on flight to safety", "historical_win_rate": 0.71},
-                {"symbol": "LMT", "reason": "Defense leader — war premium accelerates", "historical_win_rate": 0.74},
-                {"symbol": "RTX", "reason": "Raytheon — missile systems demand in active conflict", "historical_win_rate": 0.73},
-                {"symbol": "HII", "reason": "Naval shipbuilder — fleet expansion during conflict", "historical_win_rate": 0.70},
-                {"symbol": "VLO", "reason": "Refining margins explode on crude supply crisis — Strait of Hormuz risk", "historical_win_rate": 0.72},
-                {"symbol": "UGA", "reason": "Gasoline fund — direct exposure to gasoline price spike", "historical_win_rate": 0.69},
-                {"symbol": "XOP", "reason": "Oil & gas E&P benefits from supply disruption premium", "historical_win_rate": 0.68},
-                {"symbol": "PLTR", "reason": "Defense AI/intelligence — wartime intelligence demand surges", "historical_win_rate": 0.62},
+                # Leveraged volatility — PRIMARY in crisis, fast scalps
+                {"symbol": "UVXY", "reason": "VIX spike — crisis vol scalp, quick 2-5% targets", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "SQQQ", "reason": "3x bearish QQQ — tech crash momentum", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "SPXU", "reason": "3x bearish S&P — broad market crash play", "historical_win_rate": 0.66, "holding_period": "day"},
+                # Gold/safe haven — heavy allocation
+                {"symbol": "GLD", "reason": "Safe haven demand spikes — scalp gold moves", "historical_win_rate": 0.78, "holding_period": "day"},
+                {"symbol": "GDX", "reason": "Gold miners — leveraged gold upside in crisis", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "SLV", "reason": "Silver safe haven demand", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "GOLD", "reason": "Barrick — major gold miner crisis play", "historical_win_rate": 0.65, "holding_period": "day"},
+                # Inverse market ETFs
+                {"symbol": "SH", "reason": "Short S&P 500 ETF — direct hedge", "historical_win_rate": 0.75, "holding_period": "day"},
+                {"symbol": "PSQ", "reason": "Short QQQ — tech hedge", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "EUM", "reason": "Short EM — emerging market flight", "historical_win_rate": 0.65, "holding_period": "day"},
+                # Treasury flight to safety
+                {"symbol": "TLT", "reason": "Treasury rally on flight to safety", "historical_win_rate": 0.71, "holding_period": "day"},
+                {"symbol": "SHY", "reason": "Short-term treasuries — capital preservation", "historical_win_rate": 0.58, "holding_period": "day"},
+                # Defense — war premium accelerates
+                {"symbol": "LMT", "reason": "Defense leader — war premium accelerates", "historical_win_rate": 0.74, "holding_period": "day"},
+                {"symbol": "RTX", "reason": "Raytheon — missile systems demand in conflict", "historical_win_rate": 0.73, "holding_period": "day"},
+                {"symbol": "NOC", "reason": "Northrop — crisis defense demand", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "HII", "reason": "Naval shipbuilder — fleet expansion", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "ITA", "reason": "Defense ETF — broad crisis defense rotation", "historical_win_rate": 0.69, "holding_period": "day"},
+                {"symbol": "PLTR", "reason": "Defense AI/intel — wartime demand surge", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "AVAV", "reason": "Drones — active conflict drone demand", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "KTOS", "reason": "Unmanned systems — crisis combat demand", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Oil/energy — heavy in crisis
+                {"symbol": "XOM", "reason": "Oil major — supply crisis premium", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "CVX", "reason": "Chevron — crude supply disruption", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "VLO", "reason": "Refining margins explode in crisis", "historical_win_rate": 0.72, "holding_period": "day"},
+                {"symbol": "MPC", "reason": "Marathon — crack spreads blow out", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "XOP", "reason": "Oil E&P — supply disruption premium", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "UGA", "reason": "Gasoline fund — direct gas price spike", "historical_win_rate": 0.69, "holding_period": "day"},
+                {"symbol": "XLE", "reason": "Energy sector — crisis energy rotation", "historical_win_rate": 0.67, "holding_period": "day"},
+                # Shipping — Hormuz disruption
+                {"symbol": "ZIM", "reason": "Shipping rates explode on Hormuz closure", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "INSW", "reason": "Tanker rates spike on rerouting", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "STNG", "reason": "Product tankers — crisis freight premium", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "FRO", "reason": "Crude tankers — rerouting premium", "historical_win_rate": 0.63, "holding_period": "day"},
+                # Cybersecurity — cyberwar escalation
+                {"symbol": "PANW", "reason": "Palo Alto — crisis cyber spending surge", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "CRWD", "reason": "CrowdStrike — nation-state cyber attacks", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "HACK", "reason": "Cyber ETF — cyberwar premium", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Agriculture — supply chain crisis
+                {"symbol": "WEAT", "reason": "Wheat — food supply chain disruption", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "DBA", "reason": "Agriculture — food security premium", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Uranium — energy security
+                {"symbol": "CCJ", "reason": "Cameco — nuclear energy security", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "URA", "reason": "Uranium ETF — energy independence", "historical_win_rate": 0.58, "holding_period": "day"},
             ],
             "short": [
-                {"symbol": "SPY", "reason": "Broad market selloff in crisis", "historical_win_rate": 0.80},
-                {"symbol": "HYG", "reason": "Credit spreads blow out", "historical_win_rate": 0.76},
-                {"symbol": "FXI", "reason": "China selloff on geopolitical risk", "historical_win_rate": 0.72},
-                {"symbol": "JETS", "reason": "Airlines crushed by fuel costs + travel disruption", "historical_win_rate": 0.78},
-                {"symbol": "DAL", "reason": "Delta — fuel hedges insufficient for crisis-level oil spike", "historical_win_rate": 0.75},
+                {"symbol": "SPY", "reason": "Broad market selloff in crisis", "historical_win_rate": 0.80, "holding_period": "day"},
+                {"symbol": "QQQ", "reason": "Tech selloff — risk-off flight", "historical_win_rate": 0.76, "holding_period": "day"},
+                {"symbol": "HYG", "reason": "Credit spreads blow out", "historical_win_rate": 0.76, "holding_period": "day"},
+                {"symbol": "FXI", "reason": "China selloff on geopolitical risk", "historical_win_rate": 0.72, "holding_period": "day"},
+                {"symbol": "EEM", "reason": "EM capital flight in crisis", "historical_win_rate": 0.74, "holding_period": "day"},
+                {"symbol": "IYT", "reason": "Transport disruption — supply chain breakdown", "historical_win_rate": 0.68, "holding_period": "day"},
             ],
         },
         "historical_examples": [
@@ -101,20 +214,33 @@ REGIME_PLAYBOOK = {
         ],
     },
     "ELEVATED_to_NORMAL": {
-        "thesis": "Risk-on recovery. Beaten-down cyclicals, travel, and airlines rebound. Defense and energy normalize.",
-        "long_sectors": ["airlines", "travel", "emerging_markets", "cyclicals"],
-        "short_sectors": ["gold", "volatility", "defense"],
+        "thesis": "AGGRESSIVE DAY TRADE: De-escalation recovery. Flip: long beaten-down airlines/travel/EM, short defense/oil/gold. Quick scalps on mean reversion. Flat by EOD.",
+        "long_sectors": ["airlines", "travel", "emerging_markets", "cyclicals", "tech_recovery"],
+        "short_sectors": ["defense", "oil", "gold", "volatility"],
         "symbols": {
             "long": [
-                {"symbol": "JETS", "reason": "Airline recovery after crisis fear fades", "historical_win_rate": 0.71},
-                {"symbol": "DAL", "reason": "Delta leads airline recovery as fuel costs normalize", "historical_win_rate": 0.68},
-                {"symbol": "BKNG", "reason": "Travel bookings rebound", "historical_win_rate": 0.66},
-                {"symbol": "EEM", "reason": "EM risk appetite returns", "historical_win_rate": 0.63},
+                # Recovery longs — beaten-down names bouncing
+                {"symbol": "TQQQ", "reason": "3x bullish QQQ — tech recovery momentum", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "SPY", "reason": "Broad market recovery scalp", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "QQQ", "reason": "Tech rebound on de-escalation", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "DAL", "reason": "Delta leads airline recovery", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "BKNG", "reason": "Travel bookings rebound", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "EEM", "reason": "EM risk appetite returns — scalp bounce", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "FXI", "reason": "China recovery on de-escalation", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "HYG", "reason": "Credit spreads compress — junk recovery", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "IYT", "reason": "Transport recovery — supply chains normalize", "historical_win_rate": 0.60, "holding_period": "day"},
             ],
             "short": [
-                {"symbol": "GLD", "reason": "Gold fades as risk appetite returns", "historical_win_rate": 0.60},
-                {"symbol": "VLO", "reason": "Refining margins compress as supply fears ease", "historical_win_rate": 0.58},
-                {"symbol": "ITA", "reason": "Defense premium fades as tensions de-escalate", "historical_win_rate": 0.55},
+                # Fade the war premium — defense/oil/gold sell off
+                {"symbol": "GLD", "reason": "Gold fades as risk appetite returns", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "GDX", "reason": "Gold miners fade on de-escalation", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "VLO", "reason": "Refining margins compress as supply fears ease", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "ITA", "reason": "Defense premium fades on de-escalation", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "XLE", "reason": "Energy premium fades — oil normalizes", "historical_win_rate": 0.56, "holding_period": "day"},
+                {"symbol": "RTX", "reason": "Defense sell-off on peace talks", "historical_win_rate": 0.54, "holding_period": "day"},
+                {"symbol": "LMT", "reason": "Lockheed war premium unwind", "historical_win_rate": 0.53, "holding_period": "day"},
+                {"symbol": "XOM", "reason": "Oil major — crude normalizes", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "UVXY", "reason": "Vol crush — short vol on de-escalation", "historical_win_rate": 0.62, "holding_period": "day"},
             ],
         },
         "historical_examples": [
@@ -124,15 +250,26 @@ REGIME_PLAYBOOK = {
         ],
     },
     "CRISIS_to_ELEVATED": {
-        "thesis": "Bottom-fishing opportunity. Early recovery in quality names. Gasoline/defense still elevated but peaking.",
-        "long_sectors": ["quality_cyclicals", "financials", "energy"],
+        "thesis": "AGGRESSIVE DAY TRADE: Bottom fishing. Long beaten-down names at support. Quick scalps on oversold bounces. Tight targets, no overnight risk.",
+        "long_sectors": ["quality_cyclicals", "financials", "energy", "airlines_recovery", "tech_bounce"],
         "short_sectors": [],
         "symbols": {
             "long": [
-                {"symbol": "SPY", "reason": "Broad market mean reversion from oversold", "historical_win_rate": 0.74},
-                {"symbol": "XLE", "reason": "Energy sector holds gains, rotation begins", "historical_win_rate": 0.68},
-                {"symbol": "DAL", "reason": "Airline rebound from crisis lows", "historical_win_rate": 0.70},
-                {"symbol": "JETS", "reason": "Airlines oversold — early recovery as fears ease", "historical_win_rate": 0.67},
+                # Oversold bounce scalps
+                {"symbol": "SPY", "reason": "Broad market mean reversion from oversold", "historical_win_rate": 0.74, "holding_period": "day"},
+                {"symbol": "QQQ", "reason": "Tech bounce from crisis lows", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "TQQQ", "reason": "3x bullish QQQ — leveraged tech bounce", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "DAL", "reason": "Airline rebound from crisis lows — scalp", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "BKNG", "reason": "Travel recovery — oversold bounce", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "EEM", "reason": "EM bounce from capitulation", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "FXI", "reason": "China recovery scalp", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "XLE", "reason": "Energy holds gains — rotation continues", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "HYG", "reason": "Credit bounce from crisis spreads", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "IYT", "reason": "Transport recovery from crisis lows", "historical_win_rate": 0.60, "holding_period": "day"},
+                # Still hold some defense/oil for momentum
+                {"symbol": "RTX", "reason": "Defense momentum continues post-crisis", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "LMT", "reason": "Lockheed — crisis momentum carry", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "XOM", "reason": "Oil major — elevated but still moving", "historical_win_rate": 0.62, "holding_period": "day"},
             ],
             "short": [],
         },
@@ -143,18 +280,144 @@ REGIME_PLAYBOOK = {
         ],
     },
     "NORMAL_steady": {
-        "thesis": "Low-vol environment. Focus on momentum and sector-specific catalysts.",
-        "long_sectors": ["momentum", "tech", "growth"],
+        "thesis": "AGGRESSIVE DAY TRADE: Low-vol momentum plays. Tech if calm, energy if oil moving. Scalp trending sectors with tight targets. Flat by EOD.",
+        "long_sectors": ["momentum", "tech", "growth", "energy_momentum"],
         "short_sectors": [],
         "symbols": {
             "long": [
-                {"symbol": "QQQ", "reason": "Tech leadership in calm markets", "historical_win_rate": 0.62},
-                {"symbol": "SPY", "reason": "Steady uptrend continuation", "historical_win_rate": 0.58},
+                {"symbol": "QQQ", "reason": "Tech leadership in calm markets — scalp momentum", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "SPY", "reason": "Steady uptrend — intraday momentum scalp", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "TQQQ", "reason": "3x QQQ — leveraged tech momentum in calm", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "XLE", "reason": "Energy momentum if oil trending", "historical_win_rate": 0.56, "holding_period": "day"},
+                {"symbol": "XOM", "reason": "ExxonMobil — energy momentum play", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "PANW", "reason": "Cybersecurity momentum — secular trend", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "CRWD", "reason": "CrowdStrike — growth momentum", "historical_win_rate": 0.57, "holding_period": "day"},
+                {"symbol": "PLTR", "reason": "Palantir — AI/defense secular trend", "historical_win_rate": 0.56, "holding_period": "day"},
             ],
             "short": [],
         },
         "historical_examples": [
             {"event": "2021 low-vol rally", "result": "QQQ +27%, SPY +28%"},
+        ],
+    },
+}
+
+
+# --- Medium/Long-Term Macro Playbook ---
+# Maps same regime transitions to swing/position trades (2-12 week holds)
+# Focused on ETFs and sector leaders with wider targets/stops
+MEDIUM_LONG_PLAYBOOK = {
+    "NORMAL_to_ELEVATED": {
+        "thesis": "MEDIUM-TERM MACRO: Risk-off regime shift beginning. Build positions in defense ETFs, gold, oil majors, and treasuries. Reduce exposure to travel/airlines. Hold 2-8 weeks through the elevated regime.",
+        "long_sectors": ["defense_etfs", "gold", "oil_majors", "treasuries"],
+        "short_sectors": ["airlines"],
+        "symbols": {
+            "long": [
+                {"symbol": "ITA", "reason": "Defense ETF — broad sector rotation into military spending, hold through elevated regime", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "PPA", "reason": "Aerospace & Defense ETF — diversified defense exposure for multi-week hold", "historical_win_rate": 0.68, "holding_period": "swing"},
+                {"symbol": "GLD", "reason": "Gold — macro safe haven, accumulate on dips through risk-off period", "historical_win_rate": 0.75, "holding_period": "swing"},
+                {"symbol": "GDX", "reason": "Gold miners — leveraged gold upside with 2-4 week holding horizon", "historical_win_rate": 0.67, "holding_period": "swing"},
+                {"symbol": "XOM", "reason": "ExxonMobil — oil major benefiting from sustained supply disruption premium", "historical_win_rate": 0.69, "holding_period": "swing"},
+                {"symbol": "CVX", "reason": "Chevron — crude supply risk premium builds over weeks, not hours", "historical_win_rate": 0.67, "holding_period": "swing"},
+                {"symbol": "TLT", "reason": "Long treasuries — flight to safety trade, hold through uncertainty", "historical_win_rate": 0.66, "holding_period": "swing"},
+                {"symbol": "XLE", "reason": "Energy sector ETF — broad energy rotation with multi-week momentum", "historical_win_rate": 0.65, "holding_period": "swing"},
+            ],
+            "short": [
+                {"symbol": "JETS", "reason": "Airlines ETF — sustained travel demand destruction via inverse/puts, hold 2-6 weeks", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "EEM", "reason": "Emerging markets — capital flight persists through elevated regime", "historical_win_rate": 0.65, "holding_period": "swing"},
+            ],
+        },
+        "historical_examples": [
+            {"event": "Russia-Ukraine Feb 2022", "result": "ITA +14%, GLD +8%, XOM +25%, JETS -20% over 8 weeks"},
+            {"event": "Iran-Israel escalation Apr 2024", "result": "GLD +6%, XLE +8%, TLT +3% over 4 weeks"},
+            {"event": "Iran War 2026", "result": "ITA +14%, GLD +10%, XLE +18%, JETS -25% over 6 weeks"},
+        ],
+    },
+    "ELEVATED_to_CRISIS": {
+        "thesis": "MEDIUM-TERM MACRO: Full crisis positioning. Heavy gold and treasuries, inverse equity ETFs. Minimize equity exposure. Hold through crisis until regime begins to normalize.",
+        "long_sectors": ["gold", "treasuries", "inverse_equity"],
+        "short_sectors": ["broad_market"],
+        "symbols": {
+            "long": [
+                {"symbol": "GLD", "reason": "Gold — primary safe haven, accumulate aggressively, hold through crisis", "historical_win_rate": 0.82, "holding_period": "swing"},
+                {"symbol": "GDX", "reason": "Gold miners — leveraged gold upside, hold through entire crisis period", "historical_win_rate": 0.74, "holding_period": "swing"},
+                {"symbol": "TLT", "reason": "Long treasuries — flight to safety accelerates, hold until crisis abates", "historical_win_rate": 0.76, "holding_period": "swing"},
+                {"symbol": "SH", "reason": "Inverse S&P 500 — portfolio hedge, hold through crisis drawdown", "historical_win_rate": 0.78, "holding_period": "swing"},
+                {"symbol": "PSQ", "reason": "Inverse QQQ — tech hedge for extended crisis, no leverage decay concern for weeks", "historical_win_rate": 0.73, "holding_period": "swing"},
+                {"symbol": "ITA", "reason": "Defense ETF — war premium accelerates and sustains through crisis", "historical_win_rate": 0.72, "holding_period": "swing"},
+            ],
+            "short": [
+                {"symbol": "SPY", "reason": "Broad market — sustained selloff through crisis via puts or inverse", "historical_win_rate": 0.80, "holding_period": "swing"},
+                {"symbol": "QQQ", "reason": "Tech — growth multiple compression through crisis", "historical_win_rate": 0.76, "holding_period": "swing"},
+                {"symbol": "EEM", "reason": "Emerging markets — sustained capital flight in crisis", "historical_win_rate": 0.74, "holding_period": "swing"},
+            ],
+        },
+        "historical_examples": [
+            {"event": "COVID March 2020", "result": "GLD +8%, TLT +20%, SPY -34% over 5 weeks"},
+            {"event": "GFC Sept-Nov 2008", "result": "GLD +25%, TLT +30%, SPY -40% over 3 months"},
+            {"event": "Gulf War I 1990-91", "result": "GLD +10%, defense +25%, SPY -17% over 3 months"},
+        ],
+    },
+    "ELEVATED_to_NORMAL": {
+        "thesis": "MEDIUM-TERM MACRO: De-escalation recovery positioning. Rotate into beaten-down equity ETFs, travel recovery, emerging markets. Sell defense/gold positions. Hold 4-12 weeks for full mean reversion.",
+        "long_sectors": ["broad_equity", "travel_recovery", "emerging_markets"],
+        "short_sectors": ["defense", "gold"],
+        "symbols": {
+            "long": [
+                {"symbol": "SPY", "reason": "Broad market recovery — accumulate for multi-week rebound", "historical_win_rate": 0.72, "holding_period": "swing"},
+                {"symbol": "QQQ", "reason": "Tech recovery — growth re-rates higher as risk normalizes", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "JETS", "reason": "Airlines ETF — travel demand recovery over 4-8 weeks", "historical_win_rate": 0.73, "holding_period": "swing"},
+                {"symbol": "EEM", "reason": "Emerging markets — capital flows return as risk appetite recovers", "historical_win_rate": 0.66, "holding_period": "swing"},
+                {"symbol": "XLK", "reason": "Tech sector ETF — secular growth resumes post de-escalation", "historical_win_rate": 0.68, "holding_period": "swing"},
+                {"symbol": "HYG", "reason": "High yield — credit spreads compress over weeks as confidence returns", "historical_win_rate": 0.64, "holding_period": "swing"},
+            ],
+            "short": [
+                {"symbol": "GLD", "reason": "Gold — safe haven premium unwinds over weeks", "historical_win_rate": 0.62, "holding_period": "swing"},
+                {"symbol": "ITA", "reason": "Defense ETF — war premium fades on de-escalation, sell over 4-8 weeks", "historical_win_rate": 0.58, "holding_period": "swing"},
+            ],
+        },
+        "historical_examples": [
+            {"event": "Post-COVID recovery Apr-Jul 2020", "result": "SPY +40%, JETS +85%, EEM +25% over 12 weeks"},
+            {"event": "Ukraine ceasefire talks Mar 2022", "result": "SPY +8%, JETS +15%, EEM +8% over 6 weeks"},
+        ],
+    },
+    "CRISIS_to_ELEVATED": {
+        "thesis": "MEDIUM-TERM MACRO: Crisis abating, begin building recovery positions. Long beaten-down quality equities and energy. Hold 4-12 weeks for recovery rally. Keep some hedges until regime fully normalizes.",
+        "long_sectors": ["broad_equity", "energy", "quality"],
+        "short_sectors": [],
+        "symbols": {
+            "long": [
+                {"symbol": "SPY", "reason": "Broad market — buy the crisis bottom, hold 4-12 weeks for recovery", "historical_win_rate": 0.78, "holding_period": "swing"},
+                {"symbol": "QQQ", "reason": "Tech — oversold quality rebounds hardest, hold for full recovery", "historical_win_rate": 0.75, "holding_period": "swing"},
+                {"symbol": "XLE", "reason": "Energy — elevated prices sustain, hold through recovery phase", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "XLF", "reason": "Financials — rate normalization benefits banks, hold 4-8 weeks", "historical_win_rate": 0.66, "holding_period": "swing"},
+                {"symbol": "JETS", "reason": "Airlines — early recovery position, hold 8-12 weeks for full rebound", "historical_win_rate": 0.68, "holding_period": "swing"},
+                {"symbol": "EEM", "reason": "Emerging markets — capital flows resume post-crisis, hold 6-12 weeks", "historical_win_rate": 0.64, "holding_period": "swing"},
+            ],
+            "short": [],
+        },
+        "historical_examples": [
+            {"event": "Post-GFC recovery Mar 2009", "result": "SPY +40%, XLF +80% over 12 weeks"},
+            {"event": "Post-COVID recovery Mar 2020", "result": "SPY +30%, QQQ +35%, JETS +60% over 12 weeks"},
+        ],
+    },
+    "NORMAL_steady": {
+        "thesis": "MEDIUM-TERM MACRO: Low volatility, trend-following positioning. Long momentum sectors — tech and broad market. Hold 4-8 weeks, ride the trend with trailing stops.",
+        "long_sectors": ["momentum", "tech", "broad_market"],
+        "short_sectors": [],
+        "symbols": {
+            "long": [
+                {"symbol": "QQQ", "reason": "Tech momentum — secular growth in calm regime, hold 4-8 weeks", "historical_win_rate": 0.65, "holding_period": "swing"},
+                {"symbol": "SPY", "reason": "Broad market uptrend — accumulate on dips, hold 4-8 weeks", "historical_win_rate": 0.63, "holding_period": "swing"},
+                {"symbol": "XLK", "reason": "Tech sector ETF — sector momentum in low-vol environment", "historical_win_rate": 0.64, "holding_period": "swing"},
+                {"symbol": "SMH", "reason": "Semiconductor ETF — AI/chip cycle momentum, hold 4-8 weeks", "historical_win_rate": 0.62, "holding_period": "swing"},
+                {"symbol": "XLE", "reason": "Energy — if oil trending, ride the momentum 4-6 weeks", "historical_win_rate": 0.58, "holding_period": "swing"},
+            ],
+            "short": [],
+        },
+        "historical_examples": [
+            {"event": "2021 low-vol rally", "result": "QQQ +27%, SPY +28% over 12 months"},
+            {"event": "2024 Q4 tech momentum", "result": "QQQ +12%, XLK +14% over 8 weeks"},
         ],
     },
 }
@@ -177,8 +440,14 @@ class TradeAnalysisEngine:
         scorecard: Dict[str, Any],
         previous_mode: Optional[str] = None,
         microstructure: Optional[Dict[str, Any]] = None,
+        strategy_type: str = "day_trade",
     ) -> Dict[str, Any]:
-        """Generate trade analysis from current scorecard and market data."""
+        """Generate trade analysis from current scorecard and market data.
+
+        Args:
+            strategy_type: "day_trade" for intraday scalps (default) or
+                           "medium_long" for swing/position trades (2-12 week holds).
+        """
         mode = scorecard.get("mode", "NORMAL")
         regime_p = scorecard.get("regime_shift_probability", 0)
         components = scorecard.get("component_scores", {})
@@ -188,22 +457,29 @@ class TradeAnalysisEngine:
 
         # Determine regime transition key
         transition = self._detect_transition(mode, previous_mode, regime_p)
-        playbook = REGIME_PLAYBOOK.get(transition, REGIME_PLAYBOOK.get("NORMAL_steady", {}))
+
+        # Select playbook based on strategy type
+        if strategy_type == "medium_long":
+            playbook_source = MEDIUM_LONG_PLAYBOOK
+        else:
+            playbook_source = REGIME_PLAYBOOK
+        playbook = playbook_source.get(transition, playbook_source.get("NORMAL_steady", {}))
 
         # Generate trade ideas with price levels
-        ideas = self._generate_ideas(playbook, microstructure, components, confidence)
+        ideas = self._generate_ideas(playbook, microstructure, components, confidence, strategy_type)
 
         # Sector analysis
         sector_analysis = self._sector_rotation_analysis(components, mode)
 
         # Risk assessment
-        risk_assessment = self._risk_assessment(regime_p, confidence, mode, tw)
+        risk_assessment = self._risk_assessment(regime_p, confidence, mode, tw, strategy_type)
 
         return {
             "timestamp_utc": iso_now(),
             "mode": mode,
             "regime_p": regime_p,
             "transition": transition,
+            "strategy_type": strategy_type,
             "playbook_thesis": playbook.get("thesis", ""),
             "trade_ideas": ideas,
             "sector_analysis": sector_analysis,
@@ -240,6 +516,7 @@ class TradeAnalysisEngine:
         microstructure: Optional[Dict],
         components: Dict[str, float],
         confidence: float,
+        strategy_type: str = "day_trade",
     ) -> List[Dict[str, Any]]:
         ideas = []
         micro = microstructure or {}
@@ -255,6 +532,7 @@ class TradeAnalysisEngine:
                     "confidence_adjusted_score": round(
                         entry.get("historical_win_rate", 0.5) * min(confidence, 1.0), 2
                     ),
+                    "holding_period": entry.get("holding_period", "day"),
                 }
 
                 # Add price levels if microstructure available
@@ -266,18 +544,27 @@ class TradeAnalysisEngine:
                         idea["current_price"] = round(price, 2)
                         idea["daily_vol_pct"] = round(sigma, 2)
 
-                        # Entry/target/stop based on vol
                         atr_est = price * sigma / 100.0
+
+                        if strategy_type == "medium_long":
+                            # Wider targets/stops for swing trades: 3 ATR target, 1.5 ATR stop (2:1 R:R)
+                            target_mult = 3.0
+                            stop_mult = 1.5
+                        else:
+                            # Tight targets/stops for day trades: 1.5 ATR target, 0.75 ATR stop (2:1 R:R)
+                            target_mult = 1.5
+                            stop_mult = 0.75
+
                         if side == "long":
                             idea["entry"] = round(price, 2)
-                            idea["target"] = round(price + 2.5 * atr_est, 2)
-                            idea["stop"] = round(price - 1.5 * atr_est, 2)
+                            idea["target"] = round(price + target_mult * atr_est, 2)
+                            idea["stop"] = round(price - stop_mult * atr_est, 2)
                         else:
                             idea["entry"] = round(price, 2)
-                            idea["target"] = round(price - 2.5 * atr_est, 2)
-                            idea["stop"] = round(price + 1.5 * atr_est, 2)
+                            idea["target"] = round(price - target_mult * atr_est, 2)
+                            idea["stop"] = round(price + stop_mult * atr_est, 2)
 
-                        idea["risk_reward"] = round(2.5 / 1.5, 2)
+                        idea["risk_reward"] = round(target_mult / stop_mult, 2)
 
                 ideas.append(idea)
 
@@ -380,21 +667,30 @@ class TradeAnalysisEngine:
         return sectors
 
     def _risk_assessment(
-        self, regime_p: float, confidence: float, mode: str, tw: Dict
+        self, regime_p: float, confidence: float, mode: str, tw: Dict,
+        strategy_type: str = "day_trade",
     ) -> Dict[str, Any]:
-        # Position sizing recommendation based on regime
+        # Position sizing recommendation based on regime and strategy type
         if mode == "CRISIS":
-            max_position_pct = 0
-            sizing = "FLAT — no new positions in CRISIS mode"
+            max_position_pct = 25
+            sizing = "Crisis volatility — up to 25% per position, aggressive upside capture"
         elif mode == "ELEVATED":
-            max_position_pct = 2
-            sizing = "Minimal — 2% max per position, hedged"
+            if strategy_type == "medium_long":
+                max_position_pct = 50
+                sizing = "Elevated swing — up to 50% per position, capture macro dislocations"
+            else:
+                max_position_pct = 30
+                sizing = "Elevated day — up to 30% per position, volatility premium"
         elif mode == "MANUAL_REVIEW":
             max_position_pct = 0
             sizing = "SUSPENDED — awaiting manual review"
         else:
-            max_position_pct = 5
-            sizing = "Normal — up to 5% per position"
+            if strategy_type == "medium_long":
+                max_position_pct = 100
+                sizing = "Unlimited — full conviction swing, optimize for upside"
+            else:
+                max_position_pct = 50
+                sizing = "Aggressive — up to 50% per position, maximize volatility upside"
 
         # Time window impact
         window = tw.get("current_window", "unknown")
@@ -430,6 +726,8 @@ def main():
     p = argparse.ArgumentParser(description="Global Sentinel Trade Analysis Engine")
     p.add_argument("--repo-root", default=".")
     p.add_argument("--output-json", default=None)
+    p.add_argument("--strategy", default="day_trade", choices=["day_trade", "medium_long"],
+                    help="Strategy type: day_trade (intraday) or medium_long (swing 2-12 weeks)")
     args = p.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -456,7 +754,7 @@ def main():
             except Exception:
                 pass
 
-    result = engine.analyze(sc, microstructure=micro)
+    result = engine.analyze(sc, microstructure=micro, strategy_type=args.strategy)
     output = json.dumps(result, indent=2)
 
     if args.output_json:

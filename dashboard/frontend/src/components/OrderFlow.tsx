@@ -30,7 +30,7 @@ export default function OrderFlow({ orders }: { orders: OrderEvent[] }) {
   }
 
   return (
-    <div className="space-y-1 max-h-[300px] overflow-y-auto">
+    <div className="space-y-1 max-h-[400px] overflow-y-auto">
       {recent.map((o, i) => {
         const p = o.payload || {};
         const eventType = o.event_type || "unknown";

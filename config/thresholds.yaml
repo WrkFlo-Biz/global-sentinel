@@ -21,14 +21,18 @@ hysteresis:
 
 # --- Regime Shift Scoring Weights ---
 regime_weights:
-  geopolitical_tension: 0.25
-  market_volatility: 0.20
-  currency_stress: 0.15
-  commodity_shock: 0.15
-  policy_uncertainty: 0.10
-  labor_disruption: 0.05
-  credit_spread: 0.05
-  liquidity_stress: 0.05
+  geopolitical_tension: 0.18
+  market_volatility: 0.16
+  currency_stress: 0.08
+  commodity_shock: 0.08
+  policy_uncertainty: 0.07
+  labor_disruption: 0.02
+  credit_spread: 0.04
+  liquidity_stress: 0.03
+  consciousness_coherence: 0.06
+  politician_alpha: 0.09       # congressional whale trades — insiders positioning
+  policy_signals: 0.07         # Fed Board + White House + OFAC + BLS combined
+  yield_curve: 0.12            # yield curve inversion, credit OAS, equity indices from FRED
 
 # --- Confidence Adjustments ---
 confidence:

@@ -35,7 +35,7 @@ export default function AlertFeed({ alerts }: { alerts: Alert[] }) {
   }
 
   return (
-    <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+    <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
       {recent.map((a, i) => {
         const style = LEVEL_STYLES[a.level || "info"] || LEVEL_STYLES.info;
         return (

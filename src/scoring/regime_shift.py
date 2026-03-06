@@ -89,6 +89,32 @@ class RegimeShiftScorer:
         components["liquidity_stress"] = liq["score"]
         freshness["liquidity_stress"] = liq.get("fresh", False)
 
+        # --- Consciousness Coherence (GCP RNG + Narrative Velocity) ---
+        cc = self._score_consciousness_coherence(snapshot)
+        components["consciousness_coherence"] = cc["score"]
+        evidence.extend(cc.get("evidence", []))
+        freshness["consciousness_coherence"] = cc.get("fresh", False)
+        if not cc.get("fresh", False):
+            stale_count += 1
+
+        # --- Politician Alpha (congressional whale trades) ---
+        pol_alpha = self._score_politician_alpha(snapshot)
+        components["politician_alpha"] = pol_alpha["score"]
+        evidence.extend(pol_alpha.get("evidence", []))
+        freshness["politician_alpha"] = pol_alpha.get("fresh", False)
+
+        # --- Policy Signals (Fed Board + White House + Treasury OFAC + BLS) ---
+        policy = self._score_policy_signals(snapshot)
+        components["policy_signals"] = policy["score"]
+        evidence.extend(policy.get("evidence", []))
+        freshness["policy_signals"] = policy.get("fresh", False)
+
+        # --- Yield Curve / Bond Market Signals ---
+        yc = self._score_yield_curve(snapshot)
+        components["yield_curve"] = yc["score"]
+        evidence.extend(yc.get("evidence", []))
+        freshness["yield_curve"] = yc.get("fresh", False)
+
         # --- Volatility regime multiplier ---
         # When avg vol crosses thresholds, amplify the composite score
         vol_score = components.get("market_volatility", 0)
@@ -323,6 +349,79 @@ class RegimeShiftScorer:
         score = min(avg_sigma / 3.0, 1.0)
         return {"score": round(score, 4), "fresh": True}
 
+    def _score_yield_curve(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Score from yield curve shape, credit spreads, and equity index data via FRED."""
+        fred_packets = snapshot.get("fred", [])
+        evidence = []
+
+        if not fred_packets:
+            return {"score": 0.1, "fresh": False, "evidence": []}
+
+        score = 0.0
+        found_any = False
+        for pkt in fred_packets:
+            meta = pkt.get("parsing_meta", {}) if isinstance(pkt, dict) else {}
+            sid = meta.get("series_id", "")
+            latest = meta.get("latest_value")
+            delta = meta.get("delta")
+            category = meta.get("series_category", "")
+
+            if latest is None:
+                continue
+
+            # Yield curve inversion: T10Y2Y or T10Y3M negative = recession risk
+            if sid in ("T10Y2Y", "T10Y3M", "T10YFF"):
+                found_any = True
+                if latest < -0.5:
+                    score += 0.35
+                    evidence.append(f"{sid} deeply inverted at {latest:.2f}")
+                elif latest < 0:
+                    score += 0.20
+                    evidence.append(f"{sid} inverted at {latest:.2f}")
+                elif latest > 0 and latest < 0.3:
+                    score += 0.10  # Flat curve still concerning
+
+            # Rapid yield moves across the curve (2Y, 5Y, 10Y, 30Y)
+            if sid in ("DGS2", "DGS5", "DGS10", "DGS30") and isinstance(delta, (int, float)):
+                found_any = True
+                if abs(delta) > 0.15:
+                    score += 0.10
+                    direction = "spiking" if delta > 0 else "plunging"
+                    evidence.append(f"{sid} yield {direction}: {delta:+.2f}%")
+
+            # High yield credit spread widening
+            if sid == "BAMLH0A0HYM2" and isinstance(delta, (int, float)):
+                found_any = True
+                if delta > 0.50:
+                    score += 0.25
+                    evidence.append(f"HY credit spreads widening sharply: +{delta:.2f}")
+                elif delta > 0.20:
+                    score += 0.10
+
+            # TED spread (interbank credit risk)
+            if sid == "TEDRATE" and isinstance(latest, (int, float)):
+                found_any = True
+                if latest > 0.50:
+                    score += 0.20
+                    evidence.append(f"TED spread elevated at {latest:.2f}")
+                elif latest > 0.30:
+                    score += 0.10
+
+            # Equity indices — large drops signal stress
+            if sid in ("SP500", "NASDAQCOM", "DJIA") and isinstance(delta, (int, float)):
+                found_any = True
+                # Negative delta on index = market stress
+                if category == "equity_indices":
+                    pct_change = (delta / (latest - delta)) * 100 if (latest - delta) != 0 else 0
+                    if pct_change < -2.0:
+                        score += 0.15
+                        evidence.append(f"{sid} dropped {pct_change:.1f}%")
+
+        if not found_any:
+            return {"score": 0.1, "fresh": False, "evidence": []}
+
+        return {"score": round(min(score, 1.0), 4), "fresh": True, "evidence": evidence[:5]}
+
     def _score_liquidity_stress(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Score from ADV changes and vol spikes across the board."""
         micro = snapshot.get("market_microstructure", {})
@@ -347,3 +446,175 @@ class RegimeShiftScorer:
         stress_ratio = high_vol_count / total
         score = min(stress_ratio * 2.0, 1.0)  # 50% high-vol symbols = max stress
         return {"score": round(score, 4), "fresh": True}
+
+    def _score_consciousness_coherence(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Score from GCP consciousness coherence + narrative velocity.
+
+        Sentinel Logic Engine:
+        - GCP high + narrative high  → amplify regime probability (systemic shock)
+        - narrative high + GCP low   → discount signal (noise/bear trap)
+        - GCP high + narrative low   → flag pre-pulse (early warning)
+        """
+        gcp = snapshot.get("gcp_consciousness", {})
+        narrative = snapshot.get("narrative_velocity", {})
+        evidence: List[str] = []
+
+        max_z = float(gcp.get("max_z", 0))
+        coherence_level = gcp.get("coherence_level", "random")
+        regional_spikes = gcp.get("regional_spikes", [])
+        velocity_score = float(narrative.get("velocity_score", 0))
+        infection_rate = float(narrative.get("infection_rate", 0))
+
+        gcp_fresh = gcp.get("fresh", False)
+        narrative_fresh = narrative.get("fresh", False)
+        fresh = gcp_fresh or narrative_fresh
+
+        if not fresh:
+            return {"score": 0.1, "fresh": False, "evidence": []}
+
+        score = 0.0
+
+        # Determine coherence flags
+        gcp_high = coherence_level in ("high", "extreme") or abs(max_z) >= 2.5
+        gcp_moderate = coherence_level == "moderate" or abs(max_z) >= 2.0
+        narrative_high = velocity_score > 20 or infection_rate > 15
+
+        # Sentinel Logic Engine scenarios
+        if gcp_high and narrative_high:
+            # Systemic shock: both layers firing → amplify
+            score = min(0.5 + (abs(max_z) - 2.0) * 0.1 + velocity_score / 200.0, 1.0)
+            evidence.append(
+                f"CONSCIOUSNESS+NARRATIVE CONVERGENCE: GCP Z={max_z:.2f}, "
+                f"velocity={velocity_score:.0f} — systemic shock signal"
+            )
+        elif narrative_high and not gcp_moderate:
+            # Noise filter / bear trap: narrative panic without consciousness coherence
+            score = max(0.05, velocity_score / 500.0)  # heavily discounted
+            evidence.append(
+                f"NOISE FILTER: narrative velocity={velocity_score:.0f} but "
+                f"GCP Z={max_z:.2f} (incoherent) — likely bear trap"
+            )
+        elif gcp_high and not narrative_high:
+            # Pre-pulse: consciousness coherent before news catches up
+            score = min(0.3 + (abs(max_z) - 2.0) * 0.08, 0.7)
+            evidence.append(
+                f"PRE-PULSE: GCP Z={max_z:.2f} ({coherence_level}) with "
+                f"low narrative velocity={velocity_score:.0f} — early warning"
+            )
+        elif gcp_moderate:
+            # Moderate coherence — mild signal
+            score = min(0.15 + (abs(max_z) - 1.5) * 0.05, 0.4)
+            evidence.append(f"GCP moderate coherence: Z={max_z:.2f}")
+        else:
+            # Low/random coherence, low narrative — baseline
+            score = 0.05
+
+        # Regional spike bonus
+        if regional_spikes:
+            spike_bonus = min(len(regional_spikes) * 0.05, 0.15)
+            score = min(score + spike_bonus, 1.0)
+            for spike in regional_spikes[:2]:
+                markets = ", ".join(spike.get("predicted_markets", [])[:3])
+                evidence.append(
+                    f"Regional consciousness spike: {spike.get('region')} "
+                    f"Z={spike.get('z_score', 0):.2f} — watch {markets}"
+                )
+
+        # Add narrative evidence
+        for ev in narrative.get("evidence", [])[:2]:
+            evidence.append(ev)
+
+        score = max(0.0, min(1.0, score))
+        return {"score": round(score, 4), "fresh": fresh, "evidence": evidence}
+
+    def _score_politician_alpha(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Score from congressional whale trading activity.
+        High politician alpha = insiders are positioning = regime change likely."""
+        pol = snapshot.get("politician_alpha", {})
+        evidence: List[str] = []
+
+        if not pol or not pol.get("fresh", False):
+            return {"score": 0.0, "fresh": False}
+
+        scores = pol.get("political_alpha_scores", {})
+        whale_trades = pol.get("top_whale_trades", [])
+        sentiment = pol.get("aggregate_sentiment", "neutral")
+        total_trades = pol.get("total_trades_analyzed", 0)
+
+        score = 0.0
+
+        # High trade volume from politicians = they know something
+        if total_trades >= 50:
+            score += 0.3
+            evidence.append(f"High congressional trading: {total_trades} trades analyzed")
+        elif total_trades >= 20:
+            score += 0.15
+
+        # Aggregate sentiment divergence from market
+        if sentiment in ("very_bullish", "very_bearish"):
+            score += 0.2
+            evidence.append(f"Congressional sentiment: {sentiment}")
+        elif sentiment in ("bullish", "bearish"):
+            score += 0.1
+
+        # Top whale trades with high scores
+        high_conviction = [w for w in whale_trades if w.get("score", 0) >= 7.0]
+        if high_conviction:
+            score += min(len(high_conviction) * 0.05, 0.3)
+            top = high_conviction[0]
+            evidence.append(
+                f"Whale trade: {top.get('politician', '?')} "
+                f"{top.get('transaction_type', '?')} {top.get('symbol', '?')} "
+                f"(score: {top.get('score', 0):.0f})"
+            )
+
+        score = max(0.0, min(1.0, score))
+        return {"score": round(score, 4), "fresh": True, "evidence": evidence}
+
+    def _score_policy_signals(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Score from Fed Board, White House, Treasury OFAC, and BLS data.
+        Policy shifts signal regime changes before markets price them."""
+        evidence: List[str] = []
+        score = 0.0
+        any_fresh = False
+
+        # Fed Board signals
+        fed = snapshot.get("fed_board", {})
+        if isinstance(fed, dict) and fed.get("fresh", False):
+            any_fresh = True
+            events = fed.get("events", fed.get("releases", []))
+            if isinstance(events, list) and events:
+                score += min(len(events) * 0.05, 0.2)
+                evidence.append(f"Fed Board: {len(events)} recent policy signals")
+
+        # White House policy
+        wh = snapshot.get("whitehouse_policy", {})
+        if isinstance(wh, dict) and wh.get("fresh", False):
+            any_fresh = True
+            actions = wh.get("executive_orders", wh.get("actions", wh.get("events", [])))
+            if isinstance(actions, list) and actions:
+                score += min(len(actions) * 0.05, 0.2)
+                evidence.append(f"White House: {len(actions)} policy actions")
+
+        # Treasury OFAC sanctions
+        ofac = snapshot.get("treasury_ofac", {})
+        if isinstance(ofac, dict) and ofac.get("fresh", False):
+            any_fresh = True
+            sanctions = ofac.get("new_designations", ofac.get("sanctions", ofac.get("entries", [])))
+            if isinstance(sanctions, list) and sanctions:
+                score += min(len(sanctions) * 0.08, 0.3)
+                evidence.append(f"OFAC: {len(sanctions)} new sanctions designations")
+
+        # BLS releases (jobs, CPI, etc.)
+        bls = snapshot.get("bls_releases", {})
+        if isinstance(bls, dict) and bls.get("fresh", False):
+            any_fresh = True
+            releases = bls.get("releases", bls.get("series", []))
+            if isinstance(releases, (list, dict)):
+                count = len(releases) if isinstance(releases, list) else len(releases.keys())
+                if count:
+                    score += min(count * 0.03, 0.15)
+                    evidence.append(f"BLS: {count} economic data releases")
+
+        score = max(0.0, min(1.0, score))
+        return {"score": round(score, 4), "fresh": any_fresh, "evidence": evidence}

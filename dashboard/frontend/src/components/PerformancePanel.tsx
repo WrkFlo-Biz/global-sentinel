@@ -1,6 +1,6 @@
 "use client";
 
-import type { PerformanceData } from "@/lib/api";
+import type { PerformanceData, PortfolioData } from "@/lib/api";
 
 function StatBox({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
@@ -11,13 +11,49 @@ function StatBox({ label, value, color }: { label: string; value: string; color?
   );
 }
 
-export default function PerformancePanel({ data }: { data: PerformanceData | null }) {
-  if (!data || data.error) {
-    return <div className="text-gray-600 text-xs">No performance data yet — waiting for completed trades</div>;
-  }
+function OpenPositionsView({ portfolio }: { portfolio: PortfolioData }) {
+  const totalPL = portfolio.positions.reduce((acc, p) => acc + p.unrealized_pl, 0);
+  const plColor = totalPL >= 0 ? "text-emerald-400" : "text-red-400";
+  const winners = portfolio.positions.filter(p => p.unrealized_pl >= 0).length;
+  const losers = portfolio.positions.length - winners;
 
-  if (data.total_trades === 0) {
-    return <div className="text-gray-600 text-xs">No completed trades yet. Shadow orders are pending.</div>;
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[10px] text-yellow-500 bg-yellow-950/20 px-1.5 py-0.5 rounded border border-yellow-900/30">
+          OPEN POSITIONS
+        </span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
+        <StatBox label="Unrealized P&L" value={`$${totalPL >= 0 ? "+" : ""}${totalPL.toFixed(2)}`} color={plColor} />
+        <StatBox label="Positions" value={`${winners}W / ${losers}L`} />
+        <StatBox label="Count" value={`${portfolio.positions.length}`} />
+      </div>
+      <div className="space-y-0.5">
+        {portfolio.positions
+          .sort((a, b) => b.unrealized_pl - a.unrealized_pl)
+          .map((p) => (
+          <div key={p.symbol} className="flex items-center justify-between text-[11px] px-2 py-1 bg-[#111827] rounded">
+            <span className="text-gray-200 font-medium">{p.symbol}</span>
+            <div className="flex items-center gap-3">
+              <span className="text-gray-500">{p.qty} shares</span>
+              <span className={`tabular-nums font-medium ${p.unrealized_pl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                ${p.unrealized_pl >= 0 ? "+" : ""}{p.unrealized_pl.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function PerformancePanel({ data, portfolio }: { data: PerformanceData | null; portfolio?: PortfolioData | null }) {
+  if (!data || data.error || data.total_trades === 0) {
+    if (portfolio && portfolio.positions && portfolio.positions.length > 0) {
+      return <OpenPositionsView portfolio={portfolio} />;
+    }
+    return <div className="text-gray-600 text-xs">No trades yet</div>;
   }
 
   const pnlColor = data.total_pnl >= 0 ? "text-emerald-400" : "text-red-400";
@@ -25,7 +61,7 @@ export default function PerformancePanel({ data }: { data: PerformanceData | nul
 
   return (
     <div>
-      <div className="grid grid-cols-5 gap-2 mb-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
         <StatBox label="Total P&L" value={`$${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl.toFixed(2)}`} color={pnlColor} />
         <StatBox label="Win Rate" value={`${(data.win_rate * 100).toFixed(1)}%`} color={wrColor} />
         <StatBox label="Trades" value={`${data.wins}W / ${data.losses}L`} />

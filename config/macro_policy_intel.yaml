@@ -109,24 +109,67 @@ macro_policy_intel:
       api_base: "https://api.stlouisfed.org/fred"
       series:
         rates:
+          - "DGS1MO"    # 1-Month Treasury Constant Maturity
+          - "DGS3MO"    # 3-Month Treasury Constant Maturity
+          - "DGS1"      # 1Y Treasury Constant Maturity
+          - "DGS2"      # 2Y Treasury Constant Maturity
+          - "DGS5"      # 5Y Treasury Constant Maturity
+          - "DGS7"      # 7Y Treasury Constant Maturity
           - "DGS10"     # 10Y Treasury Constant Maturity
+          - "DGS20"     # 20Y Treasury Constant Maturity
+          - "DGS30"     # 30Y Treasury Constant Maturity
           - "DFF"       # Effective Fed Funds Rate
+          - "DFEDTARU"  # Fed Funds Target Rate Upper
+          - "T10Y2Y"    # 10Y-2Y Treasury Spread (yield curve)
+          - "T10Y3M"    # 10Y-3M Treasury Spread (recession indicator)
+          - "T10YFF"    # 10Y minus Fed Funds Rate
         inflation:
           - "CPIAUCSL"  # CPI All Urban Consumers SA
           - "PCEPI"     # PCE Price Index
+          - "CPILFESL"  # Core CPI Less Food and Energy
         labor:
           - "PAYEMS"    # Nonfarm payrolls
           - "UNRATE"    # Unemployment rate
+          - "ICSA"      # Initial Jobless Claims (weekly)
+        equity_indices:
+          - "SP500"     # S&P 500 index
+          - "NASDAQCOM" # NASDAQ Composite
+          - "DJIA"      # Dow Jones Industrial Average
+          - "WILLSMLCAP" # Wilshire Small Cap (Russell proxy)
+        credit_spreads:
+          - "BAMLH0A0HYM2"  # ICE BofA US High Yield OAS
+          - "BAMLC0A4CBBB"  # ICE BofA BBB Corporate OAS
+          - "TEDRATE"       # TED Spread (credit risk)
         policy_uncertainty_proxies:
           - "VIXCLS"
       rate_check_thresholds:
+        DGS1MO_abs_delta: 0.05
+        DGS3MO_abs_delta: 0.05
+        DGS1_abs_delta: 0.08
+        DGS2_abs_delta: 0.10
+        DGS5_abs_delta: 0.10
+        DGS7_abs_delta: 0.10
         DGS10_abs_delta: 0.10
+        DGS20_abs_delta: 0.12
+        DGS30_abs_delta: 0.12
         DFF_abs_delta: 0.10
+        DFEDTARU_abs_delta: 0.25
+        T10Y2Y_abs_delta: 0.15
+        T10Y3M_abs_delta: 0.15
+        T10YFF_abs_delta: 0.15
         VIXCLS_abs_delta: 2.0
         CPIAUCSL_abs_delta: 0.5
+        CPILFESL_abs_delta: 0.3
         PCEPI_abs_delta: 0.3
         PAYEMS_abs_delta: 150.0
         UNRATE_abs_delta: 0.2
+        ICSA_abs_delta: 20000.0
+        SP500_abs_delta: 50.0
+        NASDAQCOM_abs_delta: 200.0
+        DJIA_abs_delta: 300.0
+        BAMLH0A0HYM2_abs_delta: 0.30
+        BAMLC0A4CBBB_abs_delta: 0.20
+        TEDRATE_abs_delta: 0.10
         staleness_days_warning: 10
 
     eia:

@@ -255,13 +255,14 @@ class FREDBridge:
         return [packet]
 
     def _map_category_to_event_type(self, category: str) -> str:
-        if category == "inflation":
-            return "inflation_release"
-        if category == "labor":
-            return "labor_release"
-        if category == "rates":
-            return "central_bank_statement"
-        return "macro_calendar_update"
+        mapping = {
+            "inflation": "inflation_release",
+            "labor": "labor_release",
+            "rates": "central_bank_statement",
+            "equity_indices": "equity_index_update",
+            "credit_spreads": "credit_spread_update",
+        }
+        return mapping.get(category, "macro_calendar_update")
 
     def _policy_release_urgency_score(self, event_type: str) -> float:
         defaults = ((self.scoring_overlays.get("policy_release_urgency_score") or {}).get("defaults") or {})
@@ -318,8 +319,16 @@ class FREDBridge:
         if category in {"inflation", "labor"} and abs_delta is not None:
             triggers.append(f"{category}_series_update")
 
-        highly_sensitive = {"DGS10", "DFF", "CPIAUCSL", "PCEPI", "PAYEMS", "UNRATE", "VIXCLS"}
-        rate_regime = (len(triggers) > 0) and (sid in highly_sensitive or category in {"rates", "inflation", "labor"})
+        highly_sensitive = {
+            "DGS1MO", "DGS3MO", "DGS1", "DGS2", "DGS5", "DGS7",
+            "DGS10", "DGS20", "DGS30",
+            "DFF", "DFEDTARU", "T10Y2Y", "T10Y3M", "T10YFF",
+            "CPIAUCSL", "CPILFESL", "PCEPI",
+            "PAYEMS", "UNRATE", "ICSA", "VIXCLS",
+            "SP500", "NASDAQCOM", "DJIA", "WILLSMLCAP",
+            "BAMLH0A0HYM2", "BAMLC0A4CBBB", "TEDRATE",
+        }
+        rate_regime = (len(triggers) > 0) and (sid in highly_sensitive or category in {"rates", "inflation", "labor", "equity_indices", "credit_spreads"})
 
         return bool(rate_regime), triggers
 

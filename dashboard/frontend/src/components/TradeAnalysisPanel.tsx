@@ -20,6 +20,13 @@ function IdeaRow({ idea }: { idea: TradeIdea }) {
           }`}>
             {idea.side}
           </span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium uppercase ${
+            idea.holding_period === "day"
+              ? "text-orange-400 bg-orange-950/20 border border-orange-900/30"
+              : "text-cyan-400 bg-cyan-950/20 border border-cyan-900/30"
+          }`}>
+            {idea.holding_period === "day" ? "DAY" : "SWING"}
+          </span>
           <span className="text-gray-500 text-[10px]">
             {Math.round(idea.historical_win_rate * 100)}% hist. win
           </span>
@@ -95,10 +102,10 @@ export default function TradeAnalysisPanel({ data }: { data: TradeAnalysis | nul
       </div>
 
       {/* Two columns: Ideas + Sectors */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Trade Ideas</h3>
-          <div className="max-h-[300px] overflow-y-auto">
+          <div className="max-h-[400px] overflow-y-auto">
             {data.trade_ideas.map((idea, i) => (
               <IdeaRow key={i} idea={idea} />
             ))}
@@ -107,7 +114,7 @@ export default function TradeAnalysisPanel({ data }: { data: TradeAnalysis | nul
 
         <div>
           <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Sector Rotation</h3>
-          <div className="max-h-[200px] overflow-y-auto mb-3">
+          <div className="max-h-[250px] overflow-y-auto mb-3">
             {data.sector_analysis.map((s, i) => (
               <SectorCard key={i} sector={s} />
             ))}

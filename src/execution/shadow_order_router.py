@@ -61,9 +61,10 @@ class ShadowOrderRouter:
     def route_package(
         self,
         package: Dict[str, Any],
-        max_orders: int = 5,
+        max_orders: int = 999,
         min_confidence: float = 0.0,
         symbols_allowlist: Optional[List[str]] = None,
+        strategy_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Routes a package in shadow mode.
@@ -89,6 +90,7 @@ class ShadowOrderRouter:
             "global_blocks": package.get("global_blocks") or [],
             "candidate_count_in_package": len(candidates),
             "blocked_candidate_count_in_package": len(blocked),
+            "strategy_name": (strategy_config or {}).get("name") or (strategy_config or {}).get("holding_period"),
             "selected_candidates": [],
             "bound_order_attempts": [],
             "skipped_candidates": [],
@@ -142,7 +144,7 @@ class ShadowOrderRouter:
                 continue
 
             try:
-                order_req = self._candidate_to_order_request(package, cand)
+                order_req = self._candidate_to_order_request(package, cand, strategy_config=strategy_config)
 
                 # --- Risk gate check (impact budget + VaR) ---
                 gate_result = self._run_risk_gate(cand, order_req, package, route_summary)
@@ -189,6 +191,7 @@ class ShadowOrderRouter:
                     "strategy_style": cand.get("strategy_style"),
                     "template_key": cand.get("template_key"),
                     "direction": cand.get("direction"),
+                    "holding_period": cand.get("holding_period"),
                 })
 
                 broker_order = self.adapter.submit_order(intent["order_request"])
@@ -209,6 +212,7 @@ class ShadowOrderRouter:
                     "client_order_id": intent.get("client_order_id"),
                     "broker_order_id": ((updated.get("broker_binding") or {}).get("broker_order_id")),
                     "broker_status": ((updated.get("broker_state") or {}).get("status")) if updated.get("broker_state") else None,
+                    "holding_period": cand.get("holding_period"),
                     "shadow_mode": True,
                 }
                 route_summary["bound_order_attempts"].append(bound_row)
@@ -248,9 +252,10 @@ class ShadowOrderRouter:
     def route_package_file(
         self,
         package_path: Path,
-        max_orders: int = 5,
+        max_orders: int = 999,
         min_confidence: float = 0.0,
         symbols_allowlist: Optional[List[str]] = None,
+        strategy_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         package = json.loads(package_path.read_text(encoding="utf-8"))
         out = self.route_package(
@@ -258,6 +263,7 @@ class ShadowOrderRouter:
             max_orders=max_orders,
             min_confidence=min_confidence,
             symbols_allowlist=symbols_allowlist,
+            strategy_config=strategy_config,
         )
         return out
 
@@ -313,12 +319,13 @@ class ShadowOrderRouter:
 
         return None
 
-    def _candidate_to_order_request(self, package: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    def _candidate_to_order_request(self, package: Dict[str, Any], candidate: Dict[str, Any], strategy_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Convert candidate -> canonical broker order request.
         Conservative defaults:
-          - type: limit
-          - time_in_force: day
+          - type: limit (market if no price data)
+          - time_in_force: gtc for swing/macro trades, day for tactical
+          - extended_hours: true for swing trades (24/7 global coverage)
           - qty: derived from a small shadow sizing heuristic
         """
         symbol = candidate["symbol"]
@@ -339,15 +346,19 @@ class ShadowOrderRouter:
         fs = candidate.get("fill_sim_assessment") or {}
         exec_constraints = candidate.get("execution_constraints") or {}
 
-        # Shadow quantity sizing: small, bounded, confidence-aware
+        # Shadow quantity sizing: confidence-aware, strategy-dependent caps
+        is_medium_long = (strategy_config or {}).get("holding_period") in ("swing", "medium", "long")
         base_qty = 1
         if confidence >= 0.8:
-            base_qty = 3
+            base_qty = 10 if is_medium_long else 5
         elif confidence >= 0.65:
-            base_qty = 2
+            base_qty = 7 if is_medium_long else 3
+        elif confidence >= 0.5:
+            base_qty = 4 if is_medium_long else 2
 
         qty = max(1, int(round(base_qty * max(size_mult, 0.25))))
-        qty = min(qty, 10)  # keep shadow sizing bounded
+        qty_cap = 30 if is_medium_long else 20
+        qty = min(qty, qty_cap)
 
         # Limit price: if candidate has decision/reference price, use it.
         # Otherwise placeholder tiny limit may cause no fills in paper; for mock it's okay.
@@ -368,13 +379,27 @@ class ShadowOrderRouter:
             limit_price = None
 
         order_type = "limit" if limit_price else "market"
+
+        # Strategy-aware time_in_force and extended_hours
+        if strategy_config:
+            tif = str(strategy_config.get("time_in_force", "day")).lower()
+            ext_hours = bool(strategy_config.get("extended_hours", True))
+        else:
+            # Default: day trades with extended hours for pre/post-market
+            tif = "day"
+            ext_hours = True
+
+        # Alpaca constraint: extended_hours requires limit orders with day/gtc TIF
+        if ext_hours and order_type != "limit":
+            ext_hours = False
+
         order_request = {
             "symbol": symbol,
             "side": side,
             "type": order_type,
-            "time_in_force": "day",
+            "time_in_force": tif,
             "qty": qty,
-            "extended_hours": False,
+            "extended_hours": ext_hours,
             "shadow_mode": True,
         }
         if limit_price is not None:

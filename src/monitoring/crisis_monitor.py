@@ -60,9 +60,9 @@ def load_yaml_safe(path: Path) -> Dict[str, Any]:
 # --- Operating modes and thresholds ---
 MODES = ["NORMAL", "ELEVATED", "CRISIS", "MANUAL_REVIEW"]
 MODE_POLL_INTERVALS = {
-    "NORMAL": 900,       # 15 min
-    "ELEVATED": 300,     # 5 min
-    "CRISIS": 60,        # 1 min
+    "NORMAL": 300,       # 5 min (day-trading speed)
+    "ELEVATED": 120,     # 2 min
+    "CRISIS": 30,        # 30 sec
     "MANUAL_REVIEW": 0,  # paused (manual trigger only)
 }
 
@@ -96,6 +96,35 @@ class CrisisMonitor:
 
         # Alerting
         self.alerter = self._load_alerter()
+
+        # Dual-strategy manager and Telegram notifier
+        try:
+            from src.execution.strategy_manager import StrategyManager
+            self.strategy_manager = StrategyManager(repo_root)
+        except Exception:
+            self.strategy_manager = None
+
+        try:
+            from src.monitoring.telegram_notifier import TelegramNotifier
+            self.notifier = TelegramNotifier(repo_root)
+        except Exception:
+            self.notifier = None
+
+        # Start hourly position updates
+        if self.notifier and self.strategy_manager:
+            try:
+                self.notifier.start_hourly_updates(self._fetch_all_positions, self.strategy_manager)
+            except Exception:
+                pass
+
+        # Telegram command handlers (remote control via bot messages)
+        self.bot_manager = None
+        try:
+            from src.monitoring.telegram_bot_manager import TelegramBotManager
+            self.bot_manager = TelegramBotManager(repo_root)
+            self.bot_manager.start()
+        except Exception as e:
+            print(f"[{iso_now()}] Telegram bot manager failed to start: {e}", file=sys.stderr)
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -213,6 +242,7 @@ class CrisisMonitor:
             "shadow_execution_eligible": self._shadow_eligible(snapshot, time_window),
             "time_window": time_window,
             "bridge_summary": bridge_results.get("summary", {}),
+            "gss_signal": None,  # populated in step 8.7 if non-neutral
         }
 
         self.last_scorecard = scorecard
@@ -241,6 +271,82 @@ class CrisisMonitor:
                         self.alerter.send_shadow_execution_alert(shadow_result, scorecard)
                     except Exception:
                         pass
+
+        # 8.5. Position management: check profit targets and stop losses
+        try:
+            from src.execution.position_manager import PositionManager
+            pm = PositionManager(self.repo_root)
+            pm_result = pm.run_check()
+            if pm_result.get("actions_taken", 0) > 0:
+                self._log_event("position_management", {
+                    "cycle": self.cycle_count,
+                    "actions": pm_result.get("actions_taken", 0),
+                    "profits_taken": pm_result.get("profits_taken", 0),
+                    "stops_hit": pm_result.get("stops_hit", 0),
+                    "eod_flattened": pm_result.get("eod_flattened", 0),
+                })
+                if self.alerter:
+                    try:
+                        self._send_position_alert(pm_result)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[{iso_now()}] Position management error: {e}", file=sys.stderr)
+
+        # 8.7. GSS Signal Analysis: consciousness-market axis detection
+        try:
+            from src.alpha.gss_execution_engine import GSSExecutionEngine
+            gss = GSSExecutionEngine(self.repo_root)
+            gss_result = gss.analyze(snapshot, scorecard)
+
+            if gss_result.get("gss_signal") != "NEUTRAL":
+                self._log_event("gss_signal_detected", {
+                    "cycle": self.cycle_count,
+                    "signal": gss_result.get("gss_signal"),
+                    "action": gss_result.get("action"),
+                    "confidence": gss_result.get("confidence"),
+                    "reason": gss_result.get("reason"),
+                })
+
+                # Send Telegram alert for non-neutral GSS signals
+                if self.alerter:
+                    try:
+                        signal_val = gss_result.get("gss_signal", "UNKNOWN")
+                        action = gss_result.get("action", "UNKNOWN")
+                        reason = gss_result.get("reason", "")
+                        confidence = gss_result.get("confidence", 0)
+                        hedges = gss_result.get("hedge_recommendations", [])
+
+                        msg_lines = [
+                            f"GSS SIGNAL: {signal_val}",
+                            f"Action: {action}",
+                            f"Confidence: {confidence:.0%}",
+                            f"Reason: {reason}",
+                        ]
+                        if hedges:
+                            msg_lines.append(f"Hedge Recommendations: {len(hedges)}")
+                            for h in hedges[:5]:
+                                msg_lines.append(f"  - {h.get('symbol', '?')} {h.get('action', '?')}: {h.get('reason', '')[:60]}")
+
+                        self.alerter._dispatch(
+                            f"GSS: {signal_val}",
+                            "\n".join(msg_lines),
+                            level="warning" if signal_val in ("BLACK_SWAN_SHIELD", "GAMMA_SQUEEZE") else "info",
+                            extra={"event": "gss_signal", "signal": signal_val},
+                        )
+                    except Exception:
+                        pass
+
+                # Add GSS signal to scorecard for dashboard
+                scorecard["gss_signal"] = {
+                    "signal": gss_result.get("gss_signal"),
+                    "action": gss_result.get("action"),
+                    "confidence": gss_result.get("confidence"),
+                    "reason": gss_result.get("reason"),
+                    "hedge_count": len(gss_result.get("hedge_recommendations", [])),
+                }
+        except Exception as e:
+            print(f"[{iso_now()}] GSS analysis error: {e}", file=sys.stderr)
 
         # 9. Periodic performance summary (every 10 cycles)
         if self.cycle_count % 10 == 0:
@@ -332,6 +438,99 @@ class CrisisMonitor:
             bridge_errors.append(f"eia: {e}")
             results["freshness"]["eia"] = False
 
+        # GCP Consciousness bridge
+        try:
+            from src.bridges.gcp_consciousness_bridge import GCPConsciousnessBridge
+            gcpb = GCPConsciousnessBridge(self.repo_root)
+            gcp_data = gcpb.build_snapshot_section()
+            results["gcp_consciousness"] = gcp_data
+            results["freshness"]["gcp_consciousness"] = gcp_data.get("fresh", False)
+            results["summary"]["gcp_coherence_level"] = gcp_data.get("coherence_level", "unknown")
+        except Exception as e:
+            bridge_errors.append(f"gcp_consciousness: {e}")
+            results["freshness"]["gcp_consciousness"] = False
+
+        # Narrative Velocity bridge
+        try:
+            from src.bridges.narrative_velocity_bridge import NarrativeVelocityBridge
+            nvb = NarrativeVelocityBridge(self.repo_root)
+            finnhub_headlines = results.get("finnhub", [])
+            narrative_data = nvb.poll(finnhub_headlines=finnhub_headlines)
+            results["narrative_velocity"] = narrative_data
+            results["freshness"]["narrative_velocity"] = narrative_data.get("fresh", False)
+            results["summary"]["narrative_velocity_score"] = narrative_data.get("velocity_score", 0)
+        except Exception as e:
+            bridge_errors.append(f"narrative_velocity: {e}")
+            results["freshness"]["narrative_velocity"] = False
+
+        # Options Greeks bridge
+        try:
+            from src.bridges.options_greeks_bridge import OptionsGreeksBridge
+            ogb = OptionsGreeksBridge(self.repo_root)
+            greeks_data = ogb.build_snapshot_section()
+            results["options_greeks"] = greeks_data
+            results["freshness"]["options_greeks"] = greeks_data.get("fresh", False)
+            results["summary"]["put_call_ratio"] = greeks_data.get("put_call_ratio", 0)
+            results["summary"]["gamma_squeeze_risk"] = greeks_data.get("gamma_squeeze_risk", "low")
+        except Exception as e:
+            bridge_errors.append(f"options_greeks: {e}")
+            results["freshness"]["options_greeks"] = False
+
+        # Politician Alpha bridge
+        try:
+            from src.bridges.politician_alpha_bridge import PoliticianAlphaBridge
+            pab = PoliticianAlphaBridge(self.repo_root)
+            pol_data = pab.poll()
+            results["politician_alpha"] = pol_data
+            results["freshness"]["politician_alpha"] = pol_data.get("fresh", False)
+        except Exception as e:
+            bridge_errors.append(f"politician_alpha: {e}")
+            results["freshness"]["politician_alpha"] = False
+
+        # Fed Board bridge (free, no API key)
+        try:
+            from src.bridges.fed_board_bridge import FedBoardBridge
+            fbb = FedBoardBridge(self.repo_root)
+            fed_data = fbb.poll()
+            results["fed_board"] = fed_data
+            results["freshness"]["fed_board"] = fed_data.get("fresh", False) if isinstance(fed_data, dict) else bool(fed_data)
+        except Exception as e:
+            bridge_errors.append(f"fed_board: {e}")
+            results["freshness"]["fed_board"] = False
+
+        # Treasury OFAC bridge (free, no API key)
+        try:
+            from src.bridges.treasury_ofac_bridge import TreasuryOFACBridge
+            tob = TreasuryOFACBridge(self.repo_root)
+            ofac_data = tob.poll()
+            results["treasury_ofac"] = ofac_data
+            results["freshness"]["treasury_ofac"] = ofac_data.get("fresh", False) if isinstance(ofac_data, dict) else bool(ofac_data)
+        except Exception as e:
+            bridge_errors.append(f"treasury_ofac: {e}")
+            results["freshness"]["treasury_ofac"] = False
+
+        # White House Policy bridge (free, no API key)
+        try:
+            from src.bridges.whitehouse_policy_bridge import WhiteHousePolicyBridge
+            whb = WhiteHousePolicyBridge(self.repo_root)
+            wh_data = whb.poll()
+            results["whitehouse_policy"] = wh_data
+            results["freshness"]["whitehouse_policy"] = wh_data.get("fresh", False) if isinstance(wh_data, dict) else bool(wh_data)
+        except Exception as e:
+            bridge_errors.append(f"whitehouse_policy: {e}")
+            results["freshness"]["whitehouse_policy"] = False
+
+        # BLS Release bridge (free, optional API key)
+        try:
+            from src.bridges.bls_release_bridge import BLSReleaseBridge
+            blsb = BLSReleaseBridge(self.repo_root)
+            bls_data = blsb.poll()
+            results["bls_releases"] = bls_data
+            results["freshness"]["bls_releases"] = bls_data.get("fresh", False) if isinstance(bls_data, dict) else bool(bls_data)
+        except Exception as e:
+            bridge_errors.append(f"bls_releases: {e}")
+            results["freshness"]["bls_releases"] = False
+
         results["bridge_errors"] = bridge_errors
         fresh_count = sum(1 for v in results["freshness"].values() if v)
         total_bridges = len(results["freshness"])
@@ -349,6 +548,14 @@ class CrisisMonitor:
             "finnhub": bridge_results.get("finnhub", []),
             "fred": bridge_results.get("fred", []),
             "eia": bridge_results.get("eia", []),
+            "gcp_consciousness": bridge_results.get("gcp_consciousness", {}),
+            "narrative_velocity": bridge_results.get("narrative_velocity", {}),
+            "options_greeks": bridge_results.get("options_greeks", {}),
+            "politician_alpha": bridge_results.get("politician_alpha", {}),
+            "fed_board": bridge_results.get("fed_board", {}),
+            "treasury_ofac": bridge_results.get("treasury_ofac", {}),
+            "whitehouse_policy": bridge_results.get("whitehouse_policy", {}),
+            "bls_releases": bridge_results.get("bls_releases", {}),
             "data_freshness": bridge_results.get("freshness", {}),
             "fallback_mode": bridge_results.get("fallback_mode", False),
             "controls": {
@@ -446,11 +653,29 @@ class CrisisMonitor:
 
     # --- Shadow Execution ---
     def _run_shadow_execution(self, scorecard: Dict[str, Any], bridge_results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Run trade analysis → package → shadow order routing."""
+        """Run trade analysis → split by strategy → package → shadow order routing."""
         try:
             from src.alpha.trade_analysis_engine import TradeAnalysisEngine
             from src.execution.trade_idea_packager import TradeIdeaPackager
             from src.execution.shadow_order_router import ShadowOrderRouter
+
+            # Adaptive feedback loop: learn from past trades, adjust signal weights
+            try:
+                from src.execution.adaptive_feedback_loop import AdaptiveFeedbackLoop
+                feedback = AdaptiveFeedbackLoop(self.repo_root)
+                feedback_result = feedback.analyze_and_adjust()
+                learned_adjustments = feedback.get_signal_adjustments()
+                # Store feedback state in bridge_results for packager to use
+                bridge_results["_feedback_adjustments"] = learned_adjustments
+                bridge_results["_feedback_daily_target"] = feedback_result.get("daily_target", {})
+                if feedback_result.get("status") == "active":
+                    self._log_event("feedback_loop_active", {
+                        "trades_analyzed": feedback_result.get("trades_analyzed", 0),
+                        "adjustments_count": len(learned_adjustments),
+                        "daily_target": feedback_result.get("daily_target", {}),
+                    })
+            except Exception as e:
+                print(f"[{iso_now()}] Feedback loop error (non-fatal): {e}", file=sys.stderr)
 
             # Check for existing open orders to avoid duplicates
             existing_symbols = self._get_open_order_symbols()
@@ -483,24 +708,33 @@ class CrisisMonitor:
                 if not analysis["trade_ideas"]:
                     return None
 
-            # Package ideas into router format
+            # --- Dual-strategy routing ---
+            if self.strategy_manager:
+                return self._route_dual_strategy(
+                    analysis, scorecard, micro, engine,
+                    politician_alpha=bridge_results.get("politician_alpha"),
+                    bridge_signals=bridge_results,
+                )
+
+            # Fallback: original single-strategy pipeline
             packager = TradeIdeaPackager()
             package = packager.build_package(
                 trade_analysis=analysis,
                 scorecard=scorecard,
                 microstructure=micro,
-                max_ideas=3,  # conservative: max 3 ideas per cycle
+                max_ideas=10,
+                politician_alpha=bridge_results.get("politician_alpha"),
+                bridge_signals=bridge_results,
             )
 
             if not package.get("candidates") or package.get("global_blocks"):
                 return None
 
-            # Route through shadow order router
             router = ShadowOrderRouter(self.repo_root)
             result = router.route_package(
                 package=package,
-                max_orders=3,
-                min_confidence=0.3,
+                max_orders=999,
+                min_confidence=0.15,
             )
 
             return result
@@ -509,6 +743,140 @@ class CrisisMonitor:
             self._log_event("shadow_execution_error", {"error": str(e), "cycle": self.cycle_count})
             print(f"[{iso_now()}] Shadow execution error: {e}", file=sys.stderr)
             return None
+
+    def _route_dual_strategy(
+        self,
+        analysis: Dict[str, Any],
+        scorecard: Dict[str, Any],
+        micro: Dict[str, Any],
+        engine,
+        politician_alpha: Optional[Dict[str, Any]] = None,
+        bridge_signals: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Route trade ideas through day_trade and medium_long strategy pipelines."""
+        from src.execution.trade_idea_packager import TradeIdeaPackager
+        from src.execution.shadow_order_router import ShadowOrderRouter
+
+        sm = self.strategy_manager
+        split = sm.split_ideas_by_strategy(analysis["trade_ideas"])
+
+        combined_result: Dict[str, Any] = {
+            "submitted_open_or_ack_count": 0,
+            "selected_candidates": [],
+            "strategy_results": {},
+        }
+
+        for strategy_name, ideas in split.items():
+            if not ideas:
+                continue
+
+            strategy_cfg = sm.get_strategy_config(strategy_name)
+            max_ideas = strategy_cfg.get("max_ideas_per_cycle", 10)
+            max_orders = strategy_cfg.get("max_orders_per_cycle", 8)
+            tif = strategy_cfg.get("time_in_force", "day")
+            exec_mode = sm.get_execution_mode(strategy_name)
+            strategy_label = "Day Trade" if strategy_name == "day_trade" else "Medium/Long Hold"
+
+            # Build strategy-specific analysis
+            strategy_analysis = dict(analysis)
+            strategy_analysis["trade_ideas"] = ideas
+
+            # For medium_long, re-analyze with strategy_type hint if engine supports it
+            if strategy_name == "medium_long":
+                try:
+                    ml_analysis = engine.analyze(
+                        scorecard,
+                        previous_mode=None,
+                        microstructure=micro,
+                        strategy_type="medium_long",
+                    )
+                    if ml_analysis.get("trade_ideas"):
+                        strategy_analysis["trade_ideas"] = ml_analysis["trade_ideas"]
+                except TypeError:
+                    # engine.analyze doesn't support strategy_type kwarg yet
+                    pass
+
+            # Package ideas
+            packager = TradeIdeaPackager()
+            package = packager.build_package(
+                trade_analysis=strategy_analysis,
+                scorecard=scorecard,
+                microstructure=micro,
+                max_ideas=max_ideas,
+                politician_alpha=politician_alpha,
+                bridge_signals=bridge_signals,
+            )
+
+            if not package.get("candidates") or package.get("global_blocks"):
+                continue
+
+            # Apply time_in_force override for medium_long
+            if tif == "gtc":
+                for cand in package["candidates"]:
+                    cand["time_in_force"] = "gtc"
+
+            # Build order summary for notifications
+            order_summary = sm.build_order_summary(
+                package["candidates"], strategy_name, scorecard
+            )
+            formatted_msg = sm.format_telegram_order_alert(order_summary)
+
+            if exec_mode == "auto":
+                # Auto mode: submit orders and send instant notification
+                router = ShadowOrderRouter(self.repo_root)
+                result = router.route_package(
+                    package=package,
+                    max_orders=max_orders,
+                    min_confidence=0.15,
+                )
+
+                if result:
+                    submitted = result.get("submitted_open_or_ack_count", 0)
+                    combined_result["submitted_open_or_ack_count"] += submitted
+                    combined_result["selected_candidates"].extend(
+                        result.get("selected_candidates", [])
+                    )
+                    combined_result["strategy_results"][strategy_name] = result
+
+                    # Instant Telegram alert for auto-submitted orders
+                    if submitted > 0 and self.notifier:
+                        try:
+                            self.notifier.notify_new_orders(order_summary, formatted_msg)
+                        except Exception:
+                            pass
+
+                    sm.log_strategy_event("auto_orders_submitted", {
+                        "strategy": strategy_name,
+                        "orders_submitted": submitted,
+                        "candidates": len(result.get("selected_candidates", [])),
+                    })
+            else:
+                # Manual mode: do NOT submit orders, send for approval
+                if self.notifier:
+                    try:
+                        self.notifier.send_manual_mode_summary(order_summary, formatted_msg)
+                    except Exception:
+                        pass
+
+                sm.log_strategy_event("manual_approval_requested", {
+                    "strategy": strategy_name,
+                    "order_count": len(package["candidates"]),
+                })
+
+                combined_result["strategy_results"][strategy_name] = {
+                    "mode": "manual",
+                    "pending_approval": len(package["candidates"]),
+                }
+
+        if combined_result["submitted_open_or_ack_count"] > 0 or combined_result["strategy_results"]:
+            return combined_result
+        return None
+
+    def _fetch_all_positions(self):
+        """Fetch all open positions for the hourly updater."""
+        from src.execution.position_manager import PositionManager
+        pm = PositionManager(self.repo_root)
+        return pm._get_open_positions()
 
     def _get_open_order_symbols(self) -> set:
         """Get symbols with existing open orders or positions to avoid duplicates."""
@@ -531,6 +899,35 @@ class CrisisMonitor:
         return symbols
 
     # --- Alerting ---
+    def _send_position_alert(self, pm_result: Dict[str, Any]):
+        """Send Telegram alert when positions are closed by the position manager."""
+        actions = pm_result.get("actions_taken", 0)
+        profits = pm_result.get("profits_taken", 0)
+        stops = pm_result.get("stops_hit", 0)
+        eod = pm_result.get("eod_flattened", 0)
+
+        title = f"Position Manager: {actions} position(s) closed"
+
+        body = f"Profits taken: {profits} | Stops hit: {stops} | EOD flattened: {eod}\n"
+
+        for detail in pm_result.get("close_details", []):
+            symbol = detail.get("symbol", "?")
+            reason = detail.get("reason", "?")
+            plpc = detail.get("unrealized_plpc", 0)
+            pl = detail.get("unrealized_pl", 0)
+            body += f"  {symbol}: {reason} (P&L: {plpc:+.2f}%, ${pl:+,.2f})\n"
+
+        if pm_result.get("errors"):
+            body += f"Errors: {len(pm_result['errors'])}\n"
+
+        self.alerter._dispatch(title, body, level="info", extra={
+            "event": "position_management",
+            "actions": actions,
+            "profits_taken": profits,
+            "stops_hit": stops,
+            "eod_flattened": eod,
+        })
+
     def _load_alerter(self):
         try:
             from src.monitoring.alerting import AlertDispatcher
@@ -565,6 +962,16 @@ class CrisisMonitor:
     def _handle_shutdown(self, signum, frame):
         print(f"\n[{iso_now()}] Received signal {signum}, shutting down gracefully...")
         self.running = False
+        if self.notifier:
+            try:
+                self.notifier.stop_hourly_updates()
+            except Exception:
+                pass
+        if self.bot_manager:
+            try:
+                self.bot_manager.stop()
+            except Exception:
+                pass
 
 
 # --- CLI ---
