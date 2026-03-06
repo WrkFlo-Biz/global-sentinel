@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,8 +31,28 @@ from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
+ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
+LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
+LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
 
-app = FastAPI(title="Global Sentinel Dashboard API", version="5.1")
+
+dashboard_live_state_manager: Optional["DashboardLiveStateManager"] = None
+
+
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    global dashboard_live_state_manager
+    dashboard_live_state_manager = DashboardLiveStateManager()
+    await dashboard_live_state_manager.start()
+    try:
+        yield
+    finally:
+        if dashboard_live_state_manager is not None:
+            await dashboard_live_state_manager.stop()
+            dashboard_live_state_manager = None
+
+
+app = FastAPI(title="Global Sentinel Dashboard API", version="5.1", lifespan=app_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,6 +136,15 @@ def _iso_from_unix_timestamp(value: Any) -> Optional[str]:
         return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
     except Exception:
         return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -1030,6 +1060,9 @@ def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", 
     if len(accounts) == 1:
         try:
             hist = _get_cached_alpaca_history(accounts[0], period, timeframe)
+            if dashboard_live_state_manager is not None:
+                hist = dashboard_live_state_manager.augment_history_with_live_samples(hist, accounts[0]["label"])
+                hist["stream_health"] = dashboard_live_state_manager._stream_status_payload()
             hist["timestamp_utc"] = _utc_now_iso()
             return hist
         except Exception as e:
@@ -1055,6 +1088,7 @@ def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", 
     })
     merged.update(_freshness_summary(successful_histories))
     if dashboard_live_state_manager is not None:
+        merged = dashboard_live_state_manager.augment_history_with_live_samples(merged, account)
         merged["stream_health"] = dashboard_live_state_manager._stream_status_payload()
     return merged
 
@@ -1162,6 +1196,7 @@ def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
         if isinstance(detail, dict) and detail.get("status") != "error"
     ]))
     if dashboard_live_state_manager is not None:
+        payload = dashboard_live_state_manager.apply_live_market_prices(payload)
         payload["stream_health"] = dashboard_live_state_manager._stream_status_payload()
     return payload
 
@@ -1327,6 +1362,10 @@ def _alpaca_trade_stream_url(acct: Dict[str, str]) -> str:
     return "wss://api.alpaca.markets/stream"
 
 
+def _alpaca_market_data_stream_url() -> str:
+    return f"wss://stream.data.alpaca.markets/v2/{ALPACA_STOCK_STREAM_FEED}"
+
+
 def _decode_ws_payload(message: Any) -> Optional[Dict[str, Any]]:
     try:
         if isinstance(message, bytes):
@@ -1369,14 +1408,23 @@ class DashboardLiveStateManager:
         self._latest_portfolio_signature: Optional[str] = None
         self._latest_portfolio_history_signature: Optional[str] = None
         self._stream_status: Dict[str, Dict[str, Any]] = {}
+        self._held_symbols_by_account: Dict[str, set[str]] = {}
+        self._latest_market_data: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._shared_market_data: Dict[str, Dict[str, Any]] = {}
+        self._live_equity_samples: Dict[str, List[Dict[str, Any]]] = {}
 
     def _stream_status_payload(self) -> Dict[str, Any]:
         return {
             label: {
                 "status": details.get("status"),
+                "trade_updates_status": details.get("trade_updates_status"),
+                "market_data_status": details.get("market_data_status"),
                 "last_event_utc": details.get("last_event_utc"),
+                "last_quote_utc": details.get("last_quote_utc"),
+                "last_trade_utc": details.get("last_trade_utc"),
                 "last_error": details.get("last_error"),
                 "reconnect_count": details.get("reconnect_count", 0),
+                "subscribed_symbols": sorted(details.get("subscribed_symbols", [])),
             }
             for label, details in self._stream_status.items()
         }
@@ -1387,17 +1435,213 @@ class DashboardLiveStateManager:
     def get_latest_portfolio_history_intraday(self) -> Optional[Dict[str, Any]]:
         return copy.deepcopy(self._latest_portfolio_history_intraday) if self._latest_portfolio_history_intraday else None
 
+    def apply_live_market_prices(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not payload or payload.get("error"):
+            return payload
+
+        live_timestamps: List[datetime] = []
+        total_equity = 0.0
+        total_portfolio_value = 0.0
+        total_cash = 0.0
+        total_buying_power = 0.0
+        all_positions: List[Dict[str, Any]] = []
+
+        for account in payload.get("accounts") or []:
+            if account.get("status") == "error":
+                continue
+            label = str(account.get("label") or "")
+            total_cash += _safe_float(account.get("cash"))
+            total_buying_power += _safe_float(account.get("buying_power"))
+            live_market_value = 0.0
+            saw_live_price = False
+
+            for position in account.get("positions") or []:
+                position["account"] = label
+                qty = abs(_safe_float(position.get("qty")))
+                if qty <= 0:
+                    all_positions.append(position)
+                    continue
+                side = str(position.get("side") or "long").lower()
+                mark_price, mark_source, mark_timestamp = self._mark_price_for_position(label, position)
+                if mark_price is None or mark_price <= 0:
+                    mark_price = _safe_float(position.get("current_price"))
+                    mark_source = str(position.get("pricing_source") or "alpaca_rest")
+                    mark_timestamp = position.get("pricing_timestamp_utc") or position.get("timestamp_utc")
+                else:
+                    saw_live_price = True
+
+                avg_entry = _safe_float(position.get("avg_entry_price"))
+                signed_qty = -qty if side == "short" else qty
+                market_value = signed_qty * mark_price
+                unrealized_pl = ((avg_entry - mark_price) if side == "short" else (mark_price - avg_entry)) * qty
+                cost_basis = avg_entry * qty
+                unrealized_plpc = (unrealized_pl / cost_basis) if cost_basis else 0.0
+
+                position["current_price"] = mark_price
+                position["market_value"] = market_value
+                position["unrealized_pl"] = unrealized_pl
+                position["unrealized_plpc"] = unrealized_plpc
+                position["pricing_source"] = mark_source
+                if mark_timestamp:
+                    position["pricing_timestamp_utc"] = mark_timestamp
+                    parsed = _parse_iso_datetime(mark_timestamp)
+                    if parsed is not None:
+                        live_timestamps.append(parsed)
+                live_market_value += market_value
+                all_positions.append(position)
+
+            account["position_count"] = len(account.get("positions") or [])
+            account["portfolio_value"] = _safe_float(account.get("cash")) + live_market_value
+            account["equity"] = account["portfolio_value"]
+            account["live_market_value"] = live_market_value
+            account["pricing_source"] = "market_data_stream" if saw_live_price else "alpaca_rest"
+            total_equity += _safe_float(account["equity"])
+            total_portfolio_value += _safe_float(account["portfolio_value"])
+
+        payload["positions"] = all_positions
+        payload["cash"] = total_cash
+        payload["buying_power"] = total_buying_power
+        payload["portfolio_value"] = total_portfolio_value
+        payload["equity"] = total_equity
+        payload["position_count_total"] = len(all_positions)
+        if isinstance(payload.get("consistency"), dict):
+            payload["consistency"]["position_count_total"] = len(all_positions)
+            payload["consistency"]["position_count_total_from_accounts"] = sum(
+                int(value) for value in (payload.get("position_count_by_account") or {}).values()
+            )
+            payload["consistency"]["positions_match_total"] = (
+                payload["consistency"]["position_count_total_from_accounts"] == len(all_positions)
+            )
+
+        if live_timestamps:
+            live_latest = max(live_timestamps).isoformat()
+            payload["source_timestamp_utc"] = live_latest
+            payload["latest_source_timestamp_utc"] = live_latest
+            payload["pricing_source"] = "market_data_stream"
+        return payload
+
+    def augment_history_with_live_samples(self, payload: Dict[str, Any], account: str) -> Dict[str, Any]:
+        if not payload or payload.get("error"):
+            return payload
+        if payload.get("requested_timeframe") != "1H":
+            return payload
+
+        sample_key = account if account != "all" else "all"
+        samples = self._live_equity_samples.get(sample_key) or []
+        if not samples:
+            return payload
+
+        timestamps = list(payload.get("timestamp") or [])
+        equities = list(payload.get("equity") or [])
+        profits = list(payload.get("profit_loss") or [])
+        profit_pcts = list(payload.get("profit_loss_pct") or [])
+        base_value = _safe_float(payload.get("base_value"), equities[0] if equities else 0.0)
+        last_ts = int(timestamps[-1]) if timestamps else 0
+        appended = 0
+
+        for sample in samples:
+            sample_ts = int(sample.get("timestamp") or 0)
+            if sample_ts <= last_ts:
+                continue
+            equity = _safe_float(sample.get("equity"))
+            pl = equity - base_value
+            timestamps.append(sample_ts)
+            equities.append(equity)
+            profits.append(pl)
+            profit_pcts.append((pl / base_value) if base_value else 0.0)
+            appended += 1
+
+        if appended:
+            payload["timestamp"] = timestamps
+            payload["equity"] = equities
+            payload["profit_loss"] = profits
+            payload["profit_loss_pct"] = profit_pcts
+            live_latest = _iso_from_unix_timestamp(timestamps[-1])
+            if live_latest:
+                payload["source_timestamp_utc"] = live_latest
+                payload["latest_source_timestamp_utc"] = live_latest
+            payload["live_sample_count"] = len(samples)
+            payload["live_augmented"] = True
+        return payload
+
+    def _update_held_symbols_from_portfolio(self, payload: Dict[str, Any]) -> None:
+        held_symbols: Dict[str, set[str]] = {}
+        for account in payload.get("accounts") or []:
+            label = str(account.get("label") or "")
+            held_symbols[label] = {
+                str(position.get("symbol") or "").upper()
+                for position in account.get("positions") or []
+                if position.get("symbol")
+            }
+        self._held_symbols_by_account = held_symbols
+
+    def _mark_price_for_position(self, label: str, position: Dict[str, Any]) -> tuple[Optional[float], Optional[str], Optional[str]]:
+        symbol = str(position.get("symbol") or "").upper()
+        if not symbol:
+            return None, None, None
+        market_entry = ((self._latest_market_data.get(label) or {}).get(symbol) or {})
+        if not market_entry:
+            market_entry = self._shared_market_data.get(symbol) or {}
+        trade_price = _safe_float(market_entry.get("trade_price"))
+        trade_ts = market_entry.get("trade_timestamp_utc")
+        if trade_price > 0:
+            return trade_price, "market_data_trade", trade_ts
+        bid_price = _safe_float(market_entry.get("bid_price"))
+        ask_price = _safe_float(market_entry.get("ask_price"))
+        quote_ts = market_entry.get("quote_timestamp_utc")
+        if bid_price > 0 and ask_price > 0:
+            return (bid_price + ask_price) / 2.0, "market_data_quote_mid", quote_ts
+        if bid_price > 0:
+            return bid_price, "market_data_bid", quote_ts
+        if ask_price > 0:
+            return ask_price, "market_data_ask", quote_ts
+        return None, None, None
+
+    def _append_live_sample(self, key: str, equity: float) -> None:
+        now_dt = _utc_now()
+        now_unix = int(now_dt.timestamp())
+        samples = self._live_equity_samples.setdefault(key, [])
+        if samples:
+            last = samples[-1]
+            if now_unix - int(last.get("timestamp") or 0) < LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS:
+                last["timestamp"] = now_unix
+                last["timestamp_utc"] = now_dt.isoformat()
+                last["equity"] = equity
+                return
+        samples.append({
+            "timestamp": now_unix,
+            "timestamp_utc": now_dt.isoformat(),
+            "equity": equity,
+        })
+        cutoff = now_unix - int(LIVE_EQUITY_SAMPLE_RETENTION_SECONDS)
+        self._live_equity_samples[key] = [sample for sample in samples if int(sample.get("timestamp") or 0) >= cutoff]
+
+    def _record_live_equity_samples(self, payload: Dict[str, Any]) -> None:
+        self._append_live_sample("all", _safe_float(payload.get("equity")))
+        for account in payload.get("accounts") or []:
+            label = str(account.get("label") or "")
+            if not label or account.get("status") == "error":
+                continue
+            self._append_live_sample(label, _safe_float(account.get("equity")))
+
     async def start(self):
         accounts = _get_alpaca_accounts()
         self._tasks.append(asyncio.create_task(self._poll_loop(accounts)))
         for acct in accounts:
             self._stream_status[acct["label"]] = {
                 "status": "starting",
+                "trade_updates_status": "starting",
+                "market_data_status": "starting",
                 "last_event_utc": None,
+                "last_quote_utc": None,
+                "last_trade_utc": None,
                 "last_error": None,
                 "reconnect_count": 0,
+                "subscribed_symbols": [],
             }
             self._tasks.append(asyncio.create_task(self._trade_updates_loop(acct)))
+        if accounts:
+            self._tasks.append(asyncio.create_task(self._market_data_loop(accounts)))
         await self.refresh_and_broadcast(force=True, reason="startup")
 
     async def stop(self):
@@ -1446,6 +1690,7 @@ class DashboardLiveStateManager:
             try:
                 details = self._stream_status.setdefault(label, {})
                 details["status"] = "connecting"
+                details["trade_updates_status"] = "connecting"
                 details["last_error"] = None
                 details["last_event_utc"] = _utc_now_iso()
                 ws = await websockets.connect(
@@ -1481,6 +1726,7 @@ class DashboardLiveStateManager:
                 }))
 
                 details["status"] = "connected"
+                details["trade_updates_status"] = "connected"
                 details["last_event_utc"] = _utc_now_iso()
                 reconnect_delay = 1.0
 
@@ -1493,11 +1739,13 @@ class DashboardLiveStateManager:
                         continue
                     if stream_name == "listening":
                         details["status"] = "listening"
+                        details["trade_updates_status"] = "listening"
                         continue
                     if stream_name != "trade_updates":
                         continue
 
                     details["status"] = "event"
+                    details["trade_updates_status"] = "event"
                     event = str((data.get("data") or {}).get("event") or "")
                     if event:
                         details["last_event"] = event
@@ -1518,9 +1766,158 @@ class DashboardLiveStateManager:
             except Exception as e:
                 details = self._stream_status.setdefault(label, {})
                 details["status"] = "error"
+                details["trade_updates_status"] = "error"
                 details["last_error"] = str(e)
                 details["last_event_utc"] = _utc_now_iso()
                 details["reconnect_count"] = int(details.get("reconnect_count", 0)) + 1
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=reconnect_delay)
+                except asyncio.TimeoutError:
+                    reconnect_delay = min(reconnect_delay * 2.0, 30.0)
+                    continue
+
+    async def _market_data_loop(self, accounts: List[Dict[str, str]]):
+        try:
+            import websockets
+        except Exception as e:
+            for details in self._stream_status.values():
+                details["market_data_status"] = "unavailable"
+                details["last_error"] = f"websockets import failed: {e}"
+                details["last_event_utc"] = _utc_now_iso()
+            return
+
+        reconnect_delay = 1.0
+        current_subscribed: set[str] = set()
+        acct_index = 0
+        while not self._stop_event.is_set():
+            ws = None
+            acct = accounts[acct_index % len(accounts)]
+            label = acct["label"]
+            try:
+                for details in self._stream_status.values():
+                    details["market_data_status"] = "connecting"
+                    details["last_error"] = None
+                    details["market_data_key_label"] = label
+                ws = await websockets.connect(
+                    _alpaca_market_data_stream_url(),
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                    max_queue=512,
+                )
+                await ws.send(json.dumps({
+                    "action": "auth",
+                    "key": acct["api_key"],
+                    "secret": acct["api_secret"],
+                }))
+
+                authorized = False
+                auth_deadline = asyncio.get_running_loop().time() + 10.0
+                while asyncio.get_running_loop().time() < auth_deadline and not authorized:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                    items = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+                    if not isinstance(items, list):
+                        items = [items]
+                    for item in items:
+                        if item.get("T") == "success" and item.get("msg") == "authenticated":
+                            authorized = True
+                            break
+                        if item.get("T") == "error":
+                            raise RuntimeError(str(item.get("msg") or "market data auth failed"))
+                if not authorized:
+                    raise RuntimeError(f"{label} auth timeout on Alpaca market data stream")
+
+                for details in self._stream_status.values():
+                    details["market_data_status"] = "connected"
+                reconnect_delay = 1.0
+
+                while not self._stop_event.is_set():
+                    desired_symbols = set().union(*self._held_symbols_by_account.values()) if self._held_symbols_by_account else set()
+                    add_symbols = desired_symbols - current_subscribed
+                    remove_symbols = current_subscribed - desired_symbols
+                    if add_symbols:
+                        await ws.send(json.dumps({
+                            "action": "subscribe",
+                            "trades": sorted(add_symbols),
+                            "quotes": sorted(add_symbols),
+                        }))
+                    if remove_symbols:
+                        await ws.send(json.dumps({
+                            "action": "unsubscribe",
+                            "trades": sorted(remove_symbols),
+                            "quotes": sorted(remove_symbols),
+                        }))
+                    if add_symbols or remove_symbols:
+                        current_subscribed = desired_symbols
+                        for details in self._stream_status.values():
+                            details["subscribed_symbols"] = sorted(current_subscribed)
+
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    items = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+                    if not isinstance(items, list):
+                        items = [items]
+
+                    saw_market_update = False
+                    for item in items:
+                        item_type = str(item.get("T") or "")
+                        if item_type == "subscription":
+                            trades = item.get("trades") or []
+                            quotes = item.get("quotes") or []
+                            subscribed_symbols = sorted(set(trades) | set(quotes))
+                            for details in self._stream_status.values():
+                                details["market_data_status"] = "listening"
+                                details["subscribed_symbols"] = subscribed_symbols
+                            current_subscribed = set(subscribed_symbols)
+                            continue
+                        if item_type == "success":
+                            continue
+                        if item_type == "error":
+                            raise RuntimeError(str(item.get("msg") or "market data stream error"))
+                        symbol = str(item.get("S") or "").upper()
+                        if not symbol:
+                            continue
+                        for details in self._stream_status.values():
+                            details["market_data_status"] = "listening"
+                        symbol_entry = self._shared_market_data.setdefault(symbol, {})
+                        if item_type == "t":
+                            symbol_entry["trade_price"] = _safe_float(item.get("p"))
+                            symbol_entry["trade_timestamp_utc"] = str(item.get("t") or _utc_now_iso())
+                            for details in self._stream_status.values():
+                                details["last_trade_utc"] = symbol_entry["trade_timestamp_utc"]
+                            saw_market_update = True
+                        elif item_type == "q":
+                            symbol_entry["bid_price"] = _safe_float(item.get("bp"))
+                            symbol_entry["ask_price"] = _safe_float(item.get("ap"))
+                            symbol_entry["quote_timestamp_utc"] = str(item.get("t") or _utc_now_iso())
+                            for details in self._stream_status.values():
+                                details["last_quote_utc"] = symbol_entry["quote_timestamp_utc"]
+                            saw_market_update = True
+
+                    if saw_market_update:
+                        for details in self._stream_status.values():
+                            details["last_event_utc"] = _utc_now_iso()
+                        await self.refresh_and_broadcast(force=False, reason=f"market_data:{label}")
+            except asyncio.CancelledError:
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                error_text = str(e)
+                for details in self._stream_status.values():
+                    details["market_data_status"] = "error"
+                    details["last_error"] = error_text
+                    details["last_event_utc"] = _utc_now_iso()
+                    details["reconnect_count"] = int(details.get("reconnect_count", 0)) + 1
+                current_subscribed = set()
+                if "connection limit exceeded" in error_text.lower() and accounts:
+                    acct_index = (acct_index + 1) % len(accounts)
                 try:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=reconnect_delay)
                 except asyncio.TimeoutError:
@@ -1535,6 +1932,10 @@ class DashboardLiveStateManager:
             "1H",
             "all",
         )
+        portfolio_payload = self.apply_live_market_prices(portfolio_payload)
+        self._update_held_symbols_from_portfolio(portfolio_payload)
+        self._record_live_equity_samples(portfolio_payload)
+        portfolio_history_intraday = self.augment_history_with_live_samples(portfolio_history_intraday, "all")
         portfolio_payload["stream_health"] = self._stream_status_payload()
         portfolio_history_intraday["stream_health"] = self._stream_status_payload()
 
@@ -1558,24 +1959,6 @@ class DashboardLiveStateManager:
                 "portfolio_history_intraday": portfolio_history_intraday,
                 "stream_refresh_reason": reason,
             })
-
-
-dashboard_live_state_manager: Optional[DashboardLiveStateManager] = None
-
-
-@app.on_event("startup")
-async def _startup_dashboard_live_state():
-    global dashboard_live_state_manager
-    dashboard_live_state_manager = DashboardLiveStateManager()
-    await dashboard_live_state_manager.start()
-
-
-@app.on_event("shutdown")
-async def _shutdown_dashboard_live_state():
-    global dashboard_live_state_manager
-    if dashboard_live_state_manager is not None:
-        await dashboard_live_state_manager.stop()
-        dashboard_live_state_manager = None
 
 
 @app.websocket("/ws")
