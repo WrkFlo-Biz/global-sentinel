@@ -11,9 +11,11 @@ WorkingDirectory=/opt/global-sentinel
 EnvironmentFile=/opt/global-sentinel/.env
 Environment=GS_REPO_ROOT=/opt/global-sentinel
 Environment=PATH=/home/openclaw/.local/bin:/usr/bin:/bin
-ExecStart=/home/openclaw/.local/bin/uvicorn dashboard.api.server:app --host 0.0.0.0 --port 8501
+ExecStart=/home/openclaw/.local/bin/uvicorn dashboard.api.server:app --host 0.0.0.0 --port 8501 --timeout-graceful-shutdown 5
 Restart=always
 RestartSec=10
+TimeoutStopSec=15
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target

@@ -16,6 +16,11 @@ interface EquityPoint {
 }
 
 const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
+type PortfolioRefreshEventDetail = {
+  portfolio?: unknown;
+  portfolio_history_intraday?: PortfolioHistoryData | null;
+  received_at_utc?: string;
+};
 
 // Period config: label, Alpaca period param, Alpaca timeframe param, isIntraday
 const PERIODS: { label: string; period: string; timeframe: string; intraday: boolean }[] = [
@@ -112,6 +117,24 @@ export default function EquityCurve() {
   const REFRESH_MS = selected.intraday ? 30000 : 120000;
   const freshnessLabel = formatFreshness(sourceTimestampUtc, cacheStatus, cacheAgeMs);
 
+  const applyHistory = useCallback((hist: PortfolioHistoryData) => {
+    const points: EquityPoint[] = [];
+    for (let i = 0; i < hist.timestamp.length; i++) {
+      points.push({
+        timestamp: hist.timestamp[i],
+        equity: hist.equity[i],
+        profit_loss: hist.profit_loss[i],
+        profit_loss_pct: hist.profit_loss_pct[i],
+        base_value: hist.base_value,
+      });
+    }
+    setData(points);
+    setError(null);
+    setSourceTimestampUtc(hist.source_timestamp_utc || hist.latest_source_timestamp_utc || hist.timestamp_utc);
+    setCacheStatus(hist.cache_status);
+    setCacheAgeMs(hist.cache_age_ms);
+  }, []);
+
   const fetchHistory = useCallback(async () => {
     try {
       const hist: PortfolioHistoryData = await api.portfolioHistory(selected.period, selected.timeframe, "all");
@@ -119,33 +142,25 @@ export default function EquityCurve() {
         setError(hist.error);
         return;
       }
-      const points: EquityPoint[] = [];
-      for (let i = 0; i < hist.timestamp.length; i++) {
-        points.push({
-          timestamp: hist.timestamp[i],
-          equity: hist.equity[i],
-          profit_loss: hist.profit_loss[i],
-          profit_loss_pct: hist.profit_loss_pct[i],
-          base_value: hist.base_value,
-        });
-      }
-      setData(points);
-      setError(null);
-      setSourceTimestampUtc(hist.source_timestamp_utc || hist.latest_source_timestamp_utc || hist.timestamp_utc);
-      setCacheStatus(hist.cache_status);
-      setCacheAgeMs(hist.cache_age_ms);
+      applyHistory(hist);
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, [selected]);
+  }, [applyHistory, selected]);
 
   useEffect(() => {
     setLoading(true);
     fetchHistory();
     const interval = setInterval(fetchHistory, REFRESH_MS);
-    const handlePortfolioRefresh = () => {
+    const handlePortfolioRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<PortfolioRefreshEventDetail>).detail;
+      const streamedHistory = detail?.portfolio_history_intraday;
+      if (selected.period === "1D" && selected.timeframe === "1H" && streamedHistory && !streamedHistory.error) {
+        applyHistory(streamedHistory);
+        return;
+      }
       fetchHistory();
     };
     window.addEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
@@ -153,7 +168,7 @@ export default function EquityCurve() {
       clearInterval(interval);
       window.removeEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
     };
-  }, [fetchHistory, REFRESH_MS]);
+  }, [applyHistory, fetchHistory, REFRESH_MS, selected.period, selected.timeframe]);
 
   useEffect(() => {
     const interval = setInterval(() => {

@@ -1054,6 +1054,8 @@ def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", 
         "timestamp_utc": _utc_now_iso(),
     })
     merged.update(_freshness_summary(successful_histories))
+    if dashboard_live_state_manager is not None:
+        merged["stream_health"] = dashboard_live_state_manager._stream_status_payload()
     return merged
 
 
@@ -1159,6 +1161,8 @@ def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
         detail for detail in account_details
         if isinstance(detail, dict) and detail.get("status") != "error"
     ]))
+    if dashboard_live_state_manager is not None:
+        payload["stream_health"] = dashboard_live_state_manager._stream_status_payload()
     return payload
 
 
@@ -1316,6 +1320,264 @@ def _portfolio_history_signature(payload: Dict[str, Any]) -> str:
     )
 
 
+def _alpaca_trade_stream_url(acct: Dict[str, str]) -> str:
+    base_url = str(acct.get("base_url") or "").lower()
+    if "paper-api.alpaca.markets" in base_url:
+        return "wss://paper-api.alpaca.markets/stream"
+    return "wss://api.alpaca.markets/stream"
+
+
+def _decode_ws_payload(message: Any) -> Optional[Dict[str, Any]]:
+    try:
+        if isinstance(message, bytes):
+            message = message.decode("utf-8")
+        data = json.loads(message)
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _refresh_account_snapshot_sync(
+    acct: Dict[str, str],
+    history_specs: Optional[List[tuple[str, str]]] = None,
+) -> Dict[str, Any]:
+    history_specs = history_specs or [("1D", "1H"), ("1M", "1D")]
+    account_payload = _fetch_alpaca_account(acct)
+    _cache_store(f"alpaca_account:{acct['label']}", account_payload)
+
+    refreshed_histories: Dict[str, Any] = {}
+    for period, timeframe in history_specs:
+        hist = _fetch_alpaca_history(acct, period, timeframe)
+        _cache_store(f"alpaca_history:{acct['label']}:{period}:{timeframe}", hist)
+        refreshed_histories[f"{period}:{timeframe}"] = hist
+
+    return {
+        "label": acct["label"],
+        "account": account_payload,
+        "histories": refreshed_histories,
+    }
+
+
+class DashboardLiveStateManager:
+    def __init__(self):
+        self._stop_event = asyncio.Event()
+        self._tasks: List[asyncio.Task[Any]] = []
+        self._latest_portfolio: Optional[Dict[str, Any]] = None
+        self._latest_portfolio_history_intraday: Optional[Dict[str, Any]] = None
+        self._latest_portfolio_signature: Optional[str] = None
+        self._latest_portfolio_history_signature: Optional[str] = None
+        self._stream_status: Dict[str, Dict[str, Any]] = {}
+
+    def _stream_status_payload(self) -> Dict[str, Any]:
+        return {
+            label: {
+                "status": details.get("status"),
+                "last_event_utc": details.get("last_event_utc"),
+                "last_error": details.get("last_error"),
+                "reconnect_count": details.get("reconnect_count", 0),
+            }
+            for label, details in self._stream_status.items()
+        }
+
+    def get_latest_portfolio(self) -> Optional[Dict[str, Any]]:
+        return copy.deepcopy(self._latest_portfolio) if self._latest_portfolio else None
+
+    def get_latest_portfolio_history_intraday(self) -> Optional[Dict[str, Any]]:
+        return copy.deepcopy(self._latest_portfolio_history_intraday) if self._latest_portfolio_history_intraday else None
+
+    async def start(self):
+        accounts = _get_alpaca_accounts()
+        self._tasks.append(asyncio.create_task(self._poll_loop(accounts)))
+        for acct in accounts:
+            self._stream_status[acct["label"]] = {
+                "status": "starting",
+                "last_event_utc": None,
+                "last_error": None,
+                "reconnect_count": 0,
+            }
+            self._tasks.append(asyncio.create_task(self._trade_updates_loop(acct)))
+        await self.refresh_and_broadcast(force=True, reason="startup")
+
+    async def stop(self):
+        self._stop_event.set()
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+    async def _poll_loop(self, accounts: List[Dict[str, str]]):
+        history_counter = 0
+        while not self._stop_event.is_set():
+            history_specs = [("1D", "1H")]
+            if history_counter % 4 == 0:
+                history_specs.append(("1M", "1D"))
+            for acct in accounts:
+                try:
+                    await asyncio.to_thread(_refresh_account_snapshot_sync, acct, history_specs)
+                except Exception as e:
+                    details = self._stream_status.setdefault(acct["label"], {})
+                    details["last_error"] = str(e)
+                    details["status"] = "poll_error"
+                    details["last_event_utc"] = _utc_now_iso()
+            await self.refresh_and_broadcast(force=False, reason="poll")
+            history_counter += 1
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _trade_updates_loop(self, acct: Dict[str, str]):
+        try:
+            import websockets
+        except Exception as e:
+            details = self._stream_status.setdefault(acct["label"], {})
+            details["status"] = "stream_unavailable"
+            details["last_error"] = f"websockets import failed: {e}"
+            details["last_event_utc"] = _utc_now_iso()
+            return
+
+        label = acct["label"]
+        reconnect_delay = 1.0
+        while not self._stop_event.is_set():
+            ws = None
+            try:
+                details = self._stream_status.setdefault(label, {})
+                details["status"] = "connecting"
+                details["last_error"] = None
+                details["last_event_utc"] = _utc_now_iso()
+                ws = await websockets.connect(
+                    _alpaca_trade_stream_url(acct),
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                    max_queue=128,
+                )
+                await ws.send(json.dumps({
+                    "action": "auth",
+                    "key": acct["api_key"],
+                    "secret": acct["api_secret"],
+                }))
+
+                auth_deadline = asyncio.get_running_loop().time() + 10.0
+                authorized = False
+                while asyncio.get_running_loop().time() < auth_deadline and not authorized:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                    data = _decode_ws_payload(raw) or {}
+                    if data.get("stream") == "authorization":
+                        status = ((data.get("data") or {}).get("status") or "").lower()
+                        if status == "authorized":
+                            authorized = True
+                            break
+                        raise RuntimeError(f"{label} unauthorized on Alpaca trade stream")
+                if not authorized:
+                    raise RuntimeError(f"{label} auth timeout on Alpaca trade stream")
+
+                await ws.send(json.dumps({
+                    "action": "listen",
+                    "data": {"streams": ["trade_updates"]},
+                }))
+
+                details["status"] = "connected"
+                details["last_event_utc"] = _utc_now_iso()
+                reconnect_delay = 1.0
+
+                while not self._stop_event.is_set():
+                    raw = await ws.recv()
+                    data = _decode_ws_payload(raw) or {}
+                    details["last_event_utc"] = _utc_now_iso()
+                    stream_name = str(data.get("stream") or "")
+                    if stream_name == "authorization":
+                        continue
+                    if stream_name == "listening":
+                        details["status"] = "listening"
+                        continue
+                    if stream_name != "trade_updates":
+                        continue
+
+                    details["status"] = "event"
+                    event = str((data.get("data") or {}).get("event") or "")
+                    if event:
+                        details["last_event"] = event
+
+                    await asyncio.to_thread(
+                        _refresh_account_snapshot_sync,
+                        acct,
+                        [("1D", "1H"), ("1M", "1D")],
+                    )
+                    await self.refresh_and_broadcast(force=False, reason=f"trade_update:{label}")
+            except asyncio.CancelledError:
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                details = self._stream_status.setdefault(label, {})
+                details["status"] = "error"
+                details["last_error"] = str(e)
+                details["last_event_utc"] = _utc_now_iso()
+                details["reconnect_count"] = int(details.get("reconnect_count", 0)) + 1
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=reconnect_delay)
+                except asyncio.TimeoutError:
+                    reconnect_delay = min(reconnect_delay * 2.0, 30.0)
+                    continue
+
+    async def refresh_and_broadcast(self, force: bool, reason: str):
+        portfolio_payload = await asyncio.to_thread(_build_portfolio_payload, "all")
+        portfolio_history_intraday = await asyncio.to_thread(
+            _build_portfolio_history_payload,
+            "1D",
+            "1H",
+            "all",
+        )
+        portfolio_payload["stream_health"] = self._stream_status_payload()
+        portfolio_history_intraday["stream_health"] = self._stream_status_payload()
+
+        portfolio_sig = _portfolio_signature(portfolio_payload)
+        portfolio_history_sig = _portfolio_history_signature(portfolio_history_intraday)
+        changed = (
+            force
+            or portfolio_sig != self._latest_portfolio_signature
+            or portfolio_history_sig != self._latest_portfolio_history_signature
+        )
+
+        self._latest_portfolio = portfolio_payload
+        self._latest_portfolio_history_intraday = portfolio_history_intraday
+        self._latest_portfolio_signature = portfolio_sig
+        self._latest_portfolio_history_signature = portfolio_history_sig
+
+        if changed:
+            await manager.broadcast({
+                "type": "update",
+                "portfolio": portfolio_payload,
+                "portfolio_history_intraday": portfolio_history_intraday,
+                "stream_refresh_reason": reason,
+            })
+
+
+dashboard_live_state_manager: Optional[DashboardLiveStateManager] = None
+
+
+@app.on_event("startup")
+async def _startup_dashboard_live_state():
+    global dashboard_live_state_manager
+    dashboard_live_state_manager = DashboardLiveStateManager()
+    await dashboard_live_state_manager.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown_dashboard_live_state():
+    global dashboard_live_state_manager
+    if dashboard_live_state_manager is not None:
+        await dashboard_live_state_manager.stop()
+        dashboard_live_state_manager = None
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     if API_KEY:
@@ -1328,10 +1590,15 @@ async def websocket_endpoint(ws: WebSocket):
         # Send initial state
         hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
         cards = load_scorecards(limit=1)
-        portfolio_payload = _build_portfolio_payload(account="all")
-        portfolio_history_intraday = _build_portfolio_history_payload(period="1D", timeframe="1H", account="all")
-        last_portfolio_sig = _portfolio_signature(portfolio_payload)
-        last_portfolio_history_sig = _portfolio_history_signature(portfolio_history_intraday)
+        portfolio_payload = None
+        portfolio_history_intraday = None
+        if dashboard_live_state_manager is not None:
+            portfolio_payload = dashboard_live_state_manager.get_latest_portfolio()
+            portfolio_history_intraday = dashboard_live_state_manager.get_latest_portfolio_history_intraday()
+        if portfolio_payload is None:
+            portfolio_payload = _build_portfolio_payload(account="all")
+        if portfolio_history_intraday is None:
+            portfolio_history_intraday = _build_portfolio_history_payload(period="1D", timeframe="1H", account="all")
         await ws.send_json({
             "type": "init",
             "heartbeat": hb,
@@ -1344,45 +1611,18 @@ async def websocket_endpoint(ws: WebSocket):
             "portfolio": portfolio_payload,
             "portfolio_history_intraday": portfolio_history_intraday,
         })
-        # Keep alive — poll for changes every 10s
-        last_cycle = hb.get("cycle", 0)
         while True:
-            await asyncio.sleep(10)
-            hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
-            current_cycle = hb.get("cycle", 0)
-            update_payload = {"type": "update"}
-            should_send = False
-            if current_cycle != last_cycle:
-                last_cycle = current_cycle
-                cards = load_scorecards(limit=1)
-                update_payload.update({
-                    "heartbeat": hb,
-                    "scorecard": cards[0] if cards else None,
-                    "controls": {
-                        "kill_switch": load_json(REPO_ROOT / "control" / "kill_switch.json"),
-                        "manual_veto": load_json(REPO_ROOT / "control" / "manual_veto.json"),
-                    },
-                    "execution_mode": get_execution_mode_data(),
-                })
-                should_send = True
-
-            portfolio_payload = _build_portfolio_payload(account="all")
-            portfolio_sig = _portfolio_signature(portfolio_payload)
-            if portfolio_sig != last_portfolio_sig:
-                last_portfolio_sig = portfolio_sig
-                update_payload["portfolio"] = portfolio_payload
-                should_send = True
-
-            portfolio_history_intraday = _build_portfolio_history_payload(period="1D", timeframe="1H", account="all")
-            portfolio_history_sig = _portfolio_history_signature(portfolio_history_intraday)
-            if portfolio_history_sig != last_portfolio_history_sig:
-                last_portfolio_history_sig = portfolio_history_sig
-                update_payload["portfolio_history_intraday"] = portfolio_history_intraday
-                should_send = True
-
-            if should_send:
-                await ws.send_json(update_payload)
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            if message.get("text") == "ping":
+                await ws.send_json({"type": "pong"})
     except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except asyncio.CancelledError:
+        manager.disconnect(ws)
+        raise
+    finally:
         manager.disconnect(ws)
 
 
