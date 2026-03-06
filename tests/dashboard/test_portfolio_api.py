@@ -22,7 +22,12 @@ def _account_snapshot(label: str, equity: float, positions: list[dict]) -> dict:
     }
 
 
+def _clear_cache() -> None:
+    server._ALPACA_RESPONSE_CACHE.clear()
+
+
 def test_portfolio_aggregates_multi_account_schema(monkeypatch):
+    _clear_cache()
     accounts = [_account("day_trade"), _account("medium_long")]
 
     def fake_fetch(acct: dict) -> dict:
@@ -78,6 +83,10 @@ def test_portfolio_aggregates_multi_account_schema(monkeypatch):
     assert payload["schema_version"] == "dashboard.portfolio.v1"
     assert payload["status"] == "ok"
     assert payload["equity"] == 35000.0
+    assert payload["source_timestamp_utc"] is not None
+    assert payload["latest_source_timestamp_utc"] is not None
+    assert payload["fetched_at_utc"] is not None
+    assert payload["cache_status"] in {"hit", "miss", "mixed"}
     assert payload["position_count_total"] == 3
     assert payload["position_count_by_account"] == {"day_trade": 1, "medium_long": 2}
     assert payload["account_errors"] == []
@@ -92,6 +101,7 @@ def test_portfolio_aggregates_multi_account_schema(monkeypatch):
 
 
 def test_portfolio_partial_failure_keeps_error_account_consistent(monkeypatch):
+    _clear_cache()
     accounts = [_account("day_trade"), _account("medium_long")]
 
     def fake_fetch(acct: dict) -> dict:
@@ -120,6 +130,8 @@ def test_portfolio_partial_failure_keeps_error_account_consistent(monkeypatch):
     payload = server.portfolio(account="all")
 
     assert payload["status"] == "partial"
+    assert payload["source_timestamp_utc"] is not None
+    assert payload["fetched_at_utc"] is not None
     assert payload["position_count_total"] == 1
     assert payload["position_count_by_account"] == {"day_trade": 1, "medium_long": 0}
     assert payload["account_errors"] == [{"label": "medium_long", "error": "timeout from broker"}]

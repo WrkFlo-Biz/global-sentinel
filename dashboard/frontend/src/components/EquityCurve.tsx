@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { api, type PortfolioHistoryData } from "@/lib/api";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -14,18 +15,7 @@ interface EquityPoint {
   base_value: number;
 }
 
-interface PortfolioHistory {
-  timestamp: number[];
-  equity: number[];
-  profit_loss: number[];
-  profit_loss_pct: number[];
-  base_value: number;
-  timeframe: string;
-  error?: string;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
 
 // Period config: label, Alpaca period param, Alpaca timeframe param, isIntraday
 const PERIODS: { label: string; period: string; timeframe: string; intraday: boolean }[] = [
@@ -53,6 +43,23 @@ function formatTick(ts: number, intraday: boolean): string {
 
 function formatUSD(val: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
+}
+
+function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cacheAgeMs?: number): string {
+  if (!sourceTimestampUtc) return "Waiting for first refresh";
+  try {
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - new Date(sourceTimestampUtc).getTime()) / 1000));
+    const ageLabel = ageSeconds < 5
+      ? "Source updated just now"
+      : ageSeconds < 60
+        ? `Source updated ${ageSeconds}s ago`
+        : `Source updated ${Math.floor(ageSeconds / 60)}m ago`;
+    const cacheLabel = cacheStatus ? ` · cache ${cacheStatus}` : "";
+    const ageMsLabel = typeof cacheAgeMs === "number" ? ` · age ${Math.round(cacheAgeMs)}ms` : "";
+    return `${ageLabel}${cacheLabel}${ageMsLabel}`;
+  } catch {
+    return "Source freshness unavailable";
+  }
 }
 
 interface ChartTooltipProps {
@@ -97,27 +104,17 @@ export default function EquityCurve() {
   const [loading, setLoading] = useState(true);
   const [selectedLabel, setSelectedLabel] = useState<string>("1M");
   const [error, setError] = useState<string | null>(null);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const [sourceTimestampUtc, setSourceTimestampUtc] = useState<string | undefined>(undefined);
+  const [cacheStatus, setCacheStatus] = useState<string | undefined>(undefined);
+  const [cacheAgeMs, setCacheAgeMs] = useState<number | undefined>(undefined);
 
   const selected = PERIODS.find(p => p.label === selectedLabel) || PERIODS[5];
-  const REFRESH_MS = selected.intraday ? 10000 : 60000;
-
-  const freshnessLabel = (() => {
-    if (!lastRefreshedAt) return "Waiting for first refresh";
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - lastRefreshedAt.getTime()) / 1000));
-    if (ageSeconds < 5) return "Updated just now";
-    if (ageSeconds < 60) return `Updated ${ageSeconds}s ago`;
-    const ageMinutes = Math.floor(ageSeconds / 60);
-    return `Updated ${ageMinutes}m ago`;
-  })();
+  const REFRESH_MS = selected.intraday ? 30000 : 120000;
+  const freshnessLabel = formatFreshness(sourceTimestampUtc, cacheStatus, cacheAgeMs);
 
   const fetchHistory = useCallback(async () => {
     try {
-      const headers: Record<string, string> = {};
-      if (API_KEY) headers["X-API-Key"] = API_KEY;
-      const res = await fetch(`${API_BASE}/api/portfolio-history?period=${selected.period}&timeframe=${selected.timeframe}`, { cache: "no-store", headers });
-      if (!res.ok) throw new Error(`API error: ${res.status}`);
-      const hist: PortfolioHistory = await res.json();
+      const hist: PortfolioHistoryData = await api.portfolioHistory(selected.period, selected.timeframe, "all");
       if (hist.error) {
         setError(hist.error);
         return;
@@ -134,7 +131,9 @@ export default function EquityCurve() {
       }
       setData(points);
       setError(null);
-      setLastRefreshedAt(new Date());
+      setSourceTimestampUtc(hist.source_timestamp_utc || hist.latest_source_timestamp_utc || hist.timestamp_utc);
+      setCacheStatus(hist.cache_status);
+      setCacheAgeMs(hist.cache_age_ms);
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -146,8 +145,24 @@ export default function EquityCurve() {
     setLoading(true);
     fetchHistory();
     const interval = setInterval(fetchHistory, REFRESH_MS);
-    return () => clearInterval(interval);
+    const handlePortfolioRefresh = () => {
+      fetchHistory();
+    };
+    window.addEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
+    };
   }, [fetchHistory, REFRESH_MS]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCacheAgeMs(prev => (typeof prev === "number" ? prev + 1000 : prev));
+    }, 1000);
+    return () => {
+      clearInterval(interval);
+    };
+  }, []);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-gray-600 text-xs">Loading equity curve...</div>;

@@ -11,6 +11,23 @@ function formatPct(val: number): string {
   return `${sign}${(val * 100).toFixed(2)}%`;
 }
 
+function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cacheAgeMs?: number): string {
+  if (!sourceTimestampUtc) return "Source freshness unavailable";
+  try {
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - new Date(sourceTimestampUtc).getTime()) / 1000));
+    const ageLabel = ageSeconds < 5
+      ? "Source updated just now"
+      : ageSeconds < 60
+        ? `Source updated ${ageSeconds}s ago`
+        : `Source updated ${Math.floor(ageSeconds / 60)}m ago`;
+    const cacheLabel = cacheStatus ? ` · cache ${cacheStatus}` : "";
+    const ageMsLabel = typeof cacheAgeMs === "number" ? ` · age ${Math.round(cacheAgeMs)}ms` : "";
+    return `${ageLabel}${cacheLabel}${ageMsLabel}`;
+  } catch {
+    return "Source freshness unavailable";
+  }
+}
+
 function formatAccountLabel(label: string): string {
   if (label === "day_trade") return "Day Trade";
   if (label === "day_trade_2") return "Day Trade 2";
@@ -129,6 +146,9 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
           </div>
           <div className="text-[10px] text-gray-500 mt-1">
             {totalPositionCount} positions across {totalAccountCount} account{totalAccountCount === 1 ? "" : "s"}
+          </div>
+          <div className="text-[10px] text-gray-500 mt-1">
+            {formatFreshness(data.source_timestamp_utc, data.cache_status, data.cache_age_ms)}
           </div>
         </div>
       </div>

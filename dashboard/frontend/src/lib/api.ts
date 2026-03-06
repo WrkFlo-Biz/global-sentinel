@@ -116,6 +116,10 @@ export interface PortfolioAccountDetail {
   positions: PortfolioPosition[];
   position_count: number;
   timestamp_utc?: string;
+  source_timestamp_utc?: string;
+  fetched_at_utc?: string;
+  cache_age_ms?: number;
+  cache_status?: string;
   error?: string;
 }
 
@@ -147,6 +151,32 @@ export interface PortfolioData {
   account_count?: number;
   consistency?: PortfolioConsistency;
   timestamp_utc: string;
+  source_timestamp_utc?: string;
+  latest_source_timestamp_utc?: string;
+  fetched_at_utc?: string;
+  cache_age_ms?: number;
+  cache_status?: string;
+  error?: string;
+}
+
+export interface PortfolioHistoryData {
+  schema_version?: string;
+  account?: string;
+  requested_period?: string;
+  requested_timeframe?: string;
+  timestamp: number[];
+  equity: number[];
+  profit_loss: number[];
+  profit_loss_pct: number[];
+  base_value: number;
+  timeframe: string;
+  timestamp_utc?: string;
+  source_timestamp_utc?: string;
+  latest_source_timestamp_utc?: string;
+  fetched_at_utc?: string;
+  cache_age_ms?: number;
+  cache_status?: string;
+  accounts?: Record<string, PortfolioHistoryData | { error: string }>;
   error?: string;
 }
 
@@ -258,6 +288,10 @@ export const api = {
   thresholds: () => fetchJSON<any>("/api/thresholds"),
   timeWindow: () => fetchJSON<any>("/api/time_window"),
   portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
+  portfolioHistory: (period = "1M", timeframe = "1D", account = "all") =>
+    fetchJSON<PortfolioHistoryData>(
+      `/api/portfolio-history?period=${period}&timeframe=${timeframe}&account=${account}`,
+    ),
   tradeAnalysis: () => fetchJSON<TradeAnalysis>("/api/trade-analysis"),
   performance: () => fetchJSON<PerformanceData>("/api/performance"),
   consciousness: () => fetchJSON<ConsciousnessData>("/api/consciousness"),
@@ -428,19 +462,40 @@ export interface DashboardLayout {
   error?: string;
 }
 
-export function connectWS(onMessage: (data: any) => void): WebSocket | null {
+export interface WSConnection {
+  close: () => void;
+}
+
+export function connectWS(onMessage: (data: any) => void): WSConnection | null {
   const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8501";
   const wsBase = (process.env.NEXT_PUBLIC_API_URL || origin).replace("http", "ws") + "/ws";
   const wsUrl = API_KEY ? `${wsBase}?api_key=${API_KEY}` : wsBase;
   try {
-    const ws = new WebSocket(wsUrl);
-    ws.onmessage = (e) => {
-      try { onMessage(JSON.parse(e.data)); } catch {}
+    let closed = false;
+    let activeSocket: WebSocket | null = null;
+
+    const connect = () => {
+      if (closed) return;
+      const ws = new WebSocket(wsUrl);
+      activeSocket = ws;
+      ws.onmessage = (e) => {
+        try { onMessage(JSON.parse(e.data)); } catch {}
+      };
+      ws.onclose = () => {
+        if (!closed) {
+          setTimeout(connect, 5000);
+        }
+      };
     };
-    ws.onclose = () => {
-      setTimeout(() => connectWS(onMessage), 5000);
+
+    connect();
+
+    return {
+      close: () => {
+        closed = true;
+        activeSocket?.close();
+      },
     };
-    return ws;
   } catch {
     return null;
   }

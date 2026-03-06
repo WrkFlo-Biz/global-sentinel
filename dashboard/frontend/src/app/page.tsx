@@ -91,6 +91,8 @@ const DEFAULT_ROWS = [
   ]},
 ];
 
+const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
+
 export default function Dashboard() {
   const REFRESH_MS = 10000;
   const [heartbeat, setHeartbeat] = useState<Heartbeat | null>(null);
@@ -164,6 +166,19 @@ export default function Dashboard() {
       if (data.heartbeat) setHeartbeat(data.heartbeat);
       if (data.scorecard) setScorecard(data.scorecard);
       if (data.controls) setControls(data.controls);
+      if (data.execution_mode) setExecutionMode(data.execution_mode);
+      if (data.portfolio && !data.portfolio.error) {
+        setPortfolio(data.portfolio);
+      }
+      if (data.portfolio || data.portfolio_history_intraday) {
+        window.dispatchEvent(new CustomEvent(PORTFOLIO_REFRESH_EVENT, {
+          detail: {
+            portfolio: data.portfolio || null,
+            portfolio_history_intraday: data.portfolio_history_intraday || null,
+            received_at_utc: new Date().toISOString(),
+          },
+        }));
+      }
       setLastRefresh(new Date());
     });
 

@@ -13,9 +13,12 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -86,6 +89,108 @@ def load_scorecards(limit: int = 200) -> List[Dict[str, Any]]:
         except Exception:
             continue
     return cards
+
+
+ALPACA_ACCOUNT_CACHE_TTL_SECONDS = 5.0
+ALPACA_HISTORY_CACHE_TTL_SECONDS = {
+    "1H": 10.0,
+    "1D": 30.0,
+}
+_ALPACA_RESPONSE_CACHE: Dict[str, Dict[str, Any]] = {}
+_ALPACA_RESPONSE_CACHE_LOCK = threading.Lock()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat()
+
+
+def _iso_from_unix_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _cache_lookup(key: str, ttl_seconds: float) -> Optional[Dict[str, Any]]:
+    now_monotonic = time.monotonic()
+    with _ALPACA_RESPONSE_CACHE_LOCK:
+        entry = _ALPACA_RESPONSE_CACHE.get(key)
+        if not entry:
+            return None
+        age_seconds = now_monotonic - float(entry.get("stored_at_monotonic", 0.0))
+        if age_seconds > ttl_seconds:
+            return None
+        return {
+            "value": copy.deepcopy(entry["value"]),
+            "fetched_at_utc": str(entry["fetched_at_utc"]),
+            "cache_age_ms": round(age_seconds * 1000.0, 1),
+            "cache_status": "hit",
+        }
+
+
+def _cache_store(key: str, value: Dict[str, Any]) -> str:
+    fetched_at_utc = _utc_now_iso()
+    with _ALPACA_RESPONSE_CACHE_LOCK:
+        _ALPACA_RESPONSE_CACHE[key] = {
+            "value": copy.deepcopy(value),
+            "stored_at_monotonic": time.monotonic(),
+            "fetched_at_utc": fetched_at_utc,
+        }
+    return fetched_at_utc
+
+
+def _cache_status_from_items(items: List[Dict[str, Any]]) -> str:
+    statuses = [str(item.get("cache_status") or "miss") for item in items if isinstance(item, dict)]
+    if not statuses:
+        return "miss"
+    if all(status == "hit" for status in statuses):
+        return "hit"
+    if any(status == "hit" for status in statuses):
+        return "mixed"
+    return "miss"
+
+
+def _freshness_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    parsed_source_times = [
+        parsed
+        for parsed in (_parse_iso_datetime(item.get("source_timestamp_utc")) for item in items)
+        if parsed is not None
+    ]
+    parsed_fetched_times = [
+        parsed
+        for parsed in (_parse_iso_datetime(item.get("fetched_at_utc")) for item in items)
+        if parsed is not None
+    ]
+    cache_ages = [
+        float(item.get("cache_age_ms") or 0.0)
+        for item in items
+        if isinstance(item, dict)
+    ]
+    return {
+        "source_timestamp_utc": min(parsed_source_times).isoformat() if parsed_source_times else None,
+        "latest_source_timestamp_utc": max(parsed_source_times).isoformat() if parsed_source_times else None,
+        "fetched_at_utc": max(parsed_fetched_times).isoformat() if parsed_fetched_times else _utc_now_iso(),
+        "cache_age_ms": round(max(cache_ages), 1) if cache_ages else 0.0,
+        "cache_status": _cache_status_from_items(items),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +333,59 @@ def _fetch_alpaca_history(acct: Dict[str, str], period: str, timeframe: str) -> 
         return retry_with_backoff(_do, max_retries=2, base_delay=1.0)
     except Exception:
         return _do()
+
+
+def _get_cached_alpaca_account(acct: Dict[str, str]) -> Dict[str, Any]:
+    cache_key = f"alpaca_account:{acct['label']}"
+    cached = _cache_lookup(cache_key, ttl_seconds=ALPACA_ACCOUNT_CACHE_TTL_SECONDS)
+    if cached:
+        payload = cached["value"]
+        payload["source_timestamp_utc"] = payload.get("source_timestamp_utc") or payload.get("timestamp_utc") or cached["fetched_at_utc"]
+        payload["fetched_at_utc"] = cached["fetched_at_utc"]
+        payload["cache_age_ms"] = cached["cache_age_ms"]
+        payload["cache_status"] = cached["cache_status"]
+        return payload
+
+    payload = _fetch_alpaca_account(acct)
+    fetched_at_utc = _cache_store(cache_key, payload)
+    payload = copy.deepcopy(payload)
+    payload["source_timestamp_utc"] = payload.get("timestamp_utc") or fetched_at_utc
+    payload["fetched_at_utc"] = fetched_at_utc
+    payload["cache_age_ms"] = 0.0
+    payload["cache_status"] = "miss"
+    return payload
+
+
+def _get_cached_alpaca_history(acct: Dict[str, str], period: str, timeframe: str) -> Dict[str, Any]:
+    cache_key = f"alpaca_history:{acct['label']}:{period}:{timeframe}"
+    ttl_seconds = ALPACA_HISTORY_CACHE_TTL_SECONDS.get(timeframe, 30.0)
+    cached = _cache_lookup(cache_key, ttl_seconds=ttl_seconds)
+    if cached:
+        payload = cached["value"]
+        timestamps = payload.get("timestamp") or []
+        payload["schema_version"] = "dashboard.portfolio_history.v1"
+        payload["account"] = acct["label"]
+        payload["requested_period"] = period
+        payload["requested_timeframe"] = timeframe
+        payload["source_timestamp_utc"] = payload.get("source_timestamp_utc") or _iso_from_unix_timestamp(timestamps[-1] if timestamps else None) or cached["fetched_at_utc"]
+        payload["fetched_at_utc"] = cached["fetched_at_utc"]
+        payload["cache_age_ms"] = cached["cache_age_ms"]
+        payload["cache_status"] = cached["cache_status"]
+        return payload
+
+    payload = _fetch_alpaca_history(acct, period, timeframe)
+    fetched_at_utc = _cache_store(cache_key, payload)
+    payload = copy.deepcopy(payload)
+    timestamps = payload.get("timestamp") or []
+    payload["schema_version"] = "dashboard.portfolio_history.v1"
+    payload["account"] = acct["label"]
+    payload["requested_period"] = period
+    payload["requested_timeframe"] = timeframe
+    payload["source_timestamp_utc"] = _iso_from_unix_timestamp(timestamps[-1] if timestamps else None) or fetched_at_utc
+    payload["fetched_at_utc"] = fetched_at_utc
+    payload["cache_age_ms"] = 0.0
+    payload["cache_status"] = "miss"
+    return payload
 
 
 def _merge_portfolio_histories(histories: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -850,6 +1008,10 @@ def portfolio_history(period: str = Query("1M"), timeframe: str = Query("1D"), a
     """Fetch Alpaca paper portfolio history for equity curve.
     period: 1D, 1W, 1M, 3M, 1A   timeframe: 1H, 1D
     account: all | day_trade | medium_long"""
+    return _build_portfolio_history_payload(period=period, timeframe=timeframe, account=account)
+
+
+def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", account: str = "all") -> Dict[str, Any]:
     if period not in ("1D", "1W", "1M", "3M", "1A"):
         period = "1M"
     if timeframe not in ("1H", "1D"):
@@ -867,23 +1029,42 @@ def portfolio_history(period: str = Query("1M"), timeframe: str = Query("1D"), a
     # If single account requested, return raw history
     if len(accounts) == 1:
         try:
-            return _fetch_alpaca_history(accounts[0], period, timeframe)
+            hist = _get_cached_alpaca_history(accounts[0], period, timeframe)
+            hist["timestamp_utc"] = _utc_now_iso()
+            return hist
         except Exception as e:
             return {"error": str(e)}
 
     # Multi-account: return per-account histories
     results = {}
+    successful_histories = []
     for acct in accounts:
         try:
-            results[acct["label"]] = _fetch_alpaca_history(acct, period, timeframe)
+            hist = _get_cached_alpaca_history(acct, period, timeframe)
+            results[acct["label"]] = hist
+            successful_histories.append(hist)
         except Exception as e:
             results[acct["label"]] = {"error": str(e)}
-
-    return _merge_portfolio_histories(results)
+    merged = _merge_portfolio_histories(results)
+    merged.update({
+        "schema_version": "dashboard.portfolio_history.v1",
+        "account": account,
+        "requested_period": period,
+        "requested_timeframe": timeframe,
+        "timestamp_utc": _utc_now_iso(),
+    })
+    merged.update(_freshness_summary(successful_histories))
+    return merged
 
 
 @app.get("/api/portfolio")
 def portfolio(account: str = Query("all")):
+    """Fetch Alpaca paper account positions. Supports dual accounts.
+    account: all | day_trade | medium_long"""
+    return _build_portfolio_payload(account=account)
+
+
+def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
     """Fetch Alpaca paper account positions. Supports dual accounts.
     account: all | day_trade | medium_long"""
     accounts = _get_alpaca_accounts()
@@ -907,7 +1088,7 @@ def portfolio(account: str = Query("all")):
 
     for acct in accounts:
         try:
-            data = _fetch_alpaca_account(acct)
+            data = _get_cached_alpaca_account(acct)
             total_equity += data["equity"]
             total_cash += data["cash"]
             total_buying_power += data["buying_power"]
@@ -931,7 +1112,7 @@ def portfolio(account: str = Query("all")):
                 "portfolio_value": 0.0,
                 "positions": [],
                 "position_count": 0,
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "timestamp_utc": _utc_now_iso(),
             })
 
     account_count_success = sum(1 for detail in account_details if detail.get("status") != "error")
@@ -947,7 +1128,7 @@ def portfolio(account: str = Query("all")):
     else:
         status = "ok"
 
-    return {
+    payload = {
         "schema_version": "dashboard.portfolio.v1",
         "status": status,
         "equity": total_equity,
@@ -972,8 +1153,13 @@ def portfolio(account: str = Query("all")):
             "positions_match_total": position_count_total_from_accounts == len(all_positions),
             "has_account_errors": bool(account_errors),
         },
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": _utc_now_iso(),
     }
+    payload.update(_freshness_summary([
+        detail for detail in account_details
+        if isinstance(detail, dict) and detail.get("status") != "error"
+    ]))
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1083,7 +1269,8 @@ class ConnectionManager:
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket):
-        self.active.remove(ws)
+        if ws in self.active:
+            self.active.remove(ws)
 
     async def broadcast(self, data: dict):
         dead = []
@@ -1099,13 +1286,52 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _portfolio_signature(payload: Dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "status": payload.get("status"),
+            "equity": round(float(payload.get("equity") or 0.0), 2),
+            "position_count_total": payload.get("position_count_total"),
+            "source_timestamp_utc": payload.get("source_timestamp_utc"),
+            "latest_source_timestamp_utc": payload.get("latest_source_timestamp_utc"),
+        },
+        sort_keys=True,
+    )
+
+
+def _portfolio_history_signature(payload: Dict[str, Any]) -> str:
+    timestamps = payload.get("timestamp") or []
+    equities = payload.get("equity") or []
+    profits = payload.get("profit_loss") or []
+    return json.dumps(
+        {
+            "point_count": len(timestamps),
+            "last_timestamp": timestamps[-1] if timestamps else None,
+            "last_equity": round(float(equities[-1]), 2) if equities else None,
+            "last_profit_loss": round(float(profits[-1]), 2) if profits else None,
+            "source_timestamp_utc": payload.get("source_timestamp_utc"),
+            "latest_source_timestamp_utc": payload.get("latest_source_timestamp_utc"),
+        },
+        sort_keys=True,
+    )
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    if API_KEY:
+        key = ws.query_params.get("api_key")
+        if key != API_KEY:
+            await ws.close(code=1008)
+            return
     await manager.connect(ws)
     try:
         # Send initial state
         hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
         cards = load_scorecards(limit=1)
+        portfolio_payload = _build_portfolio_payload(account="all")
+        portfolio_history_intraday = _build_portfolio_history_payload(period="1D", timeframe="1H", account="all")
+        last_portfolio_sig = _portfolio_signature(portfolio_payload)
+        last_portfolio_history_sig = _portfolio_history_signature(portfolio_history_intraday)
         await ws.send_json({
             "type": "init",
             "heartbeat": hb,
@@ -1115,6 +1341,8 @@ async def websocket_endpoint(ws: WebSocket):
                 "manual_veto": load_json(REPO_ROOT / "control" / "manual_veto.json"),
             },
             "execution_mode": get_execution_mode_data(),
+            "portfolio": portfolio_payload,
+            "portfolio_history_intraday": portfolio_history_intraday,
         })
         # Keep alive — poll for changes every 10s
         last_cycle = hb.get("cycle", 0)
@@ -1122,11 +1350,12 @@ async def websocket_endpoint(ws: WebSocket):
             await asyncio.sleep(10)
             hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
             current_cycle = hb.get("cycle", 0)
+            update_payload = {"type": "update"}
+            should_send = False
             if current_cycle != last_cycle:
                 last_cycle = current_cycle
                 cards = load_scorecards(limit=1)
-                await ws.send_json({
-                    "type": "update",
+                update_payload.update({
                     "heartbeat": hb,
                     "scorecard": cards[0] if cards else None,
                     "controls": {
@@ -1135,6 +1364,24 @@ async def websocket_endpoint(ws: WebSocket):
                     },
                     "execution_mode": get_execution_mode_data(),
                 })
+                should_send = True
+
+            portfolio_payload = _build_portfolio_payload(account="all")
+            portfolio_sig = _portfolio_signature(portfolio_payload)
+            if portfolio_sig != last_portfolio_sig:
+                last_portfolio_sig = portfolio_sig
+                update_payload["portfolio"] = portfolio_payload
+                should_send = True
+
+            portfolio_history_intraday = _build_portfolio_history_payload(period="1D", timeframe="1H", account="all")
+            portfolio_history_sig = _portfolio_history_signature(portfolio_history_intraday)
+            if portfolio_history_sig != last_portfolio_history_sig:
+                last_portfolio_history_sig = portfolio_history_sig
+                update_payload["portfolio_history_intraday"] = portfolio_history_intraday
+                should_send = True
+
+            if should_send:
+                await ws.send_json(update_payload)
     except WebSocketDisconnect:
         manager.disconnect(ws)
 
