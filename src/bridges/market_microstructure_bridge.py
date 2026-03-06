@@ -80,7 +80,7 @@ class MarketMicrostructureBridge:
         syms = set()
         # Pull from ALL watchlist sections with individual items
         list_sections = [
-            "equity_indices", "index_futures", "treasury_futures",
+            "equity_indices", "global_indexes", "index_futures", "treasury_futures",
             "commodity_futures", "aviation_travel", "travel_hospitality",
             "supply_chain", "insurance_risk", "fixed_income",
             "gasoline_refining", "defense_military",

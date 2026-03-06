@@ -47,6 +47,133 @@ equity_indices:
   - symbol: XLP
     description: "Consumer Staples Select Sector SPDR"
     priority: medium
+  # -- Additional US Index & Sector ETFs --
+  - symbol: VTI
+    description: "Vanguard Total US Stock Market ETF"
+    priority: high
+  - symbol: VOO
+    description: "Vanguard S&P 500 ETF"
+    priority: high
+  - symbol: VTWO
+    description: "Vanguard Russell 2000 ETF"
+    priority: medium
+  - symbol: XLC
+    description: "Communication Services Select Sector SPDR"
+    priority: medium
+  - symbol: XLB
+    description: "Materials Select Sector SPDR"
+    priority: medium
+  - symbol: XLV
+    description: "Health Care Select Sector SPDR"
+    priority: high
+  - symbol: XLRE
+    description: "Real Estate Select Sector SPDR"
+    priority: medium
+  - symbol: XLY
+    description: "Consumer Discretionary Select Sector SPDR"
+    priority: medium
+  - symbol: XRT
+    description: "SPDR S&P Retail ETF"
+    priority: medium
+  - symbol: KRE
+    description: "SPDR S&P Regional Banking ETF"
+    priority: high
+  - symbol: KBE
+    description: "SPDR S&P Bank ETF"
+    priority: medium
+  - symbol: IBB
+    description: "iShares Biotechnology ETF"
+    priority: medium
+  - symbol: SMH
+    description: "VanEck Semiconductor ETF"
+    priority: critical
+  - symbol: IYT
+    description: "iShares US Transportation ETF"
+    priority: medium
+  - symbol: XHB
+    description: "SPDR S&P Homebuilders ETF"
+    priority: medium
+
+# --- Global Market Indexes (via ETFs) ---
+global_indexes:
+  - symbol: VEA
+    description: "Vanguard FTSE Developed Markets ex-US ETF"
+    priority: high
+  - symbol: VWO
+    description: "Vanguard FTSE Emerging Markets ETF"
+    priority: high
+  - symbol: IEMG
+    description: "iShares Core MSCI Emerging Markets ETF"
+    priority: medium
+  - symbol: ACWI
+    description: "iShares MSCI ACWI (All Country World Index) ETF"
+    priority: high
+  - symbol: ACWX
+    description: "iShares MSCI ACWI ex-US ETF"
+    priority: high
+  - symbol: VGK
+    description: "Vanguard FTSE Europe ETF"
+    priority: high
+  - symbol: EZU
+    description: "iShares MSCI Eurozone ETF"
+    priority: medium
+  - symbol: EWJ
+    description: "iShares MSCI Japan ETF"
+    priority: high
+  - symbol: EWG
+    description: "iShares MSCI Germany ETF"
+    priority: medium
+  - symbol: EWU
+    description: "iShares MSCI United Kingdom ETF"
+    priority: medium
+  - symbol: EWZ
+    description: "iShares MSCI Brazil ETF"
+    priority: high
+  - symbol: EWT
+    description: "iShares MSCI Taiwan ETF — TSMC/semiconductor supply chain"
+    priority: critical
+  - symbol: EWY
+    description: "iShares MSCI South Korea ETF"
+    priority: medium
+  - symbol: INDA
+    description: "iShares MSCI India ETF"
+    priority: high
+  - symbol: MCHI
+    description: "iShares MSCI China ETF"
+    priority: high
+  - symbol: GXC
+    description: "SPDR S&P China ETF"
+    priority: medium
+  - symbol: FM
+    description: "iShares MSCI Frontier and Select EM ETF"
+    priority: medium
+  - symbol: ERUS
+    description: "iShares MSCI Russia ETF — likely delisted/halted since 2022 sanctions"
+    priority: low
+  - symbol: THD
+    description: "iShares MSCI Thailand ETF"
+    priority: low
+  - symbol: EPHE
+    description: "iShares MSCI Philippines ETF"
+    priority: low
+  - symbol: ECH
+    description: "iShares MSCI Chile ETF — copper/commodities proxy"
+    priority: medium
+  - symbol: TUR
+    description: "iShares MSCI Turkey ETF"
+    priority: medium
+  - symbol: EIS
+    description: "iShares MSCI Israel ETF"
+    priority: high
+  - symbol: KSA
+    description: "iShares MSCI Saudi Arabia ETF — Strait of Hormuz exposure"
+    priority: high
+  - symbol: UAE
+    description: "iShares MSCI UAE ETF — Gulf region"
+    priority: medium
+  - symbol: QAT
+    description: "iShares MSCI Qatar ETF — LNG exporter"
+    priority: medium
 
 # --- Index Futures (via ETF proxies for Yahoo/Finnhub) ---
 index_futures:
