@@ -56,30 +56,54 @@ function ChartTooltip({ active, payload }: ChartTooltipProps) {
 }
 
 export default function DrawdownChart() {
+  const REFRESH_MS = 30000;
   const [data, setData] = useState<DrawdownPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+
+  const freshnessLabel = (() => {
+    if (!lastRefreshedAt) return "Waiting for first refresh";
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - lastRefreshedAt.getTime()) / 1000));
+    if (ageSeconds < 5) return "Updated just now";
+    if (ageSeconds < 60) return `Updated ${ageSeconds}s ago`;
+    const ageMinutes = Math.floor(ageSeconds / 60);
+    return `Updated ${ageMinutes}m ago`;
+  })();
 
   const fetchData = useCallback(async () => {
     try {
       const headers: Record<string, string> = {};
       if (API_KEY) headers["X-API-Key"] = API_KEY;
-      const res = await fetch(`${API_BASE}/api/portfolio-history?period=1A&timeframe=1D`, { cache: "no-store", headers });
-      if (!res.ok) throw new Error(`API error: ${res.status}`);
-      const hist = await res.json();
-      if (hist.error) { setError(hist.error); return; }
+
+      // Try progressively shorter periods until we get data
+      const periods = ["1A", "3M", "1M", "1W"];
+      let hist: any = null;
+      for (const period of periods) {
+        const res = await fetch(`${API_BASE}/api/portfolio-history?period=${period}&timeframe=1D`, { cache: "no-store", headers });
+        if (!res.ok) continue;
+        const h = await res.json();
+        if (h.error) continue;
+        if (h.timestamp && h.equity && h.equity.some((e: number) => e > 0)) {
+          hist = h;
+          break;
+        }
+      }
+
+      if (!hist) { setError("No portfolio history available yet"); return; }
 
       let peak = 0;
       const points: DrawdownPoint[] = [];
       for (let i = 0; i < hist.timestamp.length; i++) {
         const eq = hist.equity[i];
-        if (eq === 0) continue;
+        if (eq === 0 || eq === null || eq === undefined) continue;
         if (eq > peak) peak = eq;
         const dd = peak > 0 ? ((eq - peak) / peak) * 100 : 0;
         points.push({ timestamp: hist.timestamp[i], equity: eq, peak, drawdown_pct: dd });
       }
       setData(points);
       setError(null);
+      setLastRefreshedAt(new Date());
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -87,7 +111,11 @@ export default function DrawdownChart() {
     }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-40 text-gray-600 text-xs">Loading drawdown...</div>;
@@ -120,6 +148,9 @@ export default function DrawdownChart() {
             <span className="text-gray-500">Current: <span className="text-gray-300 font-bold tabular-nums">{currentDD.toFixed(2)}%</span></span>
           </div>
         )}
+        <span className="text-[10px] text-gray-500">
+          {freshnessLabel} · refresh {Math.round(REFRESH_MS / 1000)}s
+        </span>
       </div>
 
       <ResponsiveContainer width="100%" height={160}>

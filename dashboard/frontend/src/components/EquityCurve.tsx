@@ -97,8 +97,19 @@ export default function EquityCurve() {
   const [loading, setLoading] = useState(true);
   const [selectedLabel, setSelectedLabel] = useState<string>("1M");
   const [error, setError] = useState<string | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
   const selected = PERIODS.find(p => p.label === selectedLabel) || PERIODS[5];
+  const REFRESH_MS = selected.intraday ? 10000 : 60000;
+
+  const freshnessLabel = (() => {
+    if (!lastRefreshedAt) return "Waiting for first refresh";
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - lastRefreshedAt.getTime()) / 1000));
+    if (ageSeconds < 5) return "Updated just now";
+    if (ageSeconds < 60) return `Updated ${ageSeconds}s ago`;
+    const ageMinutes = Math.floor(ageSeconds / 60);
+    return `Updated ${ageMinutes}m ago`;
+  })();
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -123,6 +134,7 @@ export default function EquityCurve() {
       }
       setData(points);
       setError(null);
+      setLastRefreshedAt(new Date());
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -133,7 +145,9 @@ export default function EquityCurve() {
   useEffect(() => {
     setLoading(true);
     fetchHistory();
-  }, [fetchHistory]);
+    const interval = setInterval(fetchHistory, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [fetchHistory, REFRESH_MS]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-gray-600 text-xs">Loading equity curve...</div>;
@@ -177,6 +191,9 @@ export default function EquityCurve() {
           <span className="text-base sm:text-lg font-bold text-gray-200 tabular-nums">{formatUSD(latest.equity)}</span>
           <span className={`text-xs sm:text-sm font-bold tabular-nums ${returnColor}`}>
             {totalReturn >= 0 ? "+" : ""}{formatUSD(totalReturn)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)
+          </span>
+          <span className="text-[10px] text-gray-500">
+            {freshnessLabel} · refresh {Math.round(REFRESH_MS / 1000)}s
           </span>
         </div>
         <div className="flex gap-1 flex-wrap">
