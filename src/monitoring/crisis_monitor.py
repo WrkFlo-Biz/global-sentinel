@@ -744,6 +744,32 @@ class CrisisMonitor:
             print(f"[{iso_now()}] Shadow execution error: {e}", file=sys.stderr)
             return None
 
+    @staticmethod
+    def _resolve_alpaca_credentials(strategy_name: str) -> Optional[Dict[str, str]]:
+        """Resolve Alpaca credentials for a given strategy.
+
+        Env var lookup order:
+          day_trade   -> ALPACA_API_KEY_DAYTRADE / ALPACA_SECRET_KEY_DAYTRADE
+          medium_long -> ALPACA_API_KEY_MEDLONG  / ALPACA_SECRET_KEY_MEDLONG
+        Falls back to the generic ALPACA_API_KEY / ALPACA_SECRET_KEY if the
+        strategy-specific vars are not set.  Returns None when no override is
+        needed (adapter will use its own env-var defaults).
+        """
+        if strategy_name == "day_trade":
+            api_key = os.getenv("ALPACA_API_KEY_DAYTRADE")
+            api_secret = os.getenv("ALPACA_SECRET_KEY_DAYTRADE")
+        elif strategy_name == "medium_long":
+            api_key = os.getenv("ALPACA_API_KEY_MEDLONG")
+            api_secret = os.getenv("ALPACA_SECRET_KEY_MEDLONG")
+        else:
+            return None
+
+        if api_key and api_secret:
+            return {"api_key": api_key, "api_secret": api_secret}
+
+        # Fallback: let adapter use default ALPACA_API_KEY / ALPACA_SECRET_KEY
+        return None
+
     def _route_dual_strategy(
         self,
         analysis: Dict[str, Any],
@@ -823,7 +849,12 @@ class CrisisMonitor:
 
             if exec_mode == "auto":
                 # Auto mode: submit orders and send instant notification
-                router = ShadowOrderRouter(self.repo_root)
+                # Use strategy-specific Alpaca credentials when available
+                alpaca_creds = self._resolve_alpaca_credentials(strategy_name)
+                router = ShadowOrderRouter(
+                    self.repo_root,
+                    alpaca_credentials=alpaca_creds,
+                )
                 result = router.route_package(
                     package=package,
                     max_orders=max_orders,

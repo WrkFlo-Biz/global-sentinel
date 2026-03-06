@@ -350,75 +350,136 @@ class RegimeShiftScorer:
         return {"score": round(score, 4), "fresh": True}
 
     def _score_yield_curve(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        """Score from yield curve shape, credit spreads, and equity index data via FRED."""
+        """Score from yield curve shape, credit spreads, and equity index data via FRED.
+
+        Known series tracked:
+        - Spreads: T10Y2Y, T10Y3M, T10YFF (inversion/steepening)
+        - Curve points: DGS2, DGS5, DGS10, DGS30 (rapid moves)
+        - Credit: BAMLH0A0HYM2 (HY OAS), BAMLC0A4CBBB (BBB OAS)
+        - Risk: TEDRATE (may be discontinued), VIXCLS
+        - Equities: SP500, NASDAQCOM, DJIA, WILLSMLCAP
+        """
         fred_packets = snapshot.get("fred", [])
         evidence = []
 
         if not fred_packets:
             return {"score": 0.1, "fresh": False, "evidence": []}
 
+        # Target series for yield curve scoring
+        yield_curve_sids = {
+            "T10Y2Y", "T10Y3M", "T10YFF",
+            "DGS2", "DGS5", "DGS10", "DGS30",
+            "BAMLH0A0HYM2", "BAMLC0A4CBBB",
+            "TEDRATE", "VIXCLS",
+            "SP500", "NASDAQCOM", "DJIA", "WILLSMLCAP",
+        }
+
         score = 0.0
         found_any = False
+        spread_values: Dict[str, float] = {}  # track spread levels for composite view
+
         for pkt in fred_packets:
-            meta = pkt.get("parsing_meta", {}) if isinstance(pkt, dict) else {}
+            if not isinstance(pkt, dict):
+                continue
+            meta = pkt.get("parsing_meta", {})
+            if not isinstance(meta, dict):
+                continue
             sid = meta.get("series_id", "")
+            if sid not in yield_curve_sids:
+                continue
+
             latest = meta.get("latest_value")
             delta = meta.get("delta")
             category = meta.get("series_category", "")
 
+            # Skip packets where FRED returned no valid observation
             if latest is None:
                 continue
 
-            # Yield curve inversion: T10Y2Y or T10Y3M negative = recession risk
+            found_any = True
+
+            # --- Yield curve spread series ---
             if sid in ("T10Y2Y", "T10Y3M", "T10YFF"):
-                found_any = True
+                spread_values[sid] = latest
                 if latest < -0.5:
                     score += 0.35
                     evidence.append(f"{sid} deeply inverted at {latest:.2f}")
                 elif latest < 0:
                     score += 0.20
                     evidence.append(f"{sid} inverted at {latest:.2f}")
-                elif latest > 0 and latest < 0.3:
+                elif latest < 0.3:
                     score += 0.10  # Flat curve still concerning
+                    evidence.append(f"{sid} near-flat at {latest:.2f}")
+                else:
+                    # Positive spread — normal, but still contributes baseline
+                    score += 0.02
 
-            # Rapid yield moves across the curve (2Y, 5Y, 10Y, 30Y)
-            if sid in ("DGS2", "DGS5", "DGS10", "DGS30") and isinstance(delta, (int, float)):
-                found_any = True
-                if abs(delta) > 0.15:
+            # --- Rapid yield moves across the curve (2Y, 5Y, 10Y, 30Y) ---
+            elif sid in ("DGS2", "DGS5", "DGS10", "DGS30"):
+                if isinstance(delta, (int, float)) and abs(delta) > 0.15:
                     score += 0.10
                     direction = "spiking" if delta > 0 else "plunging"
                     evidence.append(f"{sid} yield {direction}: {delta:+.2f}%")
+                elif isinstance(delta, (int, float)) and abs(delta) > 0.08:
+                    score += 0.03  # moderate move
 
-            # High yield credit spread widening
-            if sid == "BAMLH0A0HYM2" and isinstance(delta, (int, float)):
-                found_any = True
-                if delta > 0.50:
-                    score += 0.25
-                    evidence.append(f"HY credit spreads widening sharply: +{delta:.2f}")
-                elif delta > 0.20:
-                    score += 0.10
-
-            # TED spread (interbank credit risk)
-            if sid == "TEDRATE" and isinstance(latest, (int, float)):
-                found_any = True
-                if latest > 0.50:
-                    score += 0.20
-                    evidence.append(f"TED spread elevated at {latest:.2f}")
-                elif latest > 0.30:
-                    score += 0.10
-
-            # Equity indices — large drops signal stress
-            if sid in ("SP500", "NASDAQCOM", "DJIA") and isinstance(delta, (int, float)):
-                found_any = True
-                # Negative delta on index = market stress
-                if category == "equity_indices":
-                    pct_change = (delta / (latest - delta)) * 100 if (latest - delta) != 0 else 0
-                    if pct_change < -2.0:
+            # --- High yield credit spread widening ---
+            elif sid in ("BAMLH0A0HYM2", "BAMLC0A4CBBB"):
+                if isinstance(delta, (int, float)):
+                    if delta > 0.50:
+                        score += 0.25
+                        evidence.append(f"{sid} credit spreads widening sharply: +{delta:.2f}")
+                    elif delta > 0.20:
+                        score += 0.10
+                        evidence.append(f"{sid} credit spreads widening: +{delta:.2f}")
+                    elif delta > 0.05:
+                        score += 0.03
+                # Also score absolute OAS level
+                if isinstance(latest, (int, float)):
+                    if latest > 6.0:
                         score += 0.15
+                        evidence.append(f"{sid} OAS at distressed level: {latest:.2f}")
+                    elif latest > 4.5:
+                        score += 0.08
+
+            # --- TED spread (interbank credit risk) — may be discontinued ---
+            elif sid == "TEDRATE":
+                if isinstance(latest, (int, float)):
+                    if latest > 0.50:
+                        score += 0.20
+                        evidence.append(f"TED spread elevated at {latest:.2f}")
+                    elif latest > 0.30:
+                        score += 0.10
+
+            # --- VIX level from FRED ---
+            elif sid == "VIXCLS":
+                if isinstance(latest, (int, float)):
+                    if latest > 30:
+                        score += 0.15
+                        evidence.append(f"VIX elevated at {latest:.1f}")
+                    elif latest > 20:
+                        score += 0.05
+
+            # --- Equity indices — large drops signal stress ---
+            elif sid in ("SP500", "NASDAQCOM", "DJIA", "WILLSMLCAP"):
+                if isinstance(delta, (int, float)) and (latest - delta) != 0:
+                    pct_change = (delta / (latest - delta)) * 100
+                    if pct_change < -3.0:
+                        score += 0.20
                         evidence.append(f"{sid} dropped {pct_change:.1f}%")
+                    elif pct_change < -2.0:
+                        score += 0.12
+                        evidence.append(f"{sid} declined {pct_change:.1f}%")
+                    elif pct_change < -1.0:
+                        score += 0.04
 
         if not found_any:
             return {"score": 0.1, "fresh": False, "evidence": []}
+
+        # Baseline: if we found data but score is very low, set a floor
+        # (calm markets with valid data should still register above zero)
+        if score < 0.05 and found_any:
+            score = 0.05
 
         return {"score": round(min(score, 1.0), 4), "fresh": True, "evidence": evidence[:5]}
 

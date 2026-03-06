@@ -533,6 +533,7 @@ class TradeAnalysisEngine:
                         entry.get("historical_win_rate", 0.5) * min(confidence, 1.0), 2
                     ),
                     "holding_period": entry.get("holding_period", "day"),
+                    "strategy_style": f"regime_playbook_{strategy_type}",
                 }
 
                 # Add price levels if microstructure available

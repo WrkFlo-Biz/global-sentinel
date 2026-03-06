@@ -18,7 +18,7 @@ package_builder:
   diversification:
     target_positions: 8
     min_positions: 5
-    max_positions: 12
+    max_positions: 20
     max_single_name_weight_pct: 15
     max_sector_weight_pct: 35
     max_side_bias_pct: 65

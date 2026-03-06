@@ -49,10 +49,15 @@ class BrokerAdapterError(Exception):
 
 
 class AlpacaPaperAdapter:
-    def __init__(self):
-        self.base_url = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
-        self.api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
-        self.api_secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        self.base_url = (base_url or os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+        self.api_key = api_key or os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+        self.api_secret = api_secret or os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
         self.allow_live = str(os.getenv("ALPACA_ALLOW_LIVE", "false")).lower() in {"1", "true", "yes", "y"}
 
         if not self.api_key or not self.api_secret:

@@ -19,27 +19,25 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# When shorting is blocked, use inverse ETFs instead
+# Fallback inverse ETFs for symbols that can't be shorted directly.
+# Alpaca paper trading supports direct short selling for most liquid US equities,
+# so this map is only used as a FALLBACK when direct shorting fails or for ETFs
+# that are hard to borrow.
 SHORT_TO_INVERSE = {
-    "JETS": None,  # No inverse JETS ETF — skip
     "SPY": {"symbol": "SH", "side": "long", "note": "ProShares Short S&P500"},
     "QQQ": {"symbol": "PSQ", "side": "long", "note": "ProShares Short QQQ"},
-    "EEM": None,  # EUM too illiquid, bleeds on hold — skip
     "HYG": {"symbol": "SJB", "side": "long", "note": "ProShares Short High Yield"},
     "FXI": {"symbol": "YANG", "side": "long", "note": "Direxion Daily China Bear 3x"},
-    "IYT": None,  # No good inverse transport ETF — skip
-    "XLV": None,  # No good inverse healthcare — skip
-    "CCL": None,  # No good inverse, skip
-    "DAL": None,  # No airline inverse ETF
     "GLD": {"symbol": "GLL", "side": "long", "note": "ProShares UltraShort Gold"},
     "GDX": {"symbol": "DUST", "side": "long", "note": "Direxion Daily Gold Miners Bear 2x"},
-    "VLO": None,  # No inverse refiner — skip
-    "ITA": None,  # No inverse defense ETF — skip
     "XLE": {"symbol": "ERY", "side": "long", "note": "Direxion Daily Energy Bear 2x"},
-    "RTX": None,  # No single-stock inverse — skip
-    "LMT": None,  # No single-stock inverse — skip
-    "XOM": None,  # No single-stock inverse — skip
     "UVXY": {"symbol": "SVXY", "side": "long", "note": "ProShares Short VIX Short-Term"},
+}
+
+# Symbols that are known hard-to-borrow or cannot be shorted on Alpaca paper.
+# For these, we MUST use the inverse ETF fallback (if available) or skip.
+HARD_TO_BORROW = {
+    # Add symbols here if Alpaca rejects short orders for them
 }
 
 
@@ -534,18 +532,23 @@ class TradeIdeaPackager:
             return None
 
         side = idea.get("side", "long")
+        original_symbol = symbol
+        inverse_fallback_used = False
 
-        # Convert short ideas to inverse ETF longs (Alpaca paper blocks many shorts)
+        # For short ideas: allow direct short selling on Alpaca paper trading.
+        # Only fall back to inverse ETF for hard-to-borrow symbols.
         if side == "short":
-            inverse = SHORT_TO_INVERSE.get(symbol)
-            if inverse is None:
-                return None  # No inverse available, skip
-            if inverse.get("note", "").startswith("No inverse"):
-                return None  # Explicitly marked as unavailable
-            symbol = inverse["symbol"]
-            side = inverse["side"]
-            idea = {**idea, "symbol": symbol, "side": side,
-                    "reason": f"{idea.get('reason', '')} [via inverse ETF: {inverse.get('note', '')}]"}
+            if symbol in HARD_TO_BORROW:
+                # This symbol can't be shorted directly — try inverse ETF fallback
+                inverse = SHORT_TO_INVERSE.get(symbol)
+                if inverse is None:
+                    return None  # No inverse available and can't short directly — skip
+                symbol = inverse["symbol"]
+                side = inverse["side"]
+                inverse_fallback_used = True
+                idea = {**idea, "symbol": symbol, "side": side,
+                        "reason": f"{idea.get('reason', '')} [via inverse ETF: {inverse.get('note', '')}]"}
+            # else: keep side="short" for direct short selling via Alpaca
 
         direction = "bullish" if side == "long" else "bearish"
 
@@ -609,6 +612,7 @@ class TradeIdeaPackager:
         return {
             "candidate_id": f"ta-{symbol.lower()}-{uuid.uuid4().hex[:8]}",
             "symbol": symbol,
+            "side": side,
             "direction": direction,
             "strategy_style": idea.get("strategy_style", "regime_playbook"),
             "template_key": f"regime_{side}_{symbol.lower()}",
@@ -641,5 +645,8 @@ class TradeIdeaPackager:
                 "time_window": current_window,
                 "tw_confidence_mult": tw_confidence_mult,
                 "tw_size_mult": tw_size_mult,
+                "inverse_fallback_used": inverse_fallback_used,
+                "original_symbol": original_symbol if inverse_fallback_used else None,
+                "inverse_etf_available": symbol if inverse_fallback_used else SHORT_TO_INVERSE.get(original_symbol, {}).get("symbol") if side == "short" else None,
             },
         }

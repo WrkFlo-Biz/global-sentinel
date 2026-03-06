@@ -38,7 +38,12 @@ def safe_float(v: Any, default: float = 0.0) -> float:
 
 
 class ShadowOrderRouter:
-    def __init__(self, repo_root: Path, broker_name: Optional[str] = None):
+    def __init__(
+        self,
+        repo_root: Path,
+        broker_name: Optional[str] = None,
+        alpaca_credentials: Optional[Dict[str, str]] = None,
+    ):
         self.repo_root = repo_root
         self.log_dir = repo_root / "logs" / "execution"
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +55,7 @@ class ShadowOrderRouter:
         self.registry = OrderIntentRegistry(repo_root)
 
         self.broker_name = (broker_name or os.getenv("BROKER_ADAPTER", "mock")).strip().lower()
+        self.alpaca_credentials = alpaca_credentials
         self.adapter = self._build_adapter(self.broker_name)
         self.broker_account_id = self._infer_broker_account_id()
         self.ttl_policy_engine = self._load_ttl_policy_engine(self.repo_root / "config" / "order_ttl_policy.yaml")
@@ -336,7 +342,13 @@ class ShadowOrderRouter:
         if any("option" in x for x in instrument_types):
             raise ValueError("shadow_order_router currently supports equity orders only; options route via dedicated options shadow router")
 
-        if "short" in direction or "bearish" in direction:
+        # Use explicit side field from packager if available, else infer from direction
+        explicit_side = str(candidate.get("side", "")).lower()
+        if explicit_side in ("short", "sell"):
+            side = "sell"
+        elif explicit_side in ("long", "buy"):
+            side = "buy"
+        elif "short" in direction or "bearish" in direction:
             side = "sell"
         else:
             side = "buy"
@@ -547,7 +559,11 @@ class ShadowOrderRouter:
             return MockBrokerAdapter()
         if broker_name == "alpaca_paper":
             from src.execution.alpaca_paper_adapter import AlpacaPaperAdapter
-            return AlpacaPaperAdapter()
+            creds = self.alpaca_credentials or {}
+            return AlpacaPaperAdapter(
+                api_key=creds.get("api_key"),
+                api_secret=creds.get("api_secret"),
+            )
         if broker_name == "tradier_sandbox":
             from src.execution.tradier_sandbox_adapter import TradierSandboxAdapter
             return TradierSandboxAdapter()
