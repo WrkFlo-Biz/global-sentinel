@@ -310,29 +310,59 @@ class RegimeShiftScorer:
         micro = snapshot.get("market_microstructure", {})
         evidence = []
 
+        # Direct commodities (oil, gas, metals, gasoline)
         direct = {"USO", "GLD", "SLV", "COPX", "XLE", "XOP", "UGA", "CL=F", "BZ=F", "NG=F", "RB=F", "HO=F"}
+        # 1st derivative: refiners, oil majors, oil services
         first_deriv = {"VLO", "MPC", "PSX", "PBF", "XOM", "CVX", "COP", "OXY", "SLB", "HAL", "BKR"}
-        second_deriv = {"JETS", "DAL", "UAL", "AAL", "ZIM", "ET", "EPD", "WMB"}
+        # 2nd derivative: shipping, airlines, pipelines
+        second_deriv = {"JETS", "DAL", "UAL", "AAL", "ZIM", "STNG", "FRO", "ET", "EPD", "WMB"}
+        # 3rd derivative: food/agriculture (oil → fertilizer → food), electricity, chemicals
+        third_deriv = {"DBA", "WEAT", "CORN", "SOYB", "MOS", "CF", "NTR", "XLU", "LYB", "DOW"}
 
-        all_syms = direct | first_deriv | second_deriv
+        all_syms = direct | first_deriv | second_deriv | third_deriv
         found = {s: micro[s] for s in all_syms if s in micro}
 
         if not found:
             return {"score": 0.15, "fresh": False, "evidence": []}
 
         direct_vols = [found[s].get("sigma_daily_pct", 0) for s in direct if s in found]
-        deriv_vols = [found[s].get("sigma_daily_pct", 0) for s in first_deriv | second_deriv if s in found]
+        d1_vols = [found[s].get("sigma_daily_pct", 0) for s in first_deriv if s in found]
+        d2_vols = [found[s].get("sigma_daily_pct", 0) for s in second_deriv if s in found]
+        d3_vols = [found[s].get("sigma_daily_pct", 0) for s in third_deriv if s in found]
 
         direct_avg = sum(direct_vols) / len(direct_vols) if direct_vols else 0
-        deriv_avg = sum(deriv_vols) / len(deriv_vols) if deriv_vols else 0
+        d1_avg = sum(d1_vols) / len(d1_vols) if d1_vols else 0
+        d2_avg = sum(d2_vols) / len(d2_vols) if d2_vols else 0
+        d3_avg = sum(d3_vols) / len(d3_vols) if d3_vols else 0
 
-        blended = direct_avg * 0.7 + deriv_avg * 0.3
+        # Weighted cascade: direct 50%, 1st deriv 25%, 2nd deriv 15%, 3rd deriv 10%
+        blended = direct_avg * 0.50 + d1_avg * 0.25 + d2_avg * 0.15 + d3_avg * 0.10
         score = min(blended / 4.0, 1.0)
 
         if direct_avg > 3.0:
             evidence.append(f"Commodity vol elevated: {direct_avg:.1f}%")
-        if deriv_avg > 2.5:
-            evidence.append(f"Supply chain derivative vol: {deriv_avg:.1f}%")
+        if d1_avg > 3.0:
+            evidence.append(f"Oil majors/refiners vol: {d1_avg:.1f}%")
+        if d2_avg > 3.0:
+            evidence.append(f"Shipping/airlines vol: {d2_avg:.1f}%")
+        if d3_avg > 2.5:
+            evidence.append(f"Food/utilities cascade vol: {d3_avg:.1f}%")
+
+        # Hormuz chokepoint detection: simultaneous oil + shipping + tanker stress
+        oil_crisis = direct_avg > 4.0
+        ship_crisis = d2_avg > 4.0
+        bz_price = (found.get("BZ=F", {}) or {}).get("last_price", 0)
+        cl_price = (found.get("CL=F", {}) or {}).get("last_price", 0)
+        brent_wti_spread = (bz_price - cl_price) if (bz_price > 0 and cl_price > 0) else 0
+
+        if oil_crisis and ship_crisis:
+            score = min(score + 0.25, 1.0)
+            evidence.append("HORMUZ ALERT: oil + shipping vol simultaneous spike")
+        if brent_wti_spread > 10.0:
+            score = min(score + 0.15, 1.0)
+            evidence.append(f"Brent-WTI spread at ${brent_wti_spread:.1f} (supply disruption)")
+        elif brent_wti_spread > 6.0:
+            score = min(score + 0.05, 1.0)
 
         # EIA inventory swings as supply shock signal
         for pkt in (snapshot.get("eia") or []):
@@ -349,10 +379,17 @@ class RegimeShiftScorer:
             elif isinstance(delta, (int, float)) and abs(delta) > 1.5:
                 score = min(score + 0.05, 1.0)
 
+        # Exa search Hormuz-specific articles boost
+        for pkt in (snapshot.get("exa_search") or []):
+            if isinstance(pkt, dict) and pkt.get("category") == "hormuz_chokepoint":
+                if pkt.get("severity") == "high":
+                    score = min(score + 0.10, 1.0)
+                    evidence.append(f"Exa: {(pkt.get('headline') or '')[:60]}")
+
         if score < 0.05:
             score = 0.05
 
-        return {"score": round(score, 4), "fresh": True, "evidence": evidence[:5]}
+        return {"score": round(score, 4), "fresh": True, "evidence": evidence[:8]}
 
     def _score_policy_uncertainty(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Score from Finnhub headline pressure."""

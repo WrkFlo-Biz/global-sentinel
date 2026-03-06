@@ -575,6 +575,76 @@ class TradeIdeaPackager:
                     if avg_refiner > 3.0:
                         boost["refiner_crack_spread"] = 0.05  # Refiner vol with oil vol = crack spread widening
 
+            # --- 18. Hormuz Cascade: Oil → Energy → Food → Shipping → Markets ---
+            # When oil spikes, the cascade hits in order:
+            # 1. Shipping (tanker/freight rates spike, war risk insurance)
+            # 2. Electricity/utilities (nat gas → power generation costs)
+            # 3. Food/agriculture (fertilizer costs → crop input costs → food prices)
+            # 4. Chemicals (petrochemical feedstock costs)
+            # 5. Airlines/transport (fuel costs)
+            # 6. Emerging markets (current account deficits from oil imports)
+            oil_vols = oil_vols if 'oil_vols' in dir() else []
+            avg_oil_vol = avg_oil_vol if 'avg_oil_vol' in dir() else 0
+
+            # Shipping cascade
+            shipping_syms = ["ZIM", "STNG", "FRO", "INSW", "DHT", "GOGL"]
+            ship_vols = [
+                (micro_data.get(s, {}) or {}).get("sigma_daily_pct", 0)
+                for s in shipping_syms if s in micro_data
+            ]
+            if ship_vols:
+                avg_ship = sum(ship_vols) / len(ship_vols)
+                if avg_ship > 4.0 and avg_oil_vol > 2.0:
+                    boost["hormuz_shipping_crisis"] = -0.08  # Oil+shipping vol = chokepoint disruption
+                elif avg_ship > 3.0:
+                    boost["shipping_stress"] = -0.04
+
+            # Food/agriculture cascade (oil → fertilizer → food)
+            food_syms = ["DBA", "WEAT", "CORN", "SOYB", "MOS", "CF", "NTR"]
+            food_vols = [
+                (micro_data.get(s, {}) or {}).get("sigma_daily_pct", 0)
+                for s in food_syms if s in micro_data
+            ]
+            if food_vols:
+                avg_food = sum(food_vols) / len(food_vols)
+                if avg_food > 3.0 and avg_oil_vol > 2.0:
+                    boost["food_energy_cascade"] = -0.07  # Oil spike + food vol = supply chain cascade
+                elif avg_food > 2.5:
+                    boost["food_inflation_signal"] = -0.03
+
+            # Electricity/utility cascade (gas → power costs)
+            util_syms = ["XLU", "NEE", "DUK", "SO", "VST", "CEG"]
+            util_vols = [
+                (micro_data.get(s, {}) or {}).get("sigma_daily_pct", 0)
+                for s in util_syms if s in micro_data
+            ]
+            if util_vols:
+                avg_util = sum(util_vols) / len(util_vols)
+                ng_vol = (micro_data.get("NG=F", {}) or {}).get("sigma_daily_pct", 0)
+                if avg_util > 2.0 and ng_vol > 3.0:
+                    boost["electricity_gas_cascade"] = -0.05  # Gas + utility vol = power cost crisis
+
+            # Chemical feedstock cascade
+            chem_syms = ["LYB", "DOW", "DD", "EMN"]
+            chem_vols = [
+                (micro_data.get(s, {}) or {}).get("sigma_daily_pct", 0)
+                for s in chem_syms if s in micro_data
+            ]
+            if chem_vols and avg_oil_vol > 2.5:
+                avg_chem = sum(chem_vols) / len(chem_vols)
+                if avg_chem > 3.0:
+                    boost["petrochemical_feedstock_shock"] = -0.04
+
+            # Exa search Hormuz-specific signal
+            exa_packets = signals.get("exa_search", [])
+            if isinstance(exa_packets, list):
+                hormuz_hits = sum(1 for p in exa_packets
+                                  if isinstance(p, dict) and p.get("category") == "hormuz_chokepoint")
+                if hormuz_hits >= 3:
+                    boost["exa_hormuz_crisis"] = -0.12  # Multiple Hormuz-specific breaking news
+                elif hormuz_hits >= 1:
+                    boost["exa_hormuz_alert"] = -0.06
+
         return boost
 
     def _idea_to_candidate(

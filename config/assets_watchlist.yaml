@@ -424,11 +424,14 @@ cybersecurity:
   priority: high
   keywords: ["cyberattack", "cyber warfare", "ransomware", "state-sponsored hack"]
 
-# --- Shipping & Maritime ---
+# --- Shipping & Maritime (Hormuz / Red Sea / chokepoint exposure) ---
 shipping_maritime:
-  symbols: [ZIM, GOGL, INSW, STNG, FRO]
+  symbols: [ZIM, GOGL, INSW, STNG, FRO, DHT, EURN, TNK, HAFN, BDRY, SBLK, GNK]
   priority: critical
-  keywords: ["strait of hormuz", "shipping disruption", "tanker attack", "naval blockade", "red sea"]
+  keywords: ["strait of hormuz", "shipping disruption", "tanker attack", "naval blockade", "red sea",
+             "suez canal", "bab el mandeb", "malacca strait", "chokepoint", "bunker fuel",
+             "freight rates", "VLCC", "suezmax", "aframax", "war risk insurance",
+             "tanker seizure", "maritime security", "piracy", "houthi"]
 
 # --- Uranium & Nuclear ---
 uranium_nuclear:
@@ -436,11 +439,29 @@ uranium_nuclear:
   priority: high
   keywords: ["uranium", "nuclear program", "enrichment", "nuclear deal", "IAEA"]
 
-# --- Agriculture & Food ---
+# --- Agriculture & Food (oil → fertilizer → food price cascade) ---
 agriculture_food:
-  symbols: [DBA, WEAT, CORN]
+  symbols: [DBA, WEAT, CORN, SOYB, COW, MOO, ADM, BG, CTVA, CF, MOS, NTR, DE, AGCO]
+  priority: high
+  keywords: ["food shortage", "grain disruption", "agricultural supply", "fertilizer crisis",
+             "crop failure", "food inflation", "wheat price", "corn price", "soybean",
+             "fertilizer price", "potash", "nitrogen", "phosphate", "food security",
+             "Black Sea grain", "export ban food", "drought", "famine"]
+
+# --- Electricity & Utilities (energy → power grid cascade) ---
+electricity_utilities:
+  symbols: [XLU, NEE, DUK, SO, D, AEP, EXC, SRE, ED, PCG, VST, CEG, NRG, FSLR, ENPH]
+  priority: high
+  keywords: ["electricity price", "power grid", "utility crisis", "blackout", "brownout",
+             "natural gas power", "electricity demand", "grid stress", "power outage",
+             "renewable energy", "solar", "wind power", "nuclear power", "baseload"]
+
+# --- Chemicals & Petrochemicals (oil feedstock → industrial cascade) ---
+chemicals_petrochemicals:
+  symbols: [LYB, DOW, DD, EMN, CE, HUN, WLKP, OLN]
   priority: medium
-  keywords: ["food shortage", "grain disruption", "agricultural supply", "fertilizer crisis"]
+  keywords: ["petrochemical", "ethylene", "propylene", "chemical feedstock", "naphtha",
+             "plastic prices", "chemical plant shutdown", "feedstock cost"]
 
 # --- Leveraged & Volatility ---
 leveraged_volatility:

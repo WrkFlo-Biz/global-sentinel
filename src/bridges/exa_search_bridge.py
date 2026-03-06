@@ -42,10 +42,28 @@ SEARCH_QUERIES = {
         "weight": 1.0,
     },
     "oil_supply_shock": {
-        "query": "oil supply disruption OPEC production cut crude price spike pipeline attack",
+        "query": "oil supply disruption OPEC production cut crude price spike pipeline attack Brent WTI",
         "category": "news",
         "num_results": 5,
         "weight": 0.9,
+    },
+    "hormuz_chokepoint": {
+        "query": "Strait of Hormuz Iran blockade tanker seizure Persian Gulf oil disruption naval",
+        "category": "news",
+        "num_results": 5,
+        "weight": 1.0,
+    },
+    "food_agriculture_crisis": {
+        "query": "food price crisis grain shortage fertilizer cost wheat corn soybean export ban famine",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.8,
+    },
+    "electricity_grid_crisis": {
+        "query": "electricity price spike power grid crisis blackout natural gas power shortage utility",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.75,
     },
     "central_bank_policy": {
         "query": "Federal Reserve interest rate decision ECB BOJ central bank policy surprise",
@@ -94,6 +112,97 @@ SEARCH_QUERIES = {
         "category": "news",
         "num_results": 3,
         "weight": 0.6,
+    },
+    # --- Matching existing bridge data sources ---
+    "fed_monetary_policy": {
+        "query": "FOMC minutes Federal Reserve speech testimony Powell rate guidance forward",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.9,
+    },
+    "treasury_yields_bonds": {
+        "query": "treasury yield curve inversion bond market sell-off 10-year yield spike 2-year spread",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.85,
+    },
+    "inflation_cpi_pce": {
+        "query": "CPI inflation surprise PCE price index core inflation consumer prices accelerating",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.9,
+    },
+    "labor_employment": {
+        "query": "jobs report nonfarm payrolls unemployment claims layoffs labor market tight",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.8,
+    },
+    "credit_spreads_default": {
+        "query": "credit spread widening high yield default corporate bond distress bankruptcy",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.85,
+    },
+    "congressional_insider_trading": {
+        "query": "congressional stock trading insider politician portfolio disclosure unusual trades",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.7,
+    },
+    "emerging_markets_crisis": {
+        "query": "emerging market crisis capital flight currency collapse EM debt default contagion",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.75,
+    },
+    "china_economy_trade": {
+        "query": "China economy slowdown trade war tariff retaliation yuan devaluation property crisis",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.8,
+    },
+    "shipping_chokepoint_global": {
+        "query": "Red Sea Suez Canal Bab el-Mandeb shipping disruption freight rates Houthi attack container",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.85,
+    },
+    "nuclear_uranium_energy": {
+        "query": "nuclear energy uranium enrichment IAEA Iran nuclear deal reactor plant",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.7,
+    },
+    "insurance_catastrophe_risk": {
+        "query": "insurance catastrophe loss reinsurance war risk premium natural disaster hurricane",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.65,
+    },
+    "petrochemical_feedstock": {
+        "query": "petrochemical feedstock cost ethylene naphtha chemical plant shutdown plastic prices",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.65,
+    },
+    "defense_military_spending": {
+        "query": "defense spending military contract NATO arms deal weapons procurement budget",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.7,
+    },
+    "semiconductor_chip_war": {
+        "query": "semiconductor chip shortage export ban CHIPS Act TSMC Intel NVIDIA AI chip restriction",
+        "category": "news",
+        "num_results": 3,
+        "weight": 0.75,
+    },
+    "global_recession_signal": {
+        "query": "global recession GDP contraction economic downturn PMI manufacturing decline",
+        "category": "news",
+        "num_results": 4,
+        "weight": 0.85,
     },
 }
 
