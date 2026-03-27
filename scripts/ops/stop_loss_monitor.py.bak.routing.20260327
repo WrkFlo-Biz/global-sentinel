@@ -12,14 +12,6 @@ import json, time, ssl
 import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-import sys
-
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
 
 REPO_ROOT = Path("/opt/global-sentinel")
 PAUSE_FILE = Path("/tmp/gs_trading_paused")
@@ -57,12 +49,6 @@ def _notifications_muted() -> bool:
         return False
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="trading")
-            return
-        except Exception:
-            pass
     if _notifications_muted(): return
     if not TG_TOKEN or not TG_CHAT: return
     try:

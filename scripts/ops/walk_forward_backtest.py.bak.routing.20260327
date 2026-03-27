@@ -16,13 +16,6 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import defaultdict
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("walk_forward_backtest")
 
@@ -440,13 +433,6 @@ def send_telegram(report):
     # Truncate if too long for Telegram
     if len(text) > 4000:
         text = text[:3990] + "\n..."
-
-    if _send_topic:
-        try:
-            _send_topic(text[:4000], topic="performance")
-            return
-        except Exception:
-            pass
 
     try:
         requests.post(

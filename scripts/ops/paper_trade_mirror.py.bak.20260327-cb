@@ -12,13 +12,6 @@ Uses Kelly Criterion for position sizing.
 import json, os, sys, time, datetime, urllib.request, urllib.error, traceback
 from pathlib import Path
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 # Add project root to path for smart router import
 sys.path.insert(0, str(Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))))
 _SMART_ROUTER = None
@@ -35,15 +28,6 @@ try:
     _CORR_GUARD = True
 except Exception:
     _CORR_GUARD = False
-
-# Drawdown circuit breaker
-_DRAWDOWN_BREAKER = None
-try:
-    from src.execution.drawdown_circuit_breaker import gate_order as _gate_order, check_daily_pnl as _check_daily_pnl, is_breaker_active as _is_breaker_active
-    _DRAWDOWN_BREAKER = True
-except Exception as _e:
-    print(f"[WARN] Drawdown circuit breaker not available: {_e}")
-    _DRAWDOWN_BREAKER = False
 
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 REPORTS_DIR = REPO_ROOT / "reports" / "paper_trades"
@@ -348,12 +332,6 @@ def now_et():
     return et
 
 def alpaca_request(base, key, secret, method, path, data=None):
-    # Drawdown circuit breaker gate — block new orders when tripped
-    if _DRAWDOWN_BREAKER and method == "POST" and "/v2/orders" in path:
-        if not _gate_order("paper"):
-            log("Circuit breaker active -- halting new trades")
-            return None
-
     if _SMART_ROUTER and method == "POST" and "/v2/orders" in path and data:
         try:
             result = _route_alpaca_order(base, key, secret, method, path, data)
@@ -397,12 +375,6 @@ def data_request(path):
         return None
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="trading")
-            return
-        except Exception:
-            pass
     if not TG_TOKEN or not TG_CHAT:
         return
     try:
@@ -950,13 +922,6 @@ def run():
                     ml_entered_today = False
                 time.sleep(60)
                 continue
-
-            # Check drawdown circuit breaker P&L thresholds
-            if _DRAWDOWN_BREAKER and market_minutes >= (9 * 60 + 30):
-                try:
-                    _check_daily_pnl(DT_BASE, DT_KEY, DT_SECRET, "day_trade")
-                except Exception as _cb_e:
-                    log(f"Circuit breaker check error: {_cb_e}")
 
             if market_minutes >= (9 * 60 + 35) and not dt_entered:
                 dt_positions = day_trade_scan_and_enter()

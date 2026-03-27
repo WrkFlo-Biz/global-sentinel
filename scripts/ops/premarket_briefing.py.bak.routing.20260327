@@ -9,13 +9,6 @@ import requests
 from datetime import datetime, timezone
 from collections import defaultdict
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 DATA_DIR = os.environ.get("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel") + "/data/quantum_feed"
 DOTENV = os.environ.get("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel") + "/.env"
 
@@ -48,12 +41,6 @@ def load_json(filename):
         return None
 
 def send_telegram(text):
-    if _send_topic:
-        try:
-            _send_topic(text[:4000] if isinstance(text, str) else str(text)[:4000], topic="trading")
-            return
-        except Exception:
-            pass
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     # Telegram max message length is 4096
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]

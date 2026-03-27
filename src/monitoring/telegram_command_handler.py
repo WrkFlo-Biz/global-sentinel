@@ -142,7 +142,7 @@ class TelegramCommandHandler:
         """Send a message to a chat."""
         payload: Dict[str, Any] = {
             "chat_id": chat_id,
-            "text": text[:4096],
+            "text": text[:4096], "message_thread_id": 74,
         }
         if parse_mode:
             payload["parse_mode"] = parse_mode

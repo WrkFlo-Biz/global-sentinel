@@ -15,13 +15,6 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 ctx = ssl.create_default_context()
 
 # Add repo root to path for quantum bridge
@@ -131,12 +124,6 @@ def _notifications_muted() -> bool:
         return False
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="research")
-            return
-        except Exception:
-            pass
     if _notifications_muted():
         return
     if not TG_TOKEN or not TG_CHAT:

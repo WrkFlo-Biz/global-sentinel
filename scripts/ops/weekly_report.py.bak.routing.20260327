@@ -2,14 +2,6 @@
 """Weekly System Performance Report — sent Sunday 8PM ET."""
 import json, os, datetime, glob, urllib.request
 from pathlib import Path
-import sys
-
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
 
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 QF = REPO_ROOT / "data/quantum_feed"
@@ -48,12 +40,6 @@ def get_paper_trades():
     return trades
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="performance")
-            return
-        except Exception:
-            pass
     try:
         token = env.get("TELEGRAM_BOT_TOKEN", "")
         payload = json.dumps({"chat_id": "7091381625", "text": msg[:4000], "parse_mode": "HTML", "message_thread_id": 74}).encode()

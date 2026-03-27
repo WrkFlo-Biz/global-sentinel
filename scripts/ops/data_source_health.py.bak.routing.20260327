@@ -13,14 +13,6 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
-import sys
-
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
 
 STATE_FILE = Path("/opt/global-sentinel/data/health_alert_state.json")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -44,12 +36,6 @@ def _save_state(state: dict):
 
 
 def _send_telegram(message: str):
-    if _send_topic:
-        try:
-            _send_topic(message[:4000] if isinstance(message, str) else str(message)[:4000], topic="system")
-            return
-        except Exception:
-            pass
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"[DRY RUN] {message}")
         return

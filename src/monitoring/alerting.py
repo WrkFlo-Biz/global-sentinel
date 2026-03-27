@@ -275,8 +275,8 @@ class AlertDispatcher:
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-        if str(self.telegram_chat_id).startswith("-100"):
-            _dt = os.getenv("TELEGRAM_DEFAULT_THREAD_ID")
+        if True:  # always include thread_id
+            _dt = os.getenv("TELEGRAM_DEFAULT_THREAD_ID", "74")
             if _dt:
                 _payload_dict["message_thread_id"] = int(_dt)
         payload = json.dumps(_payload_dict).encode("utf-8")
@@ -295,7 +295,7 @@ class AlertDispatcher:
             return
         import os as _os
         topic_chat = _os.getenv('TELEGRAM_TOPIC_CHAT_ID', '')
-        thread_id = _os.getenv('TELEGRAM_V6_DIGEST_THREAD_ID', '')
+        thread_id = _os.getenv('TELEGRAM_V6_DIGEST_THREAD_ID', '74')
         if not topic_chat or not self.telegram_token:
             return  # fallback: don't send at all (suppress noise)
         payload_d = {

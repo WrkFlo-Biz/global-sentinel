@@ -9,13 +9,6 @@ import json, os, sys, time, datetime, traceback, urllib.request
 from pathlib import Path
 import numpy as np
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 
 env = {}
@@ -53,12 +46,6 @@ def log(msg):
 
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="system")
-            return
-        except Exception:
-            pass
     if not TG_TOKEN or not TG_CHAT:
         return
     try:

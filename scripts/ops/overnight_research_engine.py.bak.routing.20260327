@@ -22,13 +22,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 # ---------------------------------------------------------------------------
 # Path setup & env loading
 # ---------------------------------------------------------------------------
@@ -650,18 +643,11 @@ def format_telegram_message(scored: List[Dict[str, Any]], cycle_data: Dict[str, 
 
 
 def send_telegram_final(scored: List[Dict[str, Any]], cycle_data: Dict[str, Any]) -> None:
-    """Send final picks via telegram_router (research topic)."""
-    msg = format_telegram_message(scored, cycle_data)
-    if _send_topic:
-        try:
-            _send_topic(msg, topic="research")
-            print("  [TELEGRAM] Sent to research topic")
-            return
-        except Exception as exc:
-            print(f"  [TELEGRAM] Router error: {exc}")
+    """Send final picks via TelegramTopicNotifier."""
     try:
         from src.monitoring.telegram_topic_notifier import TelegramTopicNotifier
-        notifier = TelegramTopicNotifier(topic="research")
+        notifier = TelegramTopicNotifier(topic="v6_digest")
+        msg = format_telegram_message(scored, cycle_data)
         result = notifier.send_message(msg)
         if result.ok:
             print("  [TELEGRAM] Final picks sent successfully")

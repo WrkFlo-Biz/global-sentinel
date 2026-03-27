@@ -30,6 +30,11 @@ class TelegramTopicNotifier:
         "research": "TELEGRAM_RESEARCH_THREAD_ID",
         "advisories": "TELEGRAM_ADVISORIES_THREAD_ID",
         "v6_digest": "TELEGRAM_V6_DIGEST_THREAD_ID",
+        "trading": "TELEGRAM_TRADING_THREAD_ID",
+        "macro": "TELEGRAM_MACRO_THREAD_ID",
+        "performance": "TELEGRAM_PERFORMANCE_THREAD_ID",
+        "congress": "TELEGRAM_CONGRESS_THREAD_ID",
+        "system": "TELEGRAM_SYSTEM_THREAD_ID",
     }
 
     def __init__(

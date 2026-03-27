@@ -14,13 +14,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 REPO = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 QF = REPO / "data" / "quantum_feed"
 LOG_FILE = REPO / "logs" / "watchdog.log"
@@ -108,12 +101,6 @@ def load_env():
 
 def send_telegram_alert(message):
     """Send alert via Telegram."""
-    if _send_topic:
-        try:
-            _send_topic(message[:4000] if isinstance(message, str) else str(message)[:4000], topic="system")
-            return
-        except Exception:
-            pass
     env = load_env()
     bot_token = env.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = env.get("TELEGRAM_CHAT_ID", "")

@@ -14,13 +14,6 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import defaultdict
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("daily_performance")
 
@@ -419,13 +412,6 @@ def send_telegram(report):
         lines.append("  No attributed trades today.")
 
     text = "\n".join(lines)
-    if _send_topic:
-        try:
-            _send_topic(text[:4000], topic="performance")
-            return
-        except Exception:
-            pass
-
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",

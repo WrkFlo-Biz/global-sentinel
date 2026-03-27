@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+"""
+Global Sentinel — 0DTE Options Strike Picker
+Runs at 9:20 AM ET (13:20 UTC) Mon-Fri.
+Suggests specific 0DTE option trades based on momentum + signal consensus.
+"""
+import json, os, sys, ssl, time, urllib.request, urllib.error, traceback
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+
+# --- Telegram topic routing ---
+sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
+try:
+    from src.monitoring.telegram_router import send as _send_topic
+except Exception:
+    _send_topic = None
+
+REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
+QUANTUM_FEED = REPO_ROOT / "data" / "quantum_feed"
+OUTPUT_FILE = QUANTUM_FEED / "zero_dte_picks.json"
+
+# Load .env
+env = {}
+env_path = REPO_ROOT / ".env"
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+            os.environ.setdefault(k.strip(), v.strip())
+
+# Alpaca — use day trade paper keys for account, live keys for market data
+DT_KEY = env.get("ALPACA_API_KEY", "")
+DT_SECRET = env.get("ALPACA_SECRET_KEY", "")
+DT_BASE = "https://paper-api.alpaca.markets"
+DATA_KEY = env.get("ALPACA_API_KEY_LIVE", DT_KEY)
+DATA_SECRET = env.get("ALPACA_SECRET_KEY_LIVE", DT_SECRET)
+
+# Telegram
+TG_TOKEN = env.get("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT = "7091381625"
+ctx = ssl.create_default_context()
+
+FALLBACK_SYMBOLS = ["SPY", "QQQ", "NVDA", "TSLA", "AMD"]
+
+# ============ HELPERS ============
+
+def log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def send_telegram(msg):
+    if _send_topic:
+        try:
+            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="trading")
+            return
+        except Exception:
+            pass
+    if not TG_TOKEN:
+        log("[TG] No token configured")
+        return
+    try:
+        payload = json.dumps({
+            "chat_id": TG_CHAT,
+            "text": msg,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True, "message_thread_id": 74,
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10, context=ctx)
+    except Exception as e:
+        log(f"[TG] Send error: {e}")
+
+
+def alpaca_api(key, secret, method, url, data=None):
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("APCA-API-KEY-ID", key)
+    req.add_header("APCA-API-SECRET-KEY", secret)
+    if body:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        err = e.read().decode() if e.fp else str(e)
+        log(f"API error {e.code}: {err[:300]}")
+        return None
+    except Exception as e:
+        log(f"Request error: {e}")
+        return None
+
+
+def now_et():
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
+# ============ DATA LOADING ============
+
+def get_top_momentum_symbols(n=5):
+    """Get top momentum symbols from heatmap or fallback."""
+    try:
+        path = QUANTUM_FEED / "momentum_heatmap.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            leaders = data.get("leaders_top5", [])
+            if leaders:
+                symbols = []
+                for item in leaders:
+                    if isinstance(item, dict):
+                        symbols.append(item.get("symbol", ""))
+                    elif isinstance(item, (list, tuple)) and len(item) >= 1:
+                        symbols.append(str(item[0]))
+                    elif isinstance(item, str):
+                        symbols.append(item)
+                symbols = [s for s in symbols if s][:n]
+                if symbols:
+                    log(f"Loaded {len(symbols)} momentum symbols from heatmap: {symbols}")
+                    return symbols
+    except Exception as e:
+        log(f"Error loading momentum heatmap: {e}")
+    log(f"Using fallback symbols: {FALLBACK_SYMBOLS}")
+    return FALLBACK_SYMBOLS[:n]
+
+
+def load_signal_direction(symbol):
+    """Get direction consensus from ensemble signals and strategy weights."""
+    direction = None
+    confidence = 0.0
+
+    # Try ensemble_signals.json
+    try:
+        path = QUANTUM_FEED / "ensemble_signals.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            signals = data.get("signals", [])
+            for sig in signals:
+                if isinstance(sig, dict) and sig.get("symbol") == symbol:
+                    d = sig.get("direction", "neutral")
+                    c = sig.get("confidence", 0)
+                    if d in ("long", "bullish"):
+                        direction = "call"
+                        confidence = c
+                    elif d in ("short", "bearish"):
+                        direction = "put"
+                        confidence = c
+                    break
+    except Exception as e:
+        log(f"Error loading ensemble signals for {symbol}: {e}")
+
+    # Try strategy_correlation_weights.json for symbol restrictions
+    try:
+        path = QUANTUM_FEED / "strategy_correlation_weights.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            regime = data.get("regime_adjustments", {})
+            if regime.get("bearish_bias"):
+                if direction is None:
+                    direction = "put"
+            elif regime.get("bullish_bias"):
+                if direction is None:
+                    direction = "call"
+    except Exception:
+        pass
+
+    return direction, confidence
+
+
+def get_kelly_fraction():
+    """Load Kelly sizing fraction for position sizing."""
+    try:
+        path = QUANTUM_FEED / "kelly_sizing.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            bounds = data.get("sizing_bounds", {})
+            max_pct = bounds.get("max_position_pct", 0.12)
+            return max_pct
+    except Exception:
+        pass
+    return 0.08  # default 8%
+
+
+# ============ OPTIONS CHAIN SCORING ============
+
+def get_option_chain(symbol, expiry_date, contract_type):
+    """Fetch 0DTE option chain from Alpaca."""
+    exp = expiry_date.strftime("%Y-%m-%d")
+    # Get current price first
+    quote_url = f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest"
+    quote = alpaca_api(DATA_KEY, DATA_SECRET, "GET", quote_url)
+    if not quote:
+        return None, None
+    mid_price = (quote.get("quote", {}).get("bp", 0) + quote.get("quote", {}).get("ap", 0)) / 2
+    if mid_price <= 0:
+        # Try trades
+        trade_url = f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest"
+        trade = alpaca_api(DATA_KEY, DATA_SECRET, "GET", trade_url)
+        mid_price = trade.get("trade", {}).get("p", 0) if trade else 0
+    if mid_price <= 0:
+        return None, None
+
+    # Fetch options snapshots for the expiry
+    strike_range = max(5, mid_price * 0.05)  # 5% range
+    strike_min = round(mid_price - strike_range, 2)
+    strike_max = round(mid_price + strike_range, 2)
+
+    url = (
+        f"https://data.alpaca.markets/v1beta1/options/snapshots/{symbol}"
+        f"?feed=indicative&type={contract_type}"
+        f"&strike_price_gte={strike_min}&strike_price_lte={strike_max}"
+        f"&expiration_date={exp}&limit=50"
+    )
+    data = alpaca_api(DATA_KEY, DATA_SECRET, "GET", url)
+    return data, mid_price
+
+
+def score_strikes(snapshots, underlying_price, contract_type):
+    """Score each strike based on delta target, spread, volume, OI."""
+    scored = []
+    if not snapshots:
+        return scored
+
+    for opt_sym, snap in snapshots.items():
+        quote = snap.get("latestQuote", {})
+        greeks = snap.get("greeks", {})
+        trade = snap.get("latestTrade", {})
+
+        bid = quote.get("bp", 0)
+        ask = quote.get("ap", 0)
+        if bid <= 0 or ask <= 0:
+            continue
+
+        mid = (bid + ask) / 2.0
+        spread = ask - bid
+        spread_pct = spread / mid if mid > 0 else 999
+
+        # Extract greeks
+        delta = abs(greeks.get("delta", 0))
+        volume = snap.get("dayTrade", {}).get("v", 0) if "dayTrade" in snap else 0
+        oi = snap.get("openInterest", 0)
+
+        # Parse strike from symbol (format: SPY260327C00560000 -> 560.00)
+        strike = 0
+        try:
+            # Alpaca option symbol format: UNDERLYING YYMMDD C/P STRIKE*1000
+            parts = opt_sym.replace(contract_type[0].upper(), " ").split()
+            if len(parts) >= 2:
+                strike = float(parts[-1]) / 1000.0
+        except Exception:
+            pass
+
+        # Score components (0-1 each)
+        # Delta score: prefer 0.30-0.40 range
+        delta_score = 0
+        if 0.25 <= delta <= 0.45:
+            delta_score = 1.0 - abs(delta - 0.35) / 0.10
+            delta_score = max(0, min(1, delta_score))
+        elif 0.20 <= delta <= 0.50:
+            delta_score = 0.3
+
+        # Spread score: prefer <20% of mid
+        spread_score = 0
+        if spread_pct < 0.20:
+            spread_score = 1.0 - (spread_pct / 0.20)
+        elif spread_pct < 0.35:
+            spread_score = 0.2
+
+        # Volume score
+        vol_score = 0
+        if volume >= 100:
+            vol_score = min(1.0, volume / 1000.0)
+        elif volume >= 20:
+            vol_score = 0.2
+
+        # Open interest score
+        oi_score = 0
+        if oi >= 500:
+            oi_score = min(1.0, oi / 5000.0)
+        elif oi >= 100:
+            oi_score = 0.2
+
+        # Weighted total
+        total = (delta_score * 0.35 + spread_score * 0.30 +
+                 vol_score * 0.20 + oi_score * 0.15)
+
+        scored.append({
+            "option_symbol": opt_sym,
+            "strike": strike,
+            "contract_type": contract_type,
+            "bid": bid,
+            "ask": ask,
+            "mid": round(mid, 2),
+            "spread_pct": round(spread_pct * 100, 1),
+            "delta": round(delta, 3),
+            "volume": volume,
+            "open_interest": oi,
+            "score": round(total, 3),
+            "score_breakdown": {
+                "delta": round(delta_score, 2),
+                "spread": round(spread_score, 2),
+                "volume": round(vol_score, 2),
+                "oi": round(oi_score, 2),
+            },
+        })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored
+
+
+# ============ MAIN LOGIC ============
+
+def run_picker():
+    log("=== 0DTE Strike Picker starting ===")
+    et = now_et()
+    today = et.date()
+    weekday = et.weekday()
+
+    if weekday >= 5:
+        log("Weekend — skipping")
+        return
+
+    symbols = get_top_momentum_symbols(5)
+    kelly_frac = get_kelly_fraction()
+
+    # Get account equity for sizing
+    acct = alpaca_api(DT_KEY, DT_SECRET, "GET", f"{DT_BASE}/v2/account")
+    equity = float(acct.get("equity", 100000)) if acct else 100000
+    max_per_trade = equity * kelly_frac
+    log(f"Account equity: ${equity:.0f}, Kelly max per trade: ${max_per_trade:.0f}")
+
+    all_picks = []
+
+    for symbol in symbols:
+        log(f"\n--- Analyzing {symbol} ---")
+        direction, confidence = load_signal_direction(symbol)
+
+        if direction is None:
+            # Default to call for positive movers, put for negative
+            try:
+                hm = json.loads((QUANTUM_FEED / "momentum_heatmap.json").read_text())
+                heatmap = hm.get("heatmap", {})
+                sym_data = heatmap.get(symbol, {})
+                pct = sym_data.get("pct_change", 0)
+                direction = "call" if pct >= 0 else "put"
+            except Exception:
+                direction = "call"
+            confidence = 0.3
+            log(f"{symbol}: No signal consensus, defaulting to {direction}")
+        else:
+            log(f"{symbol}: Signal direction={direction}, confidence={confidence:.2f}")
+
+        chain_data, underlying_price = get_option_chain(symbol, today, direction)
+        if not chain_data or not underlying_price:
+            log(f"{symbol}: No option chain data")
+            continue
+
+        snapshots = chain_data.get("snapshots", {})
+        if not snapshots:
+            log(f"{symbol}: No snapshots in chain")
+            continue
+
+        scored = score_strikes(snapshots, underlying_price, direction)
+        if not scored:
+            log(f"{symbol}: No scoreable strikes")
+            continue
+
+        best = scored[0]
+        entry_price = best["mid"]
+        target_price = round(entry_price * 1.50, 2)  # +50%
+        stop_price = round(entry_price * 0.70, 2)     # -30%
+
+        # Position sizing via Kelly
+        cost_per_contract = entry_price * 100
+        if cost_per_contract <= 0:
+            continue
+        max_contracts = max(1, int(max_per_trade / cost_per_contract))
+        qty = min(max_contracts, 5)  # Cap at 5 contracts
+
+        pick = {
+            "symbol": symbol,
+            "underlying_price": round(underlying_price, 2),
+            "option_symbol": best["option_symbol"],
+            "strike": best["strike"],
+            "contract_type": direction,
+            "entry_price": entry_price,
+            "target_price": target_price,
+            "stop_price": stop_price,
+            "suggested_qty": qty,
+            "cost_total": round(cost_per_contract * qty, 2),
+            "signal_direction": direction,
+            "signal_confidence": round(confidence, 3),
+            "score": best["score"],
+            "score_breakdown": best["score_breakdown"],
+            "delta": best["delta"],
+            "spread_pct": best["spread_pct"],
+            "volume": best["volume"],
+            "open_interest": best["open_interest"],
+        }
+        all_picks.append(pick)
+        log(f"{symbol}: Best strike {best['option_symbol']} score={best['score']:.3f} "
+            f"mid=${entry_price:.2f} delta={best['delta']:.3f}")
+
+    # Sort by score
+    all_picks.sort(key=lambda x: x["score"], reverse=True)
+
+    # Save output
+    output = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "date": str(today),
+        "equity": equity,
+        "kelly_fraction": kelly_frac,
+        "picks": all_picks,
+    }
+    QUANTUM_FEED.mkdir(parents=True, exist_ok=True)
+    OUTPUT_FILE.write_text(json.dumps(output, indent=2))
+    log(f"Saved {len(all_picks)} picks to {OUTPUT_FILE}")
+
+    # Send Telegram with top 3
+    if all_picks:
+        top3 = all_picks[:3]
+        lines = ["<b>0DTE Strike Picks</b> " + today.strftime("%m/%d/%Y") + "\n"]
+        for i, p in enumerate(top3, 1):
+            emoji_dir = "CALL" if p["contract_type"] == "call" else "PUT"
+            lines.append(
+                f"<b>#{i} {p['symbol']} {emoji_dir}</b>\n"
+                f"  Strike: {p['option_symbol']}\n"
+                f"  Entry: ${p['entry_price']:.2f} (mid)\n"
+                f"  Target: ${p['target_price']:.2f} (+50%)\n"
+                f"  Stop: ${p['stop_price']:.2f} (-30%)\n"
+                f"  Size: {p['suggested_qty']}x (${p['cost_total']:.0f})\n"
+                f"  Score: {p['score']:.2f} | Delta: {p['delta']:.2f} | Vol: {p['volume']}\n"
+            )
+        lines.append(
+            "<i>0DTE options are high risk. These are suggestions, not orders.</i>"
+        )
+        send_telegram("\n".join(lines))
+    else:
+        send_telegram(
+            f"<b>0DTE Strike Picks</b> {today.strftime('%m/%d/%Y')}\n"
+            "No qualifying strikes found today."
+        )
+
+    log("=== 0DTE Strike Picker complete ===")
+
+
+if __name__ == "__main__":
+    run_picker()

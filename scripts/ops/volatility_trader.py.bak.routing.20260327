@@ -24,13 +24,6 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 # ─── Config ────────────────────────────────────────────────────────────────────
 REPO_ROOT   = Path("/opt/global-sentinel")
 SIGNAL_FILE = REPO_ROOT / "data/quantum_feed/latest_signal.json"
@@ -120,12 +113,6 @@ def _notifications_muted() -> bool:
         return False
 
 def send_telegram(msg: str):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="research")
-            return
-        except Exception:
-            pass
     if _notifications_muted():
         return
     if not TG_TOKEN or not TG_CHAT:
@@ -143,12 +130,6 @@ def send_telegram(msg: str):
 
 def send_telegram_topic(msg: str):
     """Send to topic group chat (system noise channel) instead of main chat."""
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="research")
-            return
-        except Exception:
-            pass
     if _notifications_muted():
         return
     chat = TG_TOPIC_CHAT or TG_CHAT

@@ -7,13 +7,6 @@ Runs daily at 6 AM UTC (1 AM ET) — full system health check with auto-remediat
 import json, os, sys, time, subprocess, datetime, glob, shutil, urllib.request
 from pathlib import Path
 
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
-
 REPO = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 QF = REPO / "data/quantum_feed"
 LOGS = REPO / "logs"
@@ -46,12 +39,6 @@ def run(cmd, timeout=60):
         return str(e), 1
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="system")
-            return
-        except Exception:
-            pass
     try:
         token = env.get("TELEGRAM_BOT_TOKEN", "")
         if not token: return
