@@ -86,6 +86,84 @@ INDICATORS = {
 }
 
 
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+
+# FRED series for each indicator (actual values)
+FRED_SERIES = {
+    "nonfarm_payrolls": "PAYEMS",        # All Employees, Total Nonfarm
+    "cpi_yoy": "CPIAUCSL",              # CPI for All Urban Consumers
+    "gdp_qoq": "GDP",                    # Gross Domestic Product
+    "ism_manufacturing": "MANEMP",        # Manufacturing Employment (proxy)
+    "retail_sales_mom": "RSAFS",          # Advance Retail Sales
+    "housing_starts": "HOUST",            # Housing Starts
+}
+
+
+def fetch_fred_series(series_id: str, observation_start: str, observation_end: str) -> List[Dict]:
+    """Fetch observations from FRED API."""
+    api_key = FRED_API_KEY
+    if not api_key:
+        return []
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": api_key,
+        "file_type": "json",
+        "observation_start": observation_start,
+        "observation_end": observation_end,
+        "sort_order": "desc",
+        "limit": "12",
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("observations", [])
+    except Exception as e:
+        logger.warning(f"FRED fetch for {series_id} failed: {e}")
+        return []
+
+
+def seed_from_fred() -> List[Dict[str, Any]]:
+    """Seed economic release history from FRED data when calendar APIs return nothing."""
+    if not FRED_API_KEY:
+        logger.warning("FRED_API_KEY not set, cannot seed economic data")
+        return []
+
+    releases = []
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    for indicator_key, series_id in FRED_SERIES.items():
+        obs = fetch_fred_series(series_id, start_date, end_date)
+        if len(obs) < 2:
+            continue
+
+        # Use consecutive observations to compute surprise (actual vs prior as estimate proxy)
+        valid_obs = [(o["date"], float(o["value"])) for o in obs if o.get("value", ".") != "."]
+        if len(valid_obs) < 2:
+            continue
+
+        for i in range(len(valid_obs) - 1):
+            date_str, actual = valid_obs[i]
+            _, prior = valid_obs[i + 1]
+
+            # Use prior value as naive "consensus estimate"
+            estimate = prior
+            surprise = _compute_surprise_score(actual, estimate, indicator_key)
+
+            releases.append({
+                "date": date_str,
+                "indicator": indicator_key,
+                "indicator_name": INDICATORS[indicator_key]["name"],
+                "event_raw": f"FRED:{series_id}",
+                **surprise,
+            })
+
+    logger.info(f"Seeded {len(releases)} economic releases from FRED")
+    return releases
+
+
 def fetch_economic_calendar_finnhub(from_date: str, to_date: str) -> List[Dict[str, Any]]:
     """Fetch economic calendar from Finnhub."""
     if not FINNHUB_KEY:
@@ -124,12 +202,18 @@ def _classify_event(event_name: str) -> Optional[str]:
     name_lower = event_name.lower() if event_name else ""
 
     mappings = [
-        ("nonfarm_payrolls", ["nonfarm payroll", "non-farm payroll", "nfp", "employment change"]),
-        ("cpi_yoy", ["consumer price index", "cpi y/y", "cpi yoy", "cpi annual"]),
-        ("gdp_qoq", ["gdp q/q", "gdp qoq", "gross domestic product", "gdp growth"]),
-        ("ism_manufacturing", ["ism manufacturing", "ism pmi", "manufacturing pmi"]),
-        ("retail_sales_mom", ["retail sales m/m", "retail sales mom", "core retail"]),
-        ("housing_starts", ["housing starts", "building permits"]),
+        ("nonfarm_payrolls", ["nonfarm payroll", "non-farm payroll", "nfp", "employment change",
+                              "payrolls", "jobs report", "employment situation"]),
+        ("cpi_yoy", ["consumer price index", "cpi y/y", "cpi yoy", "cpi annual", "cpi m/m",
+                      "cpi mom", "core cpi", "inflation rate"]),
+        ("gdp_qoq", ["gdp q/q", "gdp qoq", "gross domestic product", "gdp growth",
+                      "gdp annualized", "gdp preliminary", "gdp advance", "gdp final"]),
+        ("ism_manufacturing", ["ism manufacturing", "ism pmi", "manufacturing pmi",
+                                "ism non-manufacturing", "ism services", "pmi composite"]),
+        ("retail_sales_mom", ["retail sales m/m", "retail sales mom", "core retail",
+                              "retail sales", "advance retail"]),
+        ("housing_starts", ["housing starts", "building permits", "new home sales",
+                            "existing home sales", "pending home sales", "housing"]),
     ]
 
     for key, patterns in mappings:
@@ -337,6 +421,13 @@ def run() -> Dict[str, Any]:
         new_releases.append(release)
         history.append(release)
         existing_keys.add((date, indicator_key))
+
+    # If no data from calendars, seed from FRED
+    if not history:
+        logger.info("No calendar data found, seeding from FRED...")
+        fred_releases = seed_from_fred()
+        history.extend(fred_releases)
+        new_releases.extend(fred_releases)
 
     # Save updated history
     save_release_history(history)

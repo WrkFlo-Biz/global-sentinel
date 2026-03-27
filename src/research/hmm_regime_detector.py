@@ -199,6 +199,17 @@ def fit_hmm_regime(n_states: int = 3, lookback_days: int = 120) -> Dict[str, Any
     if best_model is None:
         return {"error": "HMM fitting failed across all random seeds"}
 
+    # Regularize transition matrix to prevent absorbing states
+    epsilon = 0.01
+    transmat = best_model.transmat_.copy()
+    for i in range(n_states):
+        for j in range(n_states):
+            if i != j:
+                transmat[i, j] = max(transmat[i, j], epsilon)
+        transmat[i] /= transmat[i].sum()
+    best_model.transmat_ = transmat
+    logger.info("Regularized transition matrix (epsilon=%.3f) to prevent absorbing states", epsilon)
+
     # Get current regime
     hidden_states = best_model.predict(X)
     current_state = int(hidden_states[-1])

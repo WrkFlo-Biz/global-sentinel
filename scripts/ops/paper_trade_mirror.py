@@ -195,12 +195,40 @@ def load_overnight_gap_signals():
         return {}
 
 
+def load_scalping_signals():
+    """Load scalping engine signals from quantum feed."""
+    try:
+        path = QUANTUM_FEED / "scalping_signals.json"
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text())
+        signals = {}
+        for sig in data.get("signals", []):
+            sym = sig.get("symbol", "")
+            if sym and sig.get("confidence", 0) >= 0.5:
+                signals[sym] = {
+                    "source": "scalping",
+                    "direction": sig.get("direction", "long"),
+                    "strength": sig.get("confidence", 0.5),
+                    "entry": sig.get("entry"),
+                    "stop": sig.get("stop"),
+                    "target": sig.get("target"),
+                    "risk_reward": sig.get("risk_reward", 0),
+                    "type": sig.get("type", "unknown"),
+                }
+        return signals
+    except Exception as e:
+        log(f"[SIGNALS] Scalping load error: {e}")
+        return {}
+
+
 def aggregate_signals(symbol):
     """Aggregate all signal sources for a symbol. Returns dict with consensus info."""
     orb = load_orb_signals()
     ict = load_ict_smc_signals()
     ensemble = load_ensemble_signals()
     gap = load_overnight_gap_signals()
+    scalp = load_scalping_signals()
 
     sources = {}
     if symbol in orb:
@@ -211,6 +239,8 @@ def aggregate_signals(symbol):
         sources["ensemble"] = ensemble[symbol]
     if symbol in gap:
         sources["overnight_gap"] = gap[symbol]
+    if symbol in scalp:
+        sources["scalping"] = scalp[symbol]
 
     if not sources:
         return {"symbol": symbol, "agreeing_sources": 0, "direction": None, "sources": {}}

@@ -141,8 +141,44 @@ class FinBERTSentimentBridge(BaseBridge):
                                 title = item.get("title") or item.get("headline") or ""
                                 if title:
                                     headlines.append(title)
+                # Also check top_signals (dict of category -> list of headline strings)
+                top_signals = data.get("top_signals", {})
+                if isinstance(top_signals, dict):
+                    for category, items in top_signals.items():
+                        if isinstance(items, list):
+                            for item in items:
+                                if isinstance(item, str):
+                                    # Strip source prefix like "[SERP] "
+                                    clean = item.split("] ", 1)[-1] if item.startswith("[") else item
+                                    headlines.append(clean)
         except Exception as exc:
             logger.debug("Failed to read latest_signal.json: %s", exc)
+
+        # Source 1b: News impact bridge output
+        try:
+            news_path = data_dir / "news_impact.json"
+            if news_path.exists():
+                data = json.loads(news_path.read_text(encoding="utf-8"))
+                for article in data.get("data", {}).get("articles", data.get("articles", [])):
+                    if isinstance(article, dict):
+                        title = article.get("title") or article.get("headline") or ""
+                        if title:
+                            headlines.append(title)
+        except Exception as exc:
+            logger.debug("Failed to read news_impact.json: %s", exc)
+
+        # Source 1c: Exa search results
+        try:
+            for exa_file in data_dir.glob("exa_*.json"):
+                data = json.loads(exa_file.read_text(encoding="utf-8"))
+                results = data.get("data", {}).get("results", data.get("results", []))
+                if isinstance(results, list):
+                    for r in results[:30]:
+                        title = r.get("title") or ""
+                        if title:
+                            headlines.append(title)
+        except Exception as exc:
+            logger.debug("Failed to read exa data: %s", exc)
 
         # Source 2: GDELT data
         try:

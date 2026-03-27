@@ -144,6 +144,14 @@ class BrokerStateReconcilerLoop:
 
         # Priority 1: known broker order id
         if broker_order_id:
+            # Skip API lookup for mock order IDs - they don't exist in the broker
+            if str(broker_order_id).startswith("mock-"):
+                self._log_event("skip_mock_order", {
+                    "intent_id": intent_id,
+                    "broker_order_id": broker_order_id,
+                    "reason": "mock_order_id_skipped",
+                })
+                return
             try:
                 broker_order = self.adapter.get_order(str(broker_order_id))
             except Exception as e:

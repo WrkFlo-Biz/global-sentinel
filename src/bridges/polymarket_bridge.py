@@ -64,13 +64,33 @@ class PolymarketBridge(BaseBridge):
         if requests is None:
             return []
         try:
-            params = {"tag": tag, "active": str(active).lower()}
+            params = {
+                "tag": tag,
+                "active": str(active).lower(),
+                "closed": "false",
+                "order": "volume",
+                "ascending": "false",
+                "limit": "50",
+            }
             resp = requests.get(GAMMA_EVENTS_URL, params=params, timeout=15)
             resp.raise_for_status()
-            return resp.json() if isinstance(resp.json(), list) else []
+            events = resp.json() if isinstance(resp.json(), list) else []
+            # Filter out events with end_date in the past
+            return self._filter_expired(events)
         except Exception as exc:
             logger.warning("Polymarket events fetch failed: %s", exc)
             return []
+
+    def _filter_expired(self, items: List[Dict]) -> List[Dict]:
+        """Remove markets/events whose end_date is in the past."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        filtered = []
+        for item in items:
+            end_date = item.get("endDate") or item.get("end_date") or item.get("end_date_iso") or ""
+            if end_date and end_date < now_iso:
+                continue  # expired
+            filtered.append(item)
+        return filtered
 
     def _search_keyword_markets(self, keywords: List[str]) -> List[Dict]:
         """Search markets by keyword to find Iran/war/peace specific markets."""
@@ -99,7 +119,7 @@ class PolymarketBridge(BaseBridge):
             if cid and cid not in seen:
                 seen.add(cid)
                 unique.append(m)
-        return unique
+        return self._filter_expired(unique)
 
     def _extract_market_data(self, market: Dict) -> Optional[Dict]:
         """Extract structured data from a market/event entry."""

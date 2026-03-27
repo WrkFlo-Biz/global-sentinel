@@ -132,7 +132,7 @@ class InsiderTradingBridge:
         }
 
     def _scan_insider_trades(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Scan a single symbol for recent Form 4 filings."""
+        """Scan a single symbol for recent Form 4 filings using edgartools Form4 object."""
         try:
             company = Company(symbol)
             filings = company.get_filings(form="4")
@@ -147,27 +147,76 @@ class InsiderTradingBridge:
             # Process recent filings (up to 10)
             for i, filing in enumerate(filings[:10]):
                 try:
-                    filed_date = filing.filed if hasattr(filing, "filed") else None
+                    filed_date = getattr(filing, "filing_date", None)
                     if filed_date and hasattr(filed_date, "year"):
                         filed_dt = datetime(filed_date.year, filed_date.month, filed_date.day, tzinfo=timezone.utc)
                         if filed_dt < cutoff:
                             continue
 
-                    filer = str(getattr(filing, "filer", "Unknown"))
-                    accession = str(getattr(filing, "accession_number", getattr(filing, "accession_no", "")))
+                    accession = str(getattr(filing, "accession_no", getattr(filing, "accession_number", "")))
 
-                    # Try to get transaction details from the filing
-                    trade_info = {
-                        "symbol": symbol,
-                        "filer": filer,
-                        "filed_date": str(filed_date) if filed_date else None,
-                        "accession": accession,
-                        "form": "4",
-                        "transaction_type": "insider_transaction",
-                        "url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={symbol}&type=4",
-                    }
-                    trades.append(trade_info)
-                    time.sleep(0.1)  # Rate limit
+                    # Parse the Form 4 data object for real insider info
+                    filer = "Unknown"
+                    position = ""
+                    try:
+                        form4 = filing.obj()
+                        filer = getattr(form4, "insider_name", "Unknown") or "Unknown"
+                        position = getattr(form4, "position", "") or ""
+
+                        # Extract transaction activities
+                        activities = form4.get_transaction_activities()
+                        for act in activities:
+                            tx_type = getattr(act, "transaction_type", "")
+                            shares = getattr(act, "shares", 0) or 0
+                            value = getattr(act, "value", 0) or 0
+                            price = getattr(act, "price_per_share", None)
+                            code = getattr(act, "code", "")
+
+                            # Classify: P=Purchase, S=Sale, M=Exercise, F=Tax
+                            if code == "P":
+                                tx_label = "purchase"
+                                buy_total += float(value) if value else 0
+                            elif code == "S":
+                                tx_label = "sale"
+                                sell_total += float(value) if value else 0
+                            elif code == "M":
+                                tx_label = "exercise"
+                            elif code == "F":
+                                tx_label = "tax_withholding"
+                                sell_total += float(value) if value else 0
+                            else:
+                                tx_label = tx_type or "other"
+
+                            trade_info = {
+                                "symbol": symbol,
+                                "filer": str(filer),
+                                "position": str(position),
+                                "filed_date": str(filed_date) if filed_date else None,
+                                "accession": accession,
+                                "form": "4",
+                                "transaction_type": tx_label,
+                                "transaction_code": code,
+                                "shares": int(shares) if shares else 0,
+                                "value": round(float(value), 2) if value else 0,
+                                "price_per_share": float(price) if price and str(price).replace(".", "").isdigit() else None,
+                                "url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={symbol}&type=4",
+                            }
+                            trades.append(trade_info)
+                    except Exception as parse_err:
+                        # Fallback: at least record the filing with basic info
+                        logger.debug(f"[InsiderTradingBridge] {symbol} Form4 parse: {parse_err}")
+                        trades.append({
+                            "symbol": symbol,
+                            "filer": filer,
+                            "filed_date": str(filed_date) if filed_date else None,
+                            "accession": accession,
+                            "form": "4",
+                            "transaction_type": "parse_error",
+                            "shares": 0,
+                            "value": 0,
+                        })
+
+                    time.sleep(0.12)  # SEC EDGAR rate limit
                 except Exception:
                     continue
 

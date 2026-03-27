@@ -155,6 +155,10 @@ _broker_health: Dict[str, BrokerHealth] = {
     "tastytrade": BrokerHealth(),
     "ibkr": BrokerHealth(),
 }
+# Tastytrade auth backoff state
+_tastytrade_backoff_until = 0.0
+_tastytrade_fail_count = 0
+
 
 # ---------------------------------------------------------------------------
 # Balance checkers
@@ -314,13 +318,28 @@ def refresh_all_health(force: bool = False) -> Dict[str, Dict[str, Any]]:
                      _broker_health["alpaca"].day_trades_remaining,
                      _broker_health["alpaca"].error or "OK")
 
+    global _tastytrade_backoff_until, _tastytrade_fail_count
     if now - _broker_health["tastytrade"].last_check > cutoff:
-        _broker_health["tastytrade"] = _check_tastytrade_health()
-        logger.info("Tastytrade: connected=%s equity=%.0f bp=%.0f %s",
-                     _broker_health["tastytrade"].connected,
-                     _broker_health["tastytrade"].equity,
-                     _broker_health["tastytrade"].buying_power,
-                     _broker_health["tastytrade"].error or "OK")
+        if now < _tastytrade_backoff_until:
+            logger.debug("Tastytrade: skipping health check (backoff until %.0f, now %.0f)", _tastytrade_backoff_until, now)
+        else:
+            _broker_health["tastytrade"] = _check_tastytrade_health()
+            if _broker_health["tastytrade"].error and not _broker_health["tastytrade"].connected:
+                _tastytrade_fail_count += 1
+                # Exponential backoff: 1h, 4h, 8h, max 24h
+                backoff_secs = min(3600 * (4 ** (_tastytrade_fail_count - 1)), 86400)
+                _tastytrade_backoff_until = now + backoff_secs
+                logger.warning("Tastytrade auth failed (%d consecutive), backing off %.0fh: %s",
+                               _tastytrade_fail_count, backoff_secs / 3600,
+                               _broker_health["tastytrade"].error)
+            else:
+                _tastytrade_fail_count = 0
+                _tastytrade_backoff_until = 0.0
+            logger.info("Tastytrade: connected=%s equity=%.0f bp=%.0f %s",
+                         _broker_health["tastytrade"].connected,
+                         _broker_health["tastytrade"].equity,
+                         _broker_health["tastytrade"].buying_power,
+                         _broker_health["tastytrade"].error or "OK")
 
     if now - _broker_health["ibkr"].last_check > cutoff:
         _broker_health["ibkr"] = _check_ibkr_health()

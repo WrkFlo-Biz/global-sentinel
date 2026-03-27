@@ -308,86 +308,39 @@ def send_telegram(text: str, bot_token: str, chat_id: str,
 # ---------------------------------------------------------------------------
 
 def fetch_serp_news() -> List[Dict[str, Any]]:
-    """Fetch news via Exa AI search (replaced SerpAPI 2026-03-23)."""
-    if not EXA_API_KEY:
-        print("  [EXA] No EXA_API_KEY set, skipping")
-        return []
+    """Fetch news via DuckDuckGo search (replaced Exa 2026-03-27)."""
+    from duckduckgo_search import DDGS
 
     all_results: List[Dict[str, Any]] = []
-    exa_queries = [
+    ddg_queries = [
         "Iran war latest geopolitical",
         "Strait of Hormuz oil shipping disruption",
         "crude oil price surge supply shock",
         "defense military spending contract",
         "Houthi Red Sea shipping attack",
+        "gold safe haven demand",
+        "energy crisis natural gas LNG",
     ]
-    headers = {
-        "x-api-key": EXA_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    for query in exa_queries:
+    for query in ddg_queries:
         if _shutdown:
             break
         try:
-            payload = json.dumps({
-                "query": query,
-                "type": "neural",
-                "useAutoprompt": True,
-                "numResults": 10,
-                "contents": {"text": {"maxCharacters": 300}},
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.exa.ai/search",
-                data=payload,
-                headers=headers,
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            for result in (data.get("results") or []):
+            with DDGS() as ddgs:
+                results = list(ddgs.news(query, max_results=10))
+            for r in results:
                 all_results.append({
-                    "source": "exa_search",
-                    "title": result.get("title", ""),
-                    "url": result.get("url", ""),
-                    "snippet": (result.get("text") or "")[:300],
-                    "published": result.get("publishedDate", ""),
-                    "score": result.get("score", 0),
+                    "source": "ddg_news",
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": (r.get("body") or "")[:300],
+                    "published": r.get("date", ""),
+                    "score": 0,
                 })
-            print(f"  [EXA] \'{query[:40]}\' => {len(data.get('results', []))} results")
+            print(f"  [DDG] \'{query[:40]}\' => {len(results)} results")
         except Exception as exc:
-            print(f"  [EXA] \'{query[:40]}\' failed: {exc}")
+            print(f"  [DDG] \'{query[:40]}\' failed: {exc}")
         time.sleep(0.5)
-    print(f"  [EXA] Total => {len(all_results)} articles")
-    return all_results
-    if not SERP_API_KEY:
-        print("  [SERP] No API key, skipping")
-        return []
-
-    all_results = []
-    for query in SERP_QUERIES:
-        if _shutdown:
-            break
-        encoded = urllib.parse.quote(query)
-        url = f"https://serpapi.com/search.json?engine=google_news&q={encoded}&api_key={SERP_API_KEY}"
-        data = http_get(url, timeout=20)
-        if not data:
-            continue
-
-        articles = data.get("news_results", []) or data.get("organic_results", [])
-        for art in articles[:10]:
-            item = {
-                "source": "serp_google_news",
-                "query": query,
-                "title": art.get("title", ""),
-                "link": art.get("link", ""),
-                "snippet": art.get("snippet", art.get("description", ""))[:300],
-                "date": art.get("date", ""),
-            }
-            all_results.append(item)
-        print(f"  [SERP] '{query}' => {len(articles)} results")
-        time.sleep(0.5)
-
+    print(f"  [DDG] Total => {len(all_results)} articles")
     return all_results
 
 

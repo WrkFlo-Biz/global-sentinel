@@ -52,6 +52,23 @@ IMPACT_RULES: List[Tuple[str, int, str]] = [
     (r"(?:partnership|collaboration|deal)\s+with", 1, "partnership"),
     (r"(?:recall|safety\s+issue|defect)", -2, "recall"),
     (r"(?:new\s+product|launch|unveiled|introduced)", 1, "product_launch"),
+    (r"(?:war|military\s+strike|airstrikes|bombing|invasion)", -3, "geopolitical_conflict"),
+    (r"(?:ceasefire|peace\s+(?:deal|talks|agreement))", 2, "peace_prospect"),
+    (r"(?:stocks?|market|dow|s&p|nasdaq)\s+(?:tumble|crash|plunge|sink|drop|fall|slide)", -3, "market_selloff"),
+    (r"(?:stocks?|market|dow|s&p|nasdaq)\s+(?:rally|surge|soar|jump|climb|gain)", 3, "market_rally"),
+    (r"(?:oil|crude)\s+(?:surge|spike|soar|jump|rally)", -1, "oil_spike"),
+    (r"(?:oil|crude)\s+(?:crash|plunge|tumble|drop|fall)", 1, "oil_drop"),
+    (r"(?:recession|economic\s+(?:downturn|contraction|slowdown))", -3, "recession_fear"),
+    (r"(?:rate\s+(?:cut|lower|reduction)|dovish)", 2, "rate_cut"),
+    (r"(?:rate\s+(?:hike|raise|increase)|hawkish)", -1, "rate_hike"),
+    (r"(?:inflation\s+(?:rise|surge|spike|hot|higher))", -2, "inflation_concern"),
+    (r"(?:correction|bear\s+market)", -2, "correction"),
+    (r"(?:bull\s+market|recovery|rebound)", 2, "recovery"),
+    (r"(?:supply\s+(?:chain|shortage|crisis|disruption))", -2, "supply_disruption"),
+    (r"(?:tension|escalat|conflict|crisis)", -1, "geopolitical_tension"),
+    (r"(?:worst\s+(?:week|day|month|quarter|year))", -2, "worst_period"),
+    (r"(?:best\s+(?:week|day|month|quarter|year))", 2, "best_period"),
+    (r"(?:short\s+squeeze)", 2, "short_squeeze"),
 ]
 
 COMPILED_RULES = [(re.compile(pat, re.IGNORECASE), score, cat) for pat, score, cat in IMPACT_RULES]
@@ -109,6 +126,26 @@ def _score_headline(headline: str) -> Tuple[int, List[str]]:
         if pattern.search(headline):
             total += score
             cats.append(category)
+
+    # Baseline sentiment from word matching if no rules triggered
+    if total == 0:
+        hl = headline.lower()
+        pos_words = ["gain", "rise", "profit", "grow", "boost", "positive", "upbeat",
+                     "strong", "optimis", "outperform", "bullish", "upgrade", "record",
+                     "rally", "surge", "soar", "jump", "climb"]
+        neg_words = ["loss", "fall", "drop", "decline", "fear", "worry", "concern",
+                     "weak", "pessimis", "underperform", "bearish", "downgrade", "risk",
+                     "warn", "threat", "drag", "suffer", "worst", "trouble", "woes",
+                     "tumble", "plunge", "sink", "slide", "crash"]
+        pos_count = sum(1 for w in pos_words if w in hl)
+        neg_count = sum(1 for w in neg_words if w in hl)
+        if pos_count > neg_count:
+            total = min(pos_count, 2)
+            cats.append("baseline_positive")
+        elif neg_count > pos_count:
+            total = -min(neg_count, 2)
+            cats.append("baseline_negative")
+
     return max(-5, min(5, total)), cats
 
 

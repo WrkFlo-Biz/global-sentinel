@@ -309,24 +309,45 @@ def calculate_kelly(trades: List[Dict]) -> Dict:
 # ---------------------------------------------------------------------------
 
 def get_account_equity() -> float:
-    """Try to read account equity from broker health or env."""
-    # Try broker routing first
+    """Read equity from the paper day-trade account (ALPACA_API_KEY).
+
+    The broker_health_log tracks the *live* account (~$152),
+    so we query the paper account directly via API.
+    Falls back to DEFAULT_EQUITY only if the API call fails.
+    """
+    import urllib.request, urllib.error
+    env = {}
+    env_path = REPO_ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    api_key = env.get("ALPACA_API_KEY", os.environ.get("ALPACA_API_KEY", ""))
+    api_secret = env.get("ALPACA_SECRET_KEY", os.environ.get("ALPACA_SECRET_KEY", ""))
+    if api_key and api_secret:
+        try:
+            req = urllib.request.Request(
+                "https://paper-api.alpaca.markets/v2/account",
+                headers={
+                    "APCA-API-KEY-ID": api_key,
+                    "APCA-API-SECRET-KEY": api_secret,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                acct = json.loads(resp.read())
+            eq = float(acct.get("equity", 0))
+            if eq > 0:
+                log(f"  Paper account equity: ${eq:,.2f}")
+                return eq
+        except Exception as e:
+            log(f"  Paper account API error: {e}")
+    # Fallback: try broker routing
     broker = load_json(QF / "broker_routing.json")
     equity = broker.get("equity", broker.get("account_equity", 0))
     if equity and float(equity) > 0:
         return float(equity)
-    # Try broker health log (last line)
-    health_log = QF / "broker_health_log.jsonl"
-    if health_log.exists():
-        try:
-            lines = health_log.read_text().strip().split("\n")
-            if lines:
-                last = json.loads(lines[-1])
-                eq = last.get("equity", 0)
-                if eq and float(eq) > 0:
-                    return float(eq)
-        except Exception:
-            pass
     return DEFAULT_EQUITY
 
 

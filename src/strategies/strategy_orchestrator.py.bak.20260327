@@ -79,13 +79,10 @@ def run_options_strategy(ctx):
 
 # === 3. CRYPTO STRATEGY ===
 def run_crypto_strategy(ctx):
-    raw = ctx.get("defi_data", {})
-    defi = raw.get("data", raw)
-    tvl_block = defi.get("tvl", {})
-    tvl = tvl_block.get("current_tvl_usd", tvl_block.get("current_tvl_billions", 0))
-    tvl_trend = tvl_block.get("trend", "unknown")
-    stable_block = defi.get("stablecoins", {})
-    stablecoin = stable_block.get("total_stablecoin_mcap_billions", stable_block.get("total_mcap", 0))
+    defi = ctx.get("defi_data", {})
+    tvl = defi.get("tvl", {}).get("current_tvl", 0)
+    tvl_trend = defi.get("tvl", {}).get("trend", "unknown")
+    stablecoin = defi.get("stablecoins", {}).get("total_mcap", 0)
     signal = "risk_on" if tvl_trend == "expanding" else ("risk_off" if tvl_trend == "contracting" else "neutral")
     return {"strategy": "crypto", "tvl": tvl, "tvl_trend": tvl_trend, "stablecoin_mcap": stablecoin,
             "signal": signal, "direction": "long_btc_eth" if signal == "risk_on" else "avoid"}
