@@ -1,0 +1,267 @@
+# Global Sentinel V5.4.1 — 24/7 Crypto War Strategies
+# Trades on crypto markets 24/7/365 — no market hours restriction
+# Alpaca supports 36 crypto/USD pairs with GTC and IOC orders
+# War thesis: BTC as digital gold, sanctions evasion demand, inflation hedge,
+# risk-on/risk-off flows, energy-linked tokens, DeFi disruption
+
+schema_version: "crypto_strategies.v1"
+market_hours: "24/7"
+execution_frequency_seconds: 120  # Check every 2 minutes
+
+# Both accounts can trade crypto on Alpaca
+accounts:
+  day_trade:
+    account_id: "PA3F6696XKWK"
+    crypto_allocation_pct: 15  # 15% of $100K = $15K max in crypto
+    max_crypto_positions: 5
+  medium_long:
+    account_id: "PA36T8OFBNXB"
+    crypto_allocation_pct: 5   # 5% of $500K = $25K max in crypto
+    max_crypto_positions: 5
+
+risk_controls:
+  max_single_position_pct: 5    # 5% of crypto allocation per position
+  stop_loss_pct: 5.0            # Wider stops for crypto volatility
+  take_profit_pct: 10.0
+  daily_crypto_loss_halt_usd: 1000
+  correlation_check: true       # Don't stack all altcoins same direction
+
+strategies:
+  # ═══════════════════════════════════════
+  # STRATEGY C1: BTC DIGITAL GOLD (24/7)
+  # War = inflation = BTC bid
+  # ═══════════════════════════════════════
+  btc_digital_gold:
+    account: medium_long
+    timeframe: swing
+    hold_period_days: [7, 30]
+    market_hours: "24/7"
+    thesis: "BTC as digital gold during war. $150 oil = inflation = BTC catches bid. Central banks debase currencies to fund war spending. BTC is the exit."
+    entry_rules:
+      - "Accumulate on 3%+ dips from local high"
+      - "Add on oil price spikes (correlation trade)"
+      - "Scale in over days, not all at once"
+    exit_rules:
+      - "Trim 25% on 10% gain"
+      - "Hold core through war period"
+      - "Stop: -8% from average entry"
+    positions:
+      - symbol: "BTC/USD"
+        notional_usd: 10000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C2: ETH SMART CONTRACT DEMAND (24/7)
+  # Sanctions = DeFi demand = ETH
+  # ═══════════════════════════════════════
+  eth_defi_demand:
+    account: medium_long
+    timeframe: swing
+    hold_period_days: [7, 30]
+    market_hours: "24/7"
+    thesis: "Sanctions drive capital into DeFi. ETH is the base layer. Staking yield + war premium."
+    positions:
+      - symbol: "ETH/USD"
+        notional_usd: 7500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C3: SOL MOMENTUM SCALP (24/7)
+  # High-beta crypto for intraday moves
+  # ═══════════════════════════════════════
+  sol_momentum:
+    account: medium_long
+    timeframe: intraday_crypto
+    hold_period_hours: [1, 12]
+    market_hours: "24/7"
+    thesis: "SOL has highest beta among large-caps. 5-10% daily moves common. Scalp momentum on war headline spikes."
+    entry_rules:
+      - "Buy on 3%+ move in 1 hour with volume confirmation"
+      - "Sell on 5%+ fade from hourly high"
+      - "Weekend liquidity thinner — reduce size 50%"
+    positions:
+      - symbol: "SOL/USD"
+        notional_usd: 3000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C4: PAXG GOLD-BACKED TOKEN (24/7)
+  # Physical gold exposure that trades 24/7
+  # ═══════════════════════════════════════
+  paxg_gold_proxy:
+    account: medium_long
+    timeframe: position
+    hold_period_days: [14, 60]
+    market_hours: "24/7"
+    thesis: "PAXG is 1:1 backed by physical gold stored in London vaults. Unlike GLD which only trades during market hours, PAXG trades 24/7. Gold safe haven during war."
+    positions:
+      - symbol: "PAXG/USD"
+        notional_usd: 5000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C5: LINK ORACLE DEMAND (24/7)
+  # DeFi infrastructure for real-world data
+  # ═══════════════════════════════════════
+  link_oracle_demand:
+    account: medium_long
+    timeframe: swing_crypto
+    hold_period_days: [3, 14]
+    market_hours: "24/7"
+    thesis: "Chainlink oracles power every DeFi protocol. War drives DeFi volume. LINK benefits from increased transaction demand."
+    positions:
+      - symbol: "LINK/USD"
+        notional_usd: 2000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C6: ALTCOIN MOMENTUM BASKET (24/7)
+  # High-beta altcoins for volatile moves
+  # ═══════════════════════════════════════
+  altcoin_momentum:
+    account: medium_long
+    timeframe: intraday_crypto
+    hold_period_hours: [2, 24]
+    market_hours: "24/7"
+    thesis: "Altcoins move 2-3x BTC beta. On risk-on crypto days, rotate into highest momentum altcoins. On risk-off, exit to BTC/PAXG."
+    entry_rules:
+      - "Buy top 3 performers of last 4 hours"
+      - "Minimum 2% move to qualify"
+      - "Exit if momentum reverses (1% from high)"
+    positions:
+      - symbol: "AVAX/USD"
+        notional_usd: 2000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "DOT/USD"
+        notional_usd: 1500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "UNI/USD"
+        notional_usd: 1500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C7: MEME WAR MOMENTUM (24/7)
+  # Meme coins spike hardest on headline events
+  # ═══════════════════════════════════════
+  meme_war_momentum:
+    account: medium_long
+    timeframe: intraday_crypto
+    hold_period_hours: [0.5, 6]
+    market_hours: "24/7"
+    thesis: "DOGE and SHIB spike 10-30% on viral events. War creates viral moments. Quick scalps with tight stops."
+    entry_rules:
+      - "Buy ONLY on 5%+ spike in 30 minutes"
+      - "Size small — max $1000 per meme coin"
+      - "Exit within 6 hours regardless"
+    exit_rules:
+      - "Take profit at +8%"
+      - "Stop loss at -4%"
+      - "Exit ALL if BTC drops 3%+ (risk-off)"
+    positions:
+      - symbol: "DOGE/USD"
+        notional_usd: 1000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "SHIB/USD"
+        notional_usd: 500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "PEPE/USD"
+        notional_usd: 500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "BONK/USD"
+        notional_usd: 500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C8: XRP CROSS-BORDER PAYMENTS (24/7)
+  # Sanctions = demand for cross-border settlement
+  # ═══════════════════════════════════════
+  xrp_cross_border:
+    account: medium_long
+    timeframe: swing_crypto
+    hold_period_days: [7, 30]
+    market_hours: "24/7"
+    thesis: "XRP/Ripple network sees increased volume when SWIFT sanctions are imposed. War + sanctions = cross-border payment demand."
+    positions:
+      - symbol: "XRP/USD"
+        notional_usd: 3000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C9: RENDER/ONDO NARRATIVES (24/7)
+  # AI compute + tokenized assets narrative coins
+  # ═══════════════════════════════════════
+  narrative_momentum:
+    account: medium_long
+    timeframe: swing_crypto
+    hold_period_days: [3, 14]
+    market_hours: "24/7"
+    thesis: "War accelerates AI/defense compute demand (RENDER) and tokenized real-world assets for capital flight (ONDO)."
+    positions:
+      - symbol: "RENDER/USD"
+        notional_usd: 1500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+      - symbol: "ONDO/USD"
+        notional_usd: 1500
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+  # ═══════════════════════════════════════
+  # STRATEGY C10: TRUMP COIN EVENT TRADE (24/7)
+  # Political event-driven meme coin
+  # ═══════════════════════════════════════
+  trump_event_trade:
+    account: medium_long
+    timeframe: event_driven
+    hold_period_hours: [1, 48]
+    market_hours: "24/7"
+    thesis: "TRUMP coin spikes on political headlines. War response statements, executive orders, Congressional action. Quick scalps."
+    entry_rules:
+      - "Buy on major political headline (war-related)"
+      - "Max position $1000"
+      - "Exit within 48 hours"
+    positions:
+      - symbol: "TRUMP/USD"
+        notional_usd: 1000
+        side: buy
+        order_type: market
+        time_in_force: gtc
+
+# Full crypto universe for scanner (36 USD pairs)
+scan_universe:
+  tier1_majors: ["BTC/USD", "ETH/USD"]
+  tier2_large_cap: ["SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOT/USD", "LINK/USD"]
+  tier3_defi: ["AAVE/USD", "UNI/USD", "CRV/USD", "SUSHI/USD", "LDO/USD"]
+  tier4_gold_proxy: ["PAXG/USD"]
+  tier5_meme: ["DOGE/USD", "SHIB/USD", "PEPE/USD", "BONK/USD", "WIF/USD", "TRUMP/USD"]
+  tier6_infrastructure: ["FIL/USD", "GRT/USD", "RENDER/USD", "ARB/USD", "ONDO/USD"]
+  tier7_legacy: ["LTC/USD", "BCH/USD", "BAT/USD", "XTZ/USD", "YFI/USD", "POL/USD"]
+  tier8_stables: ["USDC/USD", "USDT/USD"]

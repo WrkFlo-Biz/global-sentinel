@@ -22,6 +22,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.monitoring.notification_window import notifications_muted
+
+# Notification categories that should be routed to topic group, not main chat
+_TOPIC_ONLY_EVENTS = frozenset({
+    'startup',
+    'scorecard_summary',
+    'mode_transition',       # NORMAL->ELEVATED etc
+    'performance_summary',
+})
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -41,6 +51,12 @@ class AlertDispatcher:
 
         # Slack config
         self.slack_webhook = os.getenv("SLACK_WEBHOOK_URL")
+
+        # Throttle: only send non-critical alerts once per hour
+        import time as _time
+        self._last_sent: Dict[str, float] = {}  # event_type -> timestamp
+        self._throttle_seconds = 3600  # 1 hour
+        self._time = _time
 
     def send_mode_transition(
         self,
@@ -184,6 +200,26 @@ class AlertDispatcher:
             top = sorted(components.items(), key=lambda x: x[1], reverse=True)[:3]
             body += "Top signals: " + ", ".join(f"{k}={v:.2f}" for k, v in top) + "\n"
 
+        exposure = scorecard.get("v6_exposure_summary", {}) or {}
+        if exposure:
+            body += (
+                f"💰 Equity: ${float(exposure.get('combined_equity', 0.0)):,.0f} | "
+                f"Gross: {float(exposure.get('gross_exposure_pct', 0.0)):.0%} | "
+                f"Net: {float(exposure.get('net_exposure_pct', 0.0)):+.0%} | "
+                f"OilΔ: ${float(exposure.get('oil_delta', 0.0)):+,.0f}/pt\n"
+            )
+
+        edge_summary = str(scorecard.get("v6_edge_summary") or "").strip()
+        if edge_summary and "no actionable signals" not in edge_summary.lower():
+            body += edge_summary + "\n"
+
+        strategy_summary = scorecard.get("v6_strategy_summary", {}) or {}
+        if strategy_summary:
+            body += (
+                f"📊 Strategies: {int(strategy_summary.get('active_count', 0))}/15 firing | "
+                f"Ideas: {int(strategy_summary.get('idea_count', 0))}\n"
+            )
+
         self._dispatch(title, body, level="info", extra={
             "event": "scorecard_summary",
             "mode": mode,
@@ -193,18 +229,33 @@ class AlertDispatcher:
     # --- Internal dispatch ---
 
     def _dispatch(self, title: str, body: str, level: str = "info", extra: Optional[Dict] = None):
-        """Send to all configured channels."""
+        """Send to all configured channels. Non-critical events throttled to once/hour."""
         message = f"{title}\n\n{body}"
 
         # Always log
         self._log_alert(title, body, level, extra)
 
-        # Telegram
-        if self.telegram_token and self.telegram_chat_id:
-            try:
-                self._send_telegram(message)
-            except Exception:
-                pass
+        # Throttle non-critical alerts (info level) to once per hour per event type
+        event_type = (extra or {}).get("event", title[:50])
+        if level == "info":
+            now = self._time.time()
+            last = self._last_sent.get(event_type, 0)
+            if now - last < self._throttle_seconds:
+                return  # Suppressed — already sent this hour
+            self._last_sent[event_type] = now
+
+        # Telegram — route system noise to topic group, not main chat
+        if self.telegram_token and not notifications_muted():
+            if event_type in _TOPIC_ONLY_EVENTS:
+                try:
+                    self._send_telegram_topic(message)
+                except Exception:
+                    pass
+            elif self.telegram_chat_id:
+                try:
+                    self._send_telegram(message)
+                except Exception:
+                    pass
 
         # Slack
         if self.slack_webhook:
@@ -215,19 +266,53 @@ class AlertDispatcher:
 
     def _send_telegram(self, text: str):
         """Send message via Telegram Bot API."""
+        if notifications_muted():
+            return
         url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        payload = json.dumps({
+        _payload_dict = {
             "chat_id": self.telegram_chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-        }).encode("utf-8")
+        }
+        if str(self.telegram_chat_id).startswith("-100"):
+            _dt = os.getenv("TELEGRAM_DEFAULT_THREAD_ID")
+            if _dt:
+                _payload_dict["message_thread_id"] = int(_dt)
+        payload = json.dumps(_payload_dict).encode("utf-8")
 
         req = urllib.request.Request(
             url,
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+
+    def _send_telegram_topic(self, text: str):
+        """Send message to topic group chat (noisy system updates channel)."""
+        if notifications_muted():
+            return
+        import os as _os
+        topic_chat = _os.getenv('TELEGRAM_TOPIC_CHAT_ID', '')
+        thread_id = _os.getenv('TELEGRAM_V6_DIGEST_THREAD_ID', '')
+        if not topic_chat or not self.telegram_token:
+            return  # fallback: don't send at all (suppress noise)
+        payload_d = {
+            'chat_id': topic_chat,
+            'text': text,
+            'parse_mode': 'HTML',
+            'disable_web_page_preview': True,
+            'disable_notification': True,
+        }
+        if thread_id:
+            payload_d['message_thread_id'] = int(thread_id)
+        payload = json.dumps(payload_d).encode('utf-8')
+        req = urllib.request.Request(
+            f'https://api.telegram.org/bot{self.telegram_token}/sendMessage',
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
         )
         urllib.request.urlopen(req, timeout=10)
 

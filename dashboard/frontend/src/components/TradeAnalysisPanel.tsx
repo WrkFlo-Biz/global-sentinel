@@ -6,6 +6,14 @@ function formatUSD(val: number): string {
   return `$${val.toFixed(2)}`;
 }
 
+function formatAge(ageSeconds?: number | null): string {
+  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
+  if (ageSeconds < 60) return `${ageSeconds}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
+  return `${Math.floor(ageSeconds / 86400)}d`;
+}
+
 function IdeaRow({ idea }: { idea: TradeIdea }) {
   const sideColor = idea.side === "long" ? "text-emerald-400" : "text-red-400";
   const sideBg = idea.side === "long" ? "bg-emerald-400/5" : "bg-red-400/5";
@@ -76,6 +84,10 @@ export default function TradeAnalysisPanel({ data }: { data: TradeAnalysis | nul
 
   return (
     <div>
+      <div className="text-[10px] text-gray-500 mb-3">
+        Source {data.source_freshness || "unknown"}
+        {data.source_age_seconds !== undefined && data.source_age_seconds !== null ? ` · age ${formatAge(data.source_age_seconds)}` : ""}
+      </div>
       {/* Thesis */}
       <div className="bg-blue-950/20 border border-blue-900/30 rounded px-3 py-2 mb-3">
         <div className="flex items-center justify-between mb-1">

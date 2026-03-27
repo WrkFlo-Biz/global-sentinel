@@ -41,7 +41,7 @@ confidence:
   conflicting_signal_penalty: 0.10
   fallback_mode_penalty: 0.20
   single_source_penalty: 0.25
-  min_confidence_for_shadow_draft: 0.50
+  min_confidence_for_shadow_draft: 0.35
 
 # --- Freshness Requirements ---
 freshness:

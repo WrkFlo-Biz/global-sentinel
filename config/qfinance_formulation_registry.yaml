@@ -1,0 +1,159 @@
+schema_version: qfinance_formulation_registry.v1
+
+formulations:
+  portfolio_optimization_qaoa:
+    problem_family: portfolio_optimization
+    encoding: QUBO
+    max_decision_variables: 10
+    constraint_encoding: penalty_terms
+    ansatz: linear_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 20
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+    notes: "Keep candidates <= 10 for 72-qubit backend"
+
+  portfolio_optimization_vqe:
+    problem_family: portfolio_optimization
+    encoding: QUBO
+    max_decision_variables: 8
+    constraint_encoding: penalty_terms
+    ansatz: pairwise_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 15
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+
+  hedge_basket_qaoa:
+    problem_family: hedge_basket_optimization
+    encoding: QUBO
+    max_decision_variables: 8
+    constraint_encoding: penalty_terms
+    ansatz: linear_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 15
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+
+  risk_management_vqe:
+    problem_family: risk_management_research
+    encoding: QUBO
+    max_decision_variables: 6
+    constraint_encoding: penalty_terms
+    ansatz: pairwise_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 12
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+
+  anomaly_detection_qaoa:
+    problem_family: anomaly_detection_research
+    encoding: QUBO
+    max_decision_variables: 10
+    constraint_encoding: soft_constraints
+    ansatz: linear_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 20
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+
+  derivative_pricing_vqe:
+    problem_family: derivative_pricing_research
+    encoding: amplitude_encoding
+    max_decision_variables: 5
+    constraint_encoding: none
+    ansatz: hardware_efficient
+    optimizer: COBYLA
+    max_circuit_depth: 10
+    default_shots: 2000
+    classical_comparison: monte_carlo
+    quantum_friendly: true
+
+  cvar_optimization_qaoa:
+    problem_family: portfolio_optimization
+    encoding: QUBO
+    max_decision_variables: 8
+    constraint_encoding: penalty_terms
+    ansatz: linear_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 18
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+    notes: "CVaR objective - higher-order risk measure"
+
+  drawdown_optimization_vqe:
+    problem_family: risk_management_research
+    encoding: QUBO
+    max_decision_variables: 6
+    constraint_encoding: penalty_terms
+    ansatz: pairwise_entanglement
+    optimizer: COBYLA
+    max_circuit_depth: 12
+    default_shots: 1000
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: true
+    notes: "Maximum drawdown minimization"
+
+  # --- Multi-backend research formulations ---
+
+  qiskit_portfolio_qaoa:
+    problem_family: portfolio_optimization
+    encoding: QUBO_via_qiskit
+    max_decision_variables: 12
+    constraint_encoding: penalty_terms
+    ansatz: qiskit_internal
+    optimizer: COBYLA
+    max_circuit_depth: 20
+    default_shots: 1000
+    classical_comparison: markowitz_milp
+    quantum_friendly: true
+    backend: qiskit_aer_simulator
+    notes: "Qiskit Finance QAOA — cross-platform comparison backend"
+
+  pennylane_anomaly_vqc:
+    problem_family: anomaly_detection_research
+    encoding: amplitude_embedding
+    max_decision_variables: 16
+    constraint_encoding: none
+    ansatz: variational_rot_cnot
+    optimizer: GradientDescent
+    max_circuit_depth: 8
+    default_shots: 0
+    classical_comparison: isolation_forest
+    quantum_friendly: true
+    backend: lightning.qubit
+    notes: "PennyLane VQC anomaly detector — signal validation"
+
+  classical_markowitz_milp:
+    problem_family: portfolio_optimization
+    encoding: continuous_relaxation
+    max_decision_variables: 200
+    constraint_encoding: linear_constraints
+    ansatz: none
+    optimizer: GLPK_MI
+    max_circuit_depth: 0
+    default_shots: 0
+    classical_comparison: scipy_SLSQP
+    quantum_friendly: false
+    backend: cvxpy
+    notes: "Strong classical baseline — quantum must beat this"
+
+  qpanda_qae_digital_option:
+    problem_family: derivative_pricing_research
+    encoding: amplitude_estimation_probability
+    max_decision_variables: 1
+    constraint_encoding: none
+    ansatz: ry_probability_encoding
+    optimizer: iterative_amplitude_estimation
+    max_circuit_depth: 1
+    default_shots: 0
+    classical_comparison: black_scholes_digital
+    quantum_friendly: true
+    backend: qpanda_cpuqvm
+    notes: "Research-only digital option pricer using Origin iterative amplitude estimation"

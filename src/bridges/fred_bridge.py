@@ -102,6 +102,8 @@ class FREDBridge:
 
         self.api_base = (self.fred_cfg.get("api_base") or "https://api.stlouisfed.org/fred").rstrip("/")
         self.api_key = os.getenv("FRED_API_KEY")
+        self.api_v2_token = os.getenv("FRED_API_V2_TOKEN")
+        self.api_v2_base = "https://api.stlouisfed.org/fred"  # v2 endpoint
 
         self.series_by_category = self._load_series_map()
         self.rate_check_thresholds = self._load_rate_check_thresholds()
@@ -364,7 +366,13 @@ class FREDBridge:
         if self.api_key:
             q["api_key"] = self.api_key
         url = f"{self.api_base}/{endpoint}?{urllib.parse.urlencode(q)}"
-        return read_json_url(url)
+        headers = {"User-Agent": "GlobalSentinelFREDBridge/2.0"}
+        # Add v2 bearer token as additional auth when available
+        if self.api_v2_token:
+            headers["Authorization"] = f"Bearer {self.api_v2_token}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
     def _get_series_meta(self, series_id: str) -> Dict[str, Any]:
         return self._fred_api_get("series", {"series_id": series_id})

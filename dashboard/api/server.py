@@ -26,14 +26,18 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
-LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
+LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 15.0
 LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
+REST_QUOTE_REFRESH_INTERVAL_SECONDS = 45.0
+REST_QUOTE_COOLDOWN_SECONDS = 15.0
+MARKET_DATA_CONNECTION_LIMIT_COOLDOWN_SECONDS = 120.0
+ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
 
 
 dashboard_live_state_manager: Optional["DashboardLiveStateManager"] = None
@@ -62,14 +66,24 @@ app.add_middleware(
 )
 
 
+def _apply_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
     """Require API key for /api/ endpoints when GS_DASHBOARD_API_KEY is set."""
     if API_KEY and request.url.path.startswith("/api/"):
         key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
         if key != API_KEY:
-            return JSONResponse(status_code=401, content={"error": "unauthorized"})
-    return await call_next(request)
+            return _apply_no_cache_headers(JSONResponse(status_code=401, content={"error": "unauthorized"}))
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path in {"/warroom", "/warroom.html"}:
+        _apply_no_cache_headers(response)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +126,163 @@ def load_scorecards(limit: int = 200) -> List[Dict[str, Any]]:
     return cards
 
 
-ALPACA_ACCOUNT_CACHE_TTL_SECONDS = 5.0
+BRIDGE_PANEL_META: List[Dict[str, Any]] = [
+    {"key": "market_microstructure", "label": "Market Data", "summary_key": "microstructure_symbols", "cache_dir": "market_microstructure"},
+    {"key": "finnhub", "label": "Finnhub News", "summary_key": "finnhub_packet_count", "cache_dir": "finnhub_bridge"},
+    {"key": "fred", "label": "FRED Macro", "cache_dir": "fred_bridge"},
+    {"key": "gdelt", "label": "GDELT Geopolitics", "summary_key": "gdelt_event_count", "cache_dir": "gdelt", "empty_if_zero": True},
+    {"key": "aviation_disruption", "label": "Aviation", "summary_key": "aviation_disruption_count", "cache_dir": "aviation_disruption_bridge", "empty_if_zero": True},
+    {"key": "eia", "label": "EIA Energy", "cache_dir": "eia_bridge"},
+    {"key": "gcp_consciousness", "label": "GCP Consciousness", "cache_dir": "gcp_consciousness"},
+    {"key": "narrative_velocity", "label": "Narrative Velocity", "cache_dir": "narrative_velocity"},
+    {"key": "options_greeks", "label": "Options Greeks", "summary_key": "put_call_ratio", "cache_dir": "options_greeks"},
+    {"key": "politician_alpha", "label": "Politician Alpha", "cache_dir": "politician_alpha"},
+    {"key": "fed_board", "label": "Fed Board", "cache_dir": "fed_board_bridge"},
+    {"key": "treasury_ofac", "label": "Treasury OFAC", "cache_dir": "treasury_ofac_bridge"},
+    {"key": "whitehouse_policy", "label": "White House Policy", "cache_dir": "whitehouse_policy_bridge"},
+    {"key": "bls_releases", "label": "BLS Releases", "cache_dir": "bls_release_bridge"},
+    {"key": "exa_search", "label": "Exa Search", "summary_key": "exa_packet_count", "cache_dir": "exa_search"},
+]
+
+BRIDGE_SNAPSHOT_LIVE_MAX_AGE_MIN = 20.0
+
+
+def _is_bridge_snapshot_artifact(path: Path) -> bool:
+    """Filter out housekeeping files so operator age reflects real payload snapshots."""
+    name = path.name.lower()
+    if name in {"seen_hashes.json", "seen_urls.json", "seen_ids.json"}:
+        return False
+    if name.endswith("_hash.txt"):
+        return False
+    return path.suffix.lower() == ".json"
+
+
+def _bridge_cache_snapshot(cache_dir_name: Optional[str]) -> Dict[str, Any]:
+    if not cache_dir_name:
+        return {
+            "exists": False,
+            "file_count": 0,
+            "json_file_count": 0,
+            "hash_file_count": 0,
+            "latest_file": None,
+            "latest_age_min": None,
+        }
+
+    cache_dir = REPO_ROOT / "logs" / "bridge_cache" / cache_dir_name
+    if not cache_dir.exists():
+        return {
+            "exists": False,
+            "file_count": 0,
+            "json_file_count": 0,
+            "hash_file_count": 0,
+            "latest_file": None,
+            "latest_age_min": None,
+        }
+
+    files = sorted((p for p in cache_dir.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
+    json_files = [p for p in files if p.suffix.lower() == ".json"]
+    hash_files = [p for p in files if p.name.endswith("_hash.txt")]
+    snapshot_files = [p for p in files if _is_bridge_snapshot_artifact(p)]
+    latest_file = snapshot_files[0] if snapshot_files else None
+    latest_age_min = None
+    if latest_file is not None:
+        latest_age_min = round((time.time() - latest_file.stat().st_mtime) / 60.0, 1)
+
+    return {
+        "exists": True,
+        "file_count": len(files),
+        "json_file_count": len(json_files),
+        "hash_file_count": len(hash_files),
+        "latest_file": latest_file.name if latest_file is not None else None,
+        "latest_age_min": latest_age_min,
+    }
+
+
+def _build_bridge_panel_status(card: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    freshness = card.get("data_freshness_status", {}) or {}
+    summary = card.get("bridge_summary", {}) or {}
+    bridges: Dict[str, Dict[str, Any]] = {}
+
+    for meta in BRIDGE_PANEL_META:
+        key = str(meta["key"])
+        cache = _bridge_cache_snapshot(meta.get("cache_dir"))
+        fresh = freshness.get(key)
+        count = summary.get(meta["summary_key"]) if meta.get("summary_key") else None
+        latest_age_min = cache.get("latest_age_min")
+        snapshot_recent = (
+            cache.get("latest_file") is not None
+            and isinstance(latest_age_min, (int, float))
+            and float(latest_age_min) <= BRIDGE_SNAPSHOT_LIVE_MAX_AGE_MIN
+        )
+
+        status = "unknown"
+        display_status = "N/A"
+        detail = "No recent bridge status available."
+
+        if fresh is False:
+            if meta.get("empty_if_zero") and isinstance(count, (int, float)) and float(count) == 0.0 and snapshot_recent:
+                status = "empty"
+                display_status = "EMPTY"
+                detail = "Source is polling live, but the latest payload was empty."
+            elif snapshot_recent:
+                status = "source_live"
+                display_status = "SOURCE LIVE"
+                detail = "Recent source snapshot exists, but the latest scorecard marked integration stale."
+            else:
+                status = "stale"
+                display_status = "STALE"
+                detail = "Latest scorecard marked this bridge stale."
+        elif fresh is True:
+            if meta.get("empty_if_zero") and isinstance(count, (int, float)) and float(count) == 0.0:
+                status = "empty"
+                display_status = "EMPTY"
+                detail = "Fresh poll, but the latest payload was empty."
+            elif cache["file_count"] == 0:
+                status = "no_snapshot"
+                display_status = "NO SNAPSHOT"
+                detail = "Fresh flag is set, but no rotating snapshot files were found."
+            else:
+                status = "live"
+                display_status = "LIVE"
+                detail = "Fresh payload with recent bridge cache activity."
+        elif snapshot_recent:
+            if meta.get("empty_if_zero") and isinstance(count, (int, float)) and float(count) == 0.0:
+                status = "empty"
+                display_status = "EMPTY"
+                detail = "Source is polling live, but the latest payload was empty."
+            else:
+                status = "source_live"
+                display_status = "SOURCE LIVE"
+                detail = "Recent source snapshot exists, but no scorecard freshness bit was available."
+        elif cache.get("hash_file_count"):
+            status = "snapshot_only"
+            display_status = "HASH ONLY"
+            detail = "Page-change monitor activity is present, but no recent payload snapshot was found."
+        elif cache["file_count"] == 0 and cache["exists"]:
+            status = "no_snapshot"
+            display_status = "NO SNAPSHOT"
+            detail = "Bridge cache directory exists, but no rotating snapshot files were found."
+        elif cache["exists"]:
+            status = "stale"
+            display_status = "STALE"
+            detail = "Bridge cache exists, but the latest usable snapshot is stale."
+
+        bridges[key] = {
+            "label": meta["label"],
+            "status": status,
+            "display_status": display_status,
+            "fresh": fresh,
+            "snapshot_recent": snapshot_recent,
+            "count": count,
+            "detail": detail,
+            **cache,
+        }
+
+    return bridges
+
+
+ALPACA_ACCOUNT_CACHE_TTL_SECONDS = 15.0
+ALPACA_ORDERS_CACHE_TTL_SECONDS = 15.0
 ALPACA_HISTORY_CACHE_TTL_SECONDS = {
     "1H": 10.0,
     "1D": 30.0,
@@ -223,6 +393,106 @@ def _freshness_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _freshness_metadata(
+    source_timestamp_utc: Optional[str],
+    *,
+    stale_after_seconds: int = 300,
+    degraded_after_seconds: int = 60,
+) -> Dict[str, Any]:
+    parsed = _parse_iso_datetime(source_timestamp_utc)
+    if parsed is None:
+        return {
+            "source_timestamp_utc": source_timestamp_utc,
+            "source_age_seconds": None,
+            "source_freshness": "unknown",
+            "source_stale": None,
+        }
+
+    age_seconds = max(0, int((_utc_now() - parsed).total_seconds()))
+    freshness = "live"
+    if age_seconds >= stale_after_seconds:
+        freshness = "stale"
+    elif age_seconds >= degraded_after_seconds:
+        freshness = "degraded"
+
+    return {
+        "source_timestamp_utc": parsed.isoformat(),
+        "source_age_seconds": age_seconds,
+        "source_freshness": freshness,
+        "source_stale": freshness == "stale",
+    }
+
+
+def _portfolio_pricing_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    positions = list(payload.get("positions") or [])
+    pricing_times = [
+        parsed
+        for parsed in (_parse_iso_datetime(position.get("pricing_timestamp_utc")) for position in positions)
+        if parsed is not None
+    ]
+    latest_pricing = max(pricing_times).isoformat() if pricing_times else None
+    oldest_pricing = min(pricing_times).isoformat() if pricing_times else None
+    latest_age_seconds = _freshness_metadata(latest_pricing, stale_after_seconds=900, degraded_after_seconds=300)
+    oldest_age_seconds = _freshness_metadata(oldest_pricing, stale_after_seconds=900, degraded_after_seconds=300)
+
+    stream_health = payload.get("stream_health") or {}
+    error_accounts = []
+    degraded_accounts = []
+    for label, details in stream_health.items():
+        if not isinstance(details, dict) or label.startswith("_"):
+            continue
+        market_status = str(details.get("market_data_status") or "")
+        if market_status == "error":
+            error_accounts.append(label)
+        elif market_status and market_status not in {"listening", "event", "connected"}:
+            degraded_accounts.append(label)
+
+    delayed_positions = 0
+    stale_positions = 0
+    for position in positions:
+        meta = _freshness_metadata(
+            position.get("pricing_timestamp_utc"),
+            stale_after_seconds=900,
+            degraded_after_seconds=300,
+        )
+        if meta["source_freshness"] == "stale":
+            stale_positions += 1
+        elif meta["source_freshness"] == "degraded":
+            delayed_positions += 1
+
+    market_data_health = "live"
+    if error_accounts:
+        market_data_health = "degraded"
+    elif degraded_accounts:
+        market_data_health = "delayed"
+    if positions and stale_positions == len(positions):
+        market_data_health = "stale"
+
+    return {
+        "priced_position_count": len(pricing_times),
+        "position_count": len(positions),
+        "latest_pricing_timestamp_utc": latest_pricing,
+        "latest_pricing_age_seconds": latest_age_seconds["source_age_seconds"],
+        "oldest_pricing_timestamp_utc": oldest_pricing,
+        "oldest_pricing_age_seconds": oldest_age_seconds["source_age_seconds"],
+        "delayed_position_count": delayed_positions,
+        "stale_position_count": stale_positions,
+        "market_data_health": market_data_health,
+        "stream_error_accounts": error_accounts,
+        "stream_degraded_accounts": degraded_accounts,
+    }
+
+
+def _is_stock_market_data_symbol(symbol: str) -> bool:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return False
+    crypto_suffixes = ("USD", "/USD", "USDT", "/USDT")
+    if any(normalized.endswith(suffix) for suffix in crypto_suffixes):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Dual Alpaca Account Helpers
 # ---------------------------------------------------------------------------
@@ -276,6 +546,17 @@ def _get_alpaca_accounts() -> List[Dict[str, Any]]:
             "base_url": os.getenv("ALPACA_BASE_URL_MEDLONG", "https://paper-api.alpaca.markets/v2"),
         })
 
+    # Live trading account ($125)
+    key_live = os.getenv("ALPACA_API_KEY_LIVE")
+    sec_live = os.getenv("ALPACA_SECRET_KEY_LIVE")
+    if key_live and sec_live:
+        accounts.append({
+            "label": "live",
+            "api_key": key_live,
+            "api_secret": sec_live,
+            "base_url": "https://api.alpaca.markets/v2",
+        })
+
     return accounts
 
 
@@ -317,11 +598,14 @@ def _fetch_alpaca_account(acct: Dict[str, str]) -> Dict[str, Any]:
             "symbol": p.get("symbol"),
             "qty": float(p.get("qty", 0)),
             "side": p.get("side", "long"),
+            "asset_class": p.get("asset_class"),
             "avg_entry_price": float(p.get("avg_entry_price", 0)),
             "current_price": float(p.get("current_price", 0)),
             "unrealized_pl": float(p.get("unrealized_pl", 0)),
             "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
             "market_value": float(p.get("market_value", 0)),
+            "pricing_source": "alpaca_rest_position",
+            "pricing_timestamp_utc": datetime.now(timezone.utc).isoformat(),
         })
     return {
         "label": acct["label"],
@@ -416,6 +700,66 @@ def _get_cached_alpaca_history(acct: Dict[str, str], period: str, timeframe: str
     payload["cache_age_ms"] = 0.0
     payload["cache_status"] = "miss"
     return payload
+
+
+def _get_cached_alpaca_orders(acct: Dict[str, str], limit: int = 100, status: str = "all") -> List[Dict[str, Any]]:
+    cache_key = f"alpaca_orders:{acct['label']}:{limit}:{status}"
+    cached = _cache_lookup(cache_key, ttl_seconds=ALPACA_ORDERS_CACHE_TTL_SECONDS)
+    if cached:
+        return copy.deepcopy(cached["value"].get("rows") or [])
+
+    payload = _fetch_alpaca_orders(acct, limit=limit, status=status)
+    _cache_store(cache_key, {"rows": payload})
+    return copy.deepcopy(payload)
+
+
+def _slice_portfolio_payload(payload: Dict[str, Any], account: str) -> Dict[str, Any]:
+    if account == "all" or not isinstance(payload, dict):
+        sliced = copy.deepcopy(payload)
+        if isinstance(sliced, dict):
+            sliced["pricing_summary"] = _portfolio_pricing_summary(sliced)
+        return sliced
+
+    sliced = copy.deepcopy(payload)
+    accounts = [acct for acct in (sliced.get("accounts") or []) if acct.get("label") == account]
+    if not accounts:
+        return {"error": f"Account '{account}' not found"}
+
+    selected = accounts[0]
+    positions = list(selected.get("positions") or [])
+    for position in positions:
+        position["account"] = account
+
+    sliced["accounts"] = accounts
+    sliced["account_errors"] = [
+        err for err in (sliced.get("account_errors") or [])
+        if err.get("label") == account
+    ]
+    sliced["equity"] = _safe_float(selected.get("equity"))
+    sliced["cash"] = _safe_float(selected.get("cash"))
+    sliced["buying_power"] = _safe_float(selected.get("buying_power"))
+    sliced["portfolio_value"] = _safe_float(selected.get("portfolio_value"))
+    sliced["positions"] = positions
+    sliced["position_count_total"] = len(positions)
+    sliced["position_count_by_account"] = {account: len(positions)}
+    sliced["account_count"] = 1
+    consistency = sliced.get("consistency") or {}
+    sliced["consistency"] = {
+        **consistency,
+        "account_count_requested": 1,
+        "account_count_success": 1 if selected.get("status") != "error" else 0,
+        "account_count_error": len(sliced["account_errors"]),
+        "position_count_total": len(positions),
+        "position_count_total_from_accounts": len(positions),
+        "position_count_by_account": {account: len(positions)},
+        "requested_accounts": [account],
+        "accounts_match_requested": True,
+        "positions_match_total": True,
+        "has_account_errors": bool(sliced["account_errors"]),
+    }
+    sliced["status"] = "error" if selected.get("status") == "error" else ("partial" if sliced["account_errors"] else "ok")
+    sliced["pricing_summary"] = _portfolio_pricing_summary(sliced)
+    return sliced
 
 
 def _merge_portfolio_histories(histories: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -689,12 +1033,13 @@ def scorecard_timeline(limit: int = Query(default=200, le=500)):
 
 @app.get("/api/bridges")
 def bridge_status():
-    """Current bridge health from latest scorecard."""
+    """Operator-facing bridge health from latest scorecard plus cache activity."""
     sc = load_scorecards(limit=1)
     if not sc:
-        return {"bridges": {}, "freshness": {}}
+        return {"bridges": {}, "data_freshness": {}, "bridge_summary": {}}
     card = sc[0]
     return {
+        "bridges": _build_bridge_panel_status(card),
         "bridge_summary": card.get("bridge_summary", {}),
         "data_freshness": card.get("data_freshness_status", {}),
         "fallback_mode": card.get("fallback_mode_status", False),
@@ -728,7 +1073,10 @@ def trade_analysis():
         sys.path.insert(0, str(REPO_ROOT))
         from src.alpha.trade_analysis_engine import TradeAnalysisEngine
         engine = TradeAnalysisEngine(REPO_ROOT)
-        return engine.analyze(current, previous_mode=prev_mode, microstructure=micro)
+        result = engine.analyze(current, previous_mode=prev_mode, microstructure=micro)
+        if isinstance(result, dict):
+            result.update(_freshness_metadata(current.get("timestamp_utc"), stale_after_seconds=900, degraded_after_seconds=300))
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -740,7 +1088,17 @@ def performance():
         sys.path.insert(0, str(REPO_ROOT))
         from src.execution.performance_tracker import PerformanceTracker
         tracker = PerformanceTracker(REPO_ROOT)
-        return tracker.generate_summary()
+        summary = tracker.generate_summary()
+        if not isinstance(summary, dict):
+            return summary
+
+        snapshot = summary.get("open_positions_snapshot") or {}
+        source_ts = snapshot.get("source_timestamp_utc") or snapshot.get("timestamp_utc") or summary.get("timestamp_utc")
+        summary.update(_freshness_metadata(source_ts, stale_after_seconds=900, degraded_after_seconds=300))
+        summary["open_positions_snapshot_timestamp_utc"] = source_ts
+        summary["open_positions_snapshot_freshness"] = summary.get("source_freshness")
+        summary["open_positions_snapshot_age_seconds"] = summary.get("source_age_seconds")
+        return summary
     except Exception as e:
         return {"error": str(e)}
 
@@ -857,7 +1215,7 @@ def execution_summary(
 
         for acct in accounts:
             try:
-                rows = _fetch_alpaca_orders(acct, limit=broker_limit, status="all")
+                rows = _get_cached_alpaca_orders(acct, limit=broker_limit, status="all")
                 filtered_orders = []
                 status_counts: Dict[str, int] = {
                     "filled": 0,
@@ -934,6 +1292,124 @@ def execution_summary(
         },
         "live_orders": live_orders,
     }
+
+
+@app.get("/api/quantum")
+def quantum_summary():
+    """Quantum vs classical comparison data for dashboard panel."""
+    from datetime import datetime, timezone
+
+    research_dir = REPO_ROOT / "reports" / "research"
+    comparisons_dir = research_dir / "comparisons"
+    batches_dir = research_dir / "overnight_batches"
+
+    # Latest comparison artifact
+    latest_comparison = None
+    comparison_count = 0
+    if comparisons_dir.exists():
+        comp_files = sorted(comparisons_dir.glob("comparison_*.json"))
+        comparison_count = len(comp_files)
+        if comp_files:
+            latest_comparison = load_json(comp_files[-1])
+
+    # Latest overnight batch
+    overnight_batch = None
+    if batches_dir.exists():
+        batch_files = sorted(batches_dir.glob("overnight_batch_*.json"))
+        if batch_files:
+            overnight_batch = load_json(batch_files[-1])
+
+    # Build summary from comparison artifacts (compute winner from objective values)
+    summary = None
+    if comparisons_dir.exists():
+        try:
+            comp_data = []
+            for cf in sorted(comparisons_dir.glob("comparison_*.json")):
+                try:
+                    comp_data.append(json.loads(cf.read_text(encoding="utf-8")))
+                except Exception:
+                    continue
+            if comp_data:
+                q_wins, c_wins, ties = 0, 0, 0
+                q_objs, c_objs = [], []
+                for cd in comp_data:
+                    results = cd.get("results", {})
+                    obj_vals = {}
+                    for bk, bv in results.items():
+                        if isinstance(bv, dict) and bv.get("status") == "success":
+                            ov = bv.get("objective_value")
+                            if ov is not None:
+                                obj_vals[bk] = ov
+                    if not obj_vals:
+                        continue
+                    q_bk = {k: v for k, v in obj_vals.items() if k.startswith("q") or k.startswith("pennylane")}
+                    c_bk = {k: v for k, v in obj_vals.items() if k.startswith("classical")}
+                    best_q = max(q_bk.values()) if q_bk else None
+                    best_c = max(c_bk.values()) if c_bk else None
+                    if q_bk:
+                        q_objs.append(best_q)
+                    if c_bk:
+                        c_objs.append(best_c)
+                    if best_q is not None and best_c is not None:
+                        if best_q > best_c:
+                            q_wins += 1
+                        elif best_c > best_q:
+                            c_wins += 1
+                        else:
+                            ties += 1
+                total = q_wins + c_wins + ties
+                summary = {
+                    "schema_version": "research_quantum_summary.v2",
+                    "evaluation_count": total,
+                    "quantum_win_rate": q_wins / max(total, 1),
+                    "classical_win_rate": c_wins / max(total, 1),
+                    "tie_rate": ties / max(total, 1),
+                    "avg_quantum_overlap_score": sum(q_objs) / max(len(q_objs), 1) if q_objs else 0.0,
+                    "avg_classical_overlap_score": sum(c_objs) / max(len(c_objs), 1) if c_objs else 0.0,
+                }
+        except Exception:
+            pass
+
+    # Quantum stage from latest scorecard
+    scorecard_quantum = None
+    cards = load_scorecards(limit=1)
+    if cards:
+        gov = cards[-1].get("v4_governance", {})
+        if gov:
+            scorecard_quantum = {
+                "quantum_stage": gov.get("quantum_stage", "shadow"),
+                "quantum_influence_cap": gov.get("quantum_influence_cap", 0.0),
+            }
+
+    latest_artifact_timestamp = None
+    for candidate in (
+        (latest_comparison or {}).get("timestamp_utc"),
+        (overnight_batch or {}).get("timestamp_utc"),
+    ):
+        parsed = _parse_iso_datetime(candidate)
+        if parsed is None:
+            continue
+        if latest_artifact_timestamp is None or parsed > latest_artifact_timestamp:
+            latest_artifact_timestamp = parsed
+
+    payload = {
+        "schema_version": "quantum_dashboard.v1",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "latest_comparison": latest_comparison,
+        "overnight_batch": overnight_batch,
+        "summary": summary,
+        "comparison_count": comparison_count,
+        "scorecard_quantum": scorecard_quantum,
+    }
+    payload.update(
+        _freshness_metadata(
+            latest_artifact_timestamp.isoformat() if latest_artifact_timestamp else None,
+            stale_after_seconds=3600,
+            degraded_after_seconds=900,
+        )
+    )
+    payload["latest_artifact_timestamp_utc"] = latest_artifact_timestamp.isoformat() if latest_artifact_timestamp else None
+    return payload
 
 
 @app.get("/api/alerts")
@@ -1038,7 +1514,27 @@ def portfolio_history(period: str = Query("1M"), timeframe: str = Query("1D"), a
     """Fetch Alpaca paper portfolio history for equity curve.
     period: 1D, 1W, 1M, 3M, 1A   timeframe: 1H, 1D
     account: all | day_trade | medium_long"""
+    if (
+        dashboard_live_state_manager is not None
+        and account == "all"
+        and period == "1D"
+        and timeframe == "1H"
+    ):
+        latest = dashboard_live_state_manager.get_latest_portfolio_history_intraday()
+        if latest is not None:
+            return latest
     return _build_portfolio_history_payload(period=period, timeframe=timeframe, account=account)
+
+
+@app.get("/api/pnl-history")
+def pnl_history(account: str = Query("all")):
+    """Return intraday live equity samples for sparkline P&L charts.
+    These are collected every ~5s by the live state manager and retained for 24h."""
+    if dashboard_live_state_manager is not None:
+        samples = dashboard_live_state_manager.get_live_equity_samples(account)
+    else:
+        samples = []
+    return {"account": account, "samples": samples}
 
 
 def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", account: str = "all") -> Dict[str, Any]:
@@ -1097,6 +1593,10 @@ def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", 
 def portfolio(account: str = Query("all")):
     """Fetch Alpaca paper account positions. Supports dual accounts.
     account: all | day_trade | medium_long"""
+    if dashboard_live_state_manager is not None:
+        latest = dashboard_live_state_manager.get_latest_portfolio()
+        if latest is not None:
+            return _slice_portfolio_payload(latest, account)
     return _build_portfolio_payload(account=account)
 
 
@@ -1198,7 +1698,432 @@ def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
     if dashboard_live_state_manager is not None:
         payload = dashboard_live_state_manager.apply_live_market_prices(payload)
         payload["stream_health"] = dashboard_live_state_manager._stream_status_payload()
+        payload["last_quote_refresh"] = dashboard_live_state_manager._rest_quote_refresh_utc
+    payload["pricing_summary"] = _portfolio_pricing_summary(payload)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Candlestick Bars API
+# ---------------------------------------------------------------------------
+
+CRYPTO_SUFFIXES = ("USD", "USDT", "USDC", "EUR", "GBP", "JPY", "BTC", "ETH")
+
+def _is_crypto_symbol(symbol: str) -> bool:
+    """Detect crypto symbols like BTCUSD, BTC/USD, ETHUSD, SOLUSD, etc."""
+    s = symbol.upper().replace("/", "")
+    crypto_bases = {
+        "BTC", "ETH", "SOL", "DOGE", "SHIB", "AVAX", "DOT", "LINK",
+        "MATIC", "UNI", "AAVE", "ADA", "XRP", "LTC", "BCH", "ALGO",
+        "ATOM", "FTM", "NEAR", "APE", "ARB", "OP", "MKR", "CRV",
+        "PEPE", "BONK", "WIF", "RENDER", "FET", "GRT", "INJ", "TIA",
+        "SUI", "SEI", "JUP", "PYTH", "WLD", "ONDO", "ENA", "PENDLE",
+    }
+    for base in crypto_bases:
+        for suffix in CRYPTO_SUFFIXES:
+            if s == base + suffix:
+                return True
+    if "/" in symbol:
+        return True
+    return False
+
+def _to_crypto_api_symbol(symbol: str) -> str:
+    """Convert BTCUSD -> BTC/USD for Alpaca crypto API."""
+    if "/" in symbol:
+        return symbol.upper()
+    s = symbol.upper()
+    for suffix in CRYPTO_SUFFIXES:
+        if s.endswith(suffix) and len(s) > len(suffix):
+            return f"{s[:-len(suffix)]}/{suffix}"
+    return symbol
+
+def _yahoo_bars(symbol: str, yf_interval: str, yf_range: str) -> list:
+    """Fetch OHLCV bars from Yahoo Finance (real-time, no subscription needed).
+
+    Returns list of dicts with keys: t, o, h, l, c, v  (matching Alpaca format).
+    """
+    import urllib.request
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        f"?interval={yf_interval}&range={yf_range}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        data = json.loads(resp.read().decode())
+
+    result = data.get("chart", {}).get("result", [])
+    if not result:
+        return []
+
+    r = result[0]
+    timestamps = r.get("timestamp", [])
+    q = r.get("indicators", {}).get("quote", [{}])[0]
+    opens = q.get("open", [])
+    highs = q.get("high", [])
+    lows = q.get("low", [])
+    closes = q.get("close", [])
+    volumes = q.get("volume", [])
+
+    bars = []
+    for i in range(len(timestamps)):
+        o = opens[i] if i < len(opens) and opens[i] is not None else 0
+        h = highs[i] if i < len(highs) and highs[i] is not None else 0
+        lo = lows[i] if i < len(lows) and lows[i] is not None else 0
+        c = closes[i] if i < len(closes) and closes[i] is not None else 0
+        v = volumes[i] if i < len(volumes) and volumes[i] is not None else 0
+        if c == 0 and o == 0:
+            continue  # skip empty candles
+        t_iso = datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat()
+        bars.append({"t": t_iso, "o": o, "h": h, "l": lo, "c": c, "v": v})
+
+    return bars
+
+
+# Map Alpaca-style timeframes to Yahoo Finance interval + range
+_TF_TO_YF = {
+    "1Min":   ("1m",  "1d"),
+    "5Min":   ("5m",  "5d"),
+    "15Min":  ("15m", "5d"),
+    "1Hour":  ("1h",  "1mo"),
+    "1Day":   ("1d",  "6mo"),
+    "1Week":  ("1wk", "2y"),
+}
+
+
+import re
+def _extract_underlying(symbol: str) -> str:
+    """Extract underlying ticker from OCC options symbol (e.g. SOXL260313C00059000 -> SOXL)."""
+    m = re.match(r'^([A-Z]{1,6})\d{6}[CP]\d{8}$', symbol)
+    return m.group(1) if m else ""
+
+
+@app.get("/api/bars/{symbol}")
+def stock_bars(
+    symbol: str,
+    timeframe: str = Query("5Min"),
+    start: str = Query(""),
+    limit: int = Query(200),
+):
+    """Fetch OHLCV bars — Yahoo Finance for stocks (real-time), Alpaca for crypto."""
+    import urllib.request
+    import urllib.error
+    _load_env()
+
+    # If this is an options symbol, use the underlying ticker for chart data
+    underlying = _extract_underlying(symbol)
+    chart_symbol = underlying if underlying else symbol
+
+    is_crypto = _is_crypto_symbol(chart_symbol)
+
+    # --- Stocks: use Yahoo Finance (real-time, free) ---
+    if not is_crypto:
+        yf_map = _TF_TO_YF.get(timeframe, ("5m", "5d"))
+        yf_interval, yf_range = yf_map
+        try:
+            bars = _yahoo_bars(chart_symbol, yf_interval, yf_range)
+            if not bars:
+                raise ValueError("Yahoo returned empty bars")
+            if limit and len(bars) > limit:
+                bars = bars[-limit:]
+            return {
+                "symbol": symbol,
+                "underlying": chart_symbol if underlying else None,
+                "timeframe": timeframe,
+                "bars": bars,
+                "count": len(bars),
+                "source": "yahoo",
+                "timestamp_utc": _utc_now_iso(),
+            }
+        except Exception as yf_exc:
+            # Fall back to Alpaca IEX if Yahoo fails
+            pass
+
+    # --- Crypto or Yahoo fallback: use Alpaca ---
+    api_key = os.getenv("ALPACA_API_KEY_LIVE") or os.getenv("ALPACA_API_KEY", "")
+    api_secret = os.getenv("ALPACA_SECRET_KEY_LIVE") or os.getenv("ALPACA_SECRET_KEY", "")
+
+    if not api_key:
+        return {"error": "No API key configured"}
+
+    if not start:
+        if "Min" in timeframe or "Hour" in timeframe:
+            lookback = timedelta(days=3) if is_crypto else timedelta(days=5)
+            start_dt = (datetime.now(timezone.utc) - lookback).strftime("%Y-%m-%d")
+            start = f"{start_dt}T00:00:00Z"
+        else:
+            six_mo_ago = (datetime.now(timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%d")
+            start = f"{six_mo_ago}T00:00:00Z"
+
+    if is_crypto:
+        crypto_sym = _to_crypto_api_symbol(symbol)
+        params = {
+            "symbols": crypto_sym,
+            "timeframe": timeframe,
+            "limit": str(limit),
+            "sort": "asc",
+            "start": start,
+        }
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{ALPACA_DATA_BASE_URL}/v1beta3/crypto/us/bars?{qs}"
+    else:
+        params = {"timeframe": timeframe, "limit": str(limit), "sort": "asc", "feed": "iex", "start": start}
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{ALPACA_DATA_BASE_URL}/v2/stocks/{chart_symbol}/bars?{qs}"
+
+    try:
+        req = urllib.request.Request(url, headers={
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": api_secret,
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            if is_crypto:
+                bars_dict = data.get("bars") or {}
+                bars = []
+                for sym_key, sym_bars in bars_dict.items():
+                    bars = sym_bars
+                    break
+            else:
+                bars = data.get("bars") or []
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "bars": bars,
+                "count": len(bars),
+                "source": "alpaca",
+                "timestamp_utc": _utc_now_iso(),
+            }
+    except Exception as exc:
+        return {"error": str(exc), "symbol": symbol}
+
+
+@app.get("/api/accounts")
+def list_accounts():
+    """List all configured Alpaca accounts with basic info."""
+    accounts = _get_alpaca_accounts()
+    result = []
+    for acct in accounts:
+        is_live = "api.alpaca.markets/v2" in acct["base_url"] and "paper" not in acct["base_url"]
+        result.append({
+            "label": acct["label"],
+            "is_live": is_live,
+            "base_url": acct["base_url"],
+        })
+    return {"accounts": result, "count": len(result)}
+
+
+# ---------------------------------------------------------------------------
+# Order Management
+# ---------------------------------------------------------------------------
+
+def _find_alpaca_account(label: str) -> Optional[Dict[str, Any]]:
+    """Find an Alpaca account by label. Returns None if not found."""
+    accounts = _get_alpaca_accounts()
+    for acct in accounts:
+        if acct["label"] == label:
+            return acct
+    return None
+
+
+def _alpaca_request(acct: Dict[str, Any], path: str, method: str = "GET",
+                    body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Make an authenticated request to the Alpaca API for the given account."""
+    import urllib.request
+    import urllib.error
+
+    headers = {
+        "APCA-API-KEY-ID": acct["api_key"],
+        "APCA-API-SECRET-KEY": acct["api_secret"],
+    }
+    url = f"{acct['base_url']}{path}"
+
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, headers=headers, data=data, method=method)
+
+    # Rate limiter for this account's API key
+    try:
+        from src.utils.rate_limiter import get_limiter
+        limiter = get_limiter(acct["api_key"], max_rpm=180)
+        limiter.acquire(timeout=30.0)
+    except (ImportError, Exception):
+        pass
+
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp_body = resp.read().decode("utf-8")
+        if resp_body:
+            return json.loads(resp_body)
+        return {"status": "ok"}
+
+
+@app.post("/api/orders")
+async def submit_order(request: Request):
+    """Submit an order to a specific Alpaca account.
+
+    Body: {"account": "live"|"day_trade"|"medium_long", "symbol": str,
+           "side": "buy"|"sell", "type": "market"|"limit",
+           "time_in_force": "day"|"gtc", "notional": float (optional),
+           "qty": float (optional), "limit_price": float (optional)}
+    """
+    import urllib.error
+    try:
+        body = await request.json()
+        account_label = body.get("account")
+        if not account_label:
+            return JSONResponse(status_code=400, content={"error": "account is required"})
+
+        acct = _find_alpaca_account(account_label)
+        if not acct:
+            return JSONResponse(status_code=404, content={"error": f"account '{account_label}' not found"})
+
+        # Validate required fields
+        symbol = body.get("symbol")
+        side = body.get("side")
+        order_type = body.get("type", "market")
+        tif = body.get("time_in_force", "day")
+
+        if not symbol or not side:
+            return JSONResponse(status_code=400, content={"error": "symbol and side are required"})
+        if side not in ("buy", "sell"):
+            return JSONResponse(status_code=400, content={"error": "side must be 'buy' or 'sell'"})
+        if order_type not in ("market", "limit"):
+            return JSONResponse(status_code=400, content={"error": "type must be 'market' or 'limit'"})
+        if tif not in ("day", "gtc"):
+            return JSONResponse(status_code=400, content={"error": "time_in_force must be 'day' or 'gtc'"})
+
+        notional = body.get("notional")
+        qty = body.get("qty")
+        limit_price = body.get("limit_price")
+
+        if not notional and not qty:
+            return JSONResponse(status_code=400, content={"error": "either notional or qty is required"})
+        if order_type == "limit" and not limit_price:
+            return JSONResponse(status_code=400, content={"error": "limit_price is required for limit orders"})
+
+        # Build the Alpaca order payload
+        order_payload: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "side": side,
+            "type": order_type,
+            "time_in_force": tif,
+        }
+        if notional is not None:
+            order_payload["notional"] = float(notional)
+        if qty is not None:
+            order_payload["qty"] = str(float(qty))
+        if limit_price is not None:
+            order_payload["limit_price"] = str(float(limit_price))
+
+        result = _alpaca_request(acct, "/orders", method="POST", body=order_payload)
+        result["account_label"] = account_label
+        return result
+
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else str(e)
+        try:
+            error_body = json.loads(error_body)
+        except Exception:
+            pass
+        return JSONResponse(status_code=e.code, content={"error": error_body, "account": body.get("account", "")})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/orders")
+def list_orders(
+    account: str = Query(default="all"),
+    status: str = Query(default="all"),
+    limit: int = Query(default=50),
+):
+    """List orders for an account. If account='all', merge from all accounts."""
+    import urllib.error
+    try:
+        if account == "all":
+            accounts = _get_alpaca_accounts()
+        else:
+            acct = _find_alpaca_account(account)
+            if not acct:
+                return JSONResponse(status_code=404, content={"error": f"account '{account}' not found"})
+            accounts = [acct]
+
+        all_orders = []
+        for acct in accounts:
+            try:
+                path = f"/orders?status={status}&limit={limit}"
+                orders = _alpaca_request(acct, path, method="GET")
+                if isinstance(orders, list):
+                    for order in orders:
+                        order["account_label"] = acct["label"]
+                    all_orders.extend(orders)
+                elif isinstance(orders, dict) and "status" not in orders:
+                    # Single order or unexpected shape
+                    orders["account_label"] = acct["label"]
+                    all_orders.append(orders)
+            except urllib.error.HTTPError:
+                continue
+            except Exception:
+                continue
+
+        # Sort by created_at descending
+        all_orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+        return {"orders": all_orders[:limit], "count": len(all_orders[:limit])}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/api/orders/{order_id}")
+def cancel_order(order_id: str, account: str = Query(...)):
+    """Cancel an order by ID. Query param 'account' is required."""
+    import urllib.error
+    try:
+        acct = _find_alpaca_account(account)
+        if not acct:
+            return JSONResponse(status_code=404, content={"error": f"account '{account}' not found"})
+
+        _alpaca_request(acct, f"/orders/{order_id}", method="DELETE")
+        return {"status": "cancelled", "order_id": order_id, "account": account}
+
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else str(e)
+        try:
+            error_body = json.loads(error_body)
+        except Exception:
+            pass
+        return JSONResponse(status_code=e.code, content={"error": error_body, "order_id": order_id, "account": account})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/positions/{symbol}/close")
+def close_position(symbol: str, account: str = Query(...), qty: Optional[float] = Query(default=None)):
+    """Close a position (full or partial). Alpaca uses DELETE on positions endpoint."""
+    import urllib.error
+    try:
+        acct = _find_alpaca_account(account)
+        if not acct:
+            return JSONResponse(status_code=404, content={"error": f"account '{account}' not found"})
+
+        path = f"/positions/{symbol.upper()}"
+        if qty is not None:
+            path += f"?qty={qty}"
+
+        _alpaca_request(acct, path, method="DELETE")
+        return {"status": "closed", "symbol": symbol.upper(), "account": account,
+                "qty": qty if qty is not None else "all"}
+
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else str(e)
+        try:
+            error_body = json.loads(error_body)
+        except Exception:
+            pass
+        return JSONResponse(status_code=e.code, content={"error": error_body, "symbol": symbol, "account": account})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -1399,6 +2324,64 @@ def _refresh_account_snapshot_sync(
     }
 
 
+def _fetch_rest_snapshots(symbols: List[str], api_key: str, api_secret: str) -> Dict[str, Dict[str, Any]]:
+    """Fetch latest stock snapshots via Alpaca REST data API (batch, up to 1000 symbols).
+    Returns {symbol: {trade_price, trade_timestamp_utc, bid_price, ask_price, quote_timestamp_utc}}."""
+    import urllib.request
+    import urllib.parse
+
+    if not symbols:
+        return {}
+
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+
+    try:
+        from src.utils.rate_limiter import get_limiter
+        limiter = get_limiter(f"data:{api_key}", max_rpm=180)
+    except ImportError:
+        limiter = None
+
+    result: Dict[str, Dict[str, Any]] = {}
+    # Alpaca snapshots endpoint accepts up to ~200 symbols per request reliably
+    batch_size = 200
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i + batch_size]
+        params = urllib.parse.urlencode({
+            "symbols": ",".join(batch),
+            "feed": ALPACA_STOCK_STREAM_FEED,
+        })
+        url = f"{ALPACA_DATA_BASE_URL}/v2/stocks/snapshots?{params}"
+        try:
+            if limiter:
+                limiter.acquire(timeout=10.0)
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for sym, snap in data.items():
+                entry: Dict[str, Any] = {}
+                latest_trade = snap.get("latestTrade") or {}
+                if latest_trade.get("p"):
+                    entry["trade_price"] = _safe_float(latest_trade["p"])
+                    entry["trade_timestamp_utc"] = str(latest_trade.get("t") or _utc_now_iso())
+                latest_quote = snap.get("latestQuote") or {}
+                if latest_quote.get("bp"):
+                    entry["bid_price"] = _safe_float(latest_quote["bp"])
+                if latest_quote.get("ap"):
+                    entry["ask_price"] = _safe_float(latest_quote["ap"])
+                if latest_quote.get("t"):
+                    entry["quote_timestamp_utc"] = str(latest_quote["t"])
+                if entry:
+                    entry["source"] = "rest_snapshot"
+                    result[sym.upper()] = entry
+        except Exception:
+            # Silently skip batch failures — next cycle will retry
+            continue
+    return result
+
+
 class DashboardLiveStateManager:
     def __init__(self):
         self._stop_event = asyncio.Event()
@@ -1412,9 +2395,11 @@ class DashboardLiveStateManager:
         self._latest_market_data: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._shared_market_data: Dict[str, Dict[str, Any]] = {}
         self._live_equity_samples: Dict[str, List[Dict[str, Any]]] = {}
+        self._last_rest_quote_refresh: float = 0.0  # monotonic
+        self._rest_quote_refresh_utc: Optional[str] = None
 
     def _stream_status_payload(self) -> Dict[str, Any]:
-        return {
+        per_account = {
             label: {
                 "status": details.get("status"),
                 "trade_updates_status": details.get("trade_updates_status"),
@@ -1428,12 +2413,24 @@ class DashboardLiveStateManager:
             }
             for label, details in self._stream_status.items()
         }
+        per_account["_rest_quote_refresh"] = {
+            "last_refresh_utc": self._rest_quote_refresh_utc,
+            "interval_seconds": REST_QUOTE_REFRESH_INTERVAL_SECONDS,
+            "symbols_in_cache": len(self._shared_market_data),
+        }
+        return per_account
 
     def get_latest_portfolio(self) -> Optional[Dict[str, Any]]:
         return copy.deepcopy(self._latest_portfolio) if self._latest_portfolio else None
 
     def get_latest_portfolio_history_intraday(self) -> Optional[Dict[str, Any]]:
         return copy.deepcopy(self._latest_portfolio_history_intraday) if self._latest_portfolio_history_intraday else None
+
+    def get_live_equity_samples(self, account: str = "all") -> List[Dict[str, Any]]:
+        """Return the in-memory live equity samples for sparkline P&L charts."""
+        key = account if account != "all" else "all"
+        samples = self._live_equity_samples.get(key) or []
+        return copy.deepcopy(samples)
 
     def apply_live_market_prices(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not payload or payload.get("error"):
@@ -1457,6 +2454,7 @@ class DashboardLiveStateManager:
 
             for position in account.get("positions") or []:
                 position["account"] = label
+                position["account_label"] = label
                 qty = abs(_safe_float(position.get("qty")))
                 if qty <= 0:
                     all_positions.append(position)
@@ -1472,9 +2470,12 @@ class DashboardLiveStateManager:
 
                 avg_entry = _safe_float(position.get("avg_entry_price"))
                 signed_qty = -qty if side == "short" else qty
-                market_value = signed_qty * mark_price
-                unrealized_pl = ((avg_entry - mark_price) if side == "short" else (mark_price - avg_entry)) * qty
-                cost_basis = avg_entry * qty
+                # Options have a 100x multiplier (1 contract = 100 shares)
+                asset_class = str(position.get("asset_class") or "").lower()
+                multiplier = 100.0 if "option" in asset_class else 1.0
+                market_value = signed_qty * mark_price * multiplier
+                unrealized_pl = ((avg_entry - mark_price) if side == "short" else (mark_price - avg_entry)) * qty * multiplier
+                cost_basis = avg_entry * qty * multiplier
                 unrealized_plpc = (unrealized_pl / cost_basis) if cost_basis else 0.0
 
                 position["current_price"] = mark_price
@@ -1536,6 +2537,30 @@ class DashboardLiveStateManager:
         profits = list(payload.get("profit_loss") or [])
         profit_pcts = list(payload.get("profit_loss_pct") or [])
         base_value = _safe_float(payload.get("base_value"), equities[0] if equities else 0.0)
+
+        # Fix stale trailing points: if the latest live sample's equity diverges
+        # significantly from the Alpaca history tail, replace those stale points.
+        # This fixes Alpaca's portfolio history misreporting option position values.
+        if samples and equities:
+            latest_live_equity = _safe_float(samples[-1].get("equity"))
+            if latest_live_equity > 0:
+                # Walk backwards and remove history points that are stale
+                # (same timestamp window as live samples but with wrong equity)
+                earliest_sample_ts = int(samples[0].get("timestamp") or 0)
+                replaced = 0
+                while (
+                    timestamps
+                    and int(timestamps[-1]) >= earliest_sample_ts
+                    and abs(equities[-1] - latest_live_equity) / max(latest_live_equity, 1) > 0.10
+                ):
+                    timestamps.pop()
+                    equities.pop()
+                    profits.pop()
+                    profit_pcts.pop()
+                    replaced += 1
+                if replaced:
+                    payload["stale_points_replaced"] = replaced
+
         last_ts = int(timestamps[-1]) if timestamps else 0
         appended = 0
 
@@ -1551,7 +2576,7 @@ class DashboardLiveStateManager:
             profit_pcts.append((pl / base_value) if base_value else 0.0)
             appended += 1
 
-        if appended:
+        if appended or payload.get("stale_points_replaced"):
             payload["timestamp"] = timestamps
             payload["equity"] = equities
             payload["profit_loss"] = profits
@@ -1571,7 +2596,7 @@ class DashboardLiveStateManager:
             held_symbols[label] = {
                 str(position.get("symbol") or "").upper()
                 for position in account.get("positions") or []
-                if position.get("symbol")
+                if position.get("symbol") and _is_stock_market_data_symbol(str(position.get("symbol") or ""))
             }
         self._held_symbols_by_account = held_symbols
 
@@ -1624,6 +2649,62 @@ class DashboardLiveStateManager:
                 continue
             self._append_live_sample(label, _safe_float(account.get("equity")))
 
+    async def _rest_quote_refresh_loop(self, accounts: List[Dict[str, str]]):
+        """Background task: fetch latest quotes via REST snapshots every 15s as fallback."""
+        if not accounts:
+            return
+        # Use first account's credentials for data API access
+        data_key = accounts[0]["api_key"]
+        data_secret = accounts[0]["api_secret"]
+
+        while not self._stop_event.is_set():
+            try:
+                # Collect all unique symbols from held positions
+                all_symbols = sorted({
+                    sym
+                    for syms in self._held_symbols_by_account.values()
+                    for sym in syms
+                    if sym
+                })
+                if all_symbols:
+                    # Cooldown check
+                    now_mono = time.monotonic()
+                    if now_mono - self._last_rest_quote_refresh < REST_QUOTE_COOLDOWN_SECONDS:
+                        pass  # skip this cycle, too soon
+                    else:
+                        snapshots = await asyncio.to_thread(
+                            _fetch_rest_snapshots, all_symbols, data_key, data_secret
+                        )
+                        if snapshots:
+                            # Update shared market data — only overwrite if no recent
+                            # websocket data (ws data has no "source" key or source != "rest_snapshot")
+                            now_iso = _utc_now_iso()
+                            for sym, entry in snapshots.items():
+                                existing = self._shared_market_data.get(sym) or {}
+                                existing_source = existing.get("source", "")
+                                # Always update if no existing data or existing is also from REST
+                                # If existing is from websocket stream, only update if ws data is stale (>60s)
+                                if existing_source in ("", "rest_snapshot") or not existing.get("trade_timestamp_utc"):
+                                    self._shared_market_data[sym] = entry
+                                else:
+                                    # Check staleness of ws data
+                                    ws_ts = _parse_iso_datetime(existing.get("trade_timestamp_utc"))
+                                    if ws_ts is None or (_utc_now() - ws_ts).total_seconds() > 60:
+                                        self._shared_market_data[sym] = entry
+
+                            self._last_rest_quote_refresh = time.monotonic()
+                            self._rest_quote_refresh_utc = now_iso
+                            await self.refresh_and_broadcast(force=False, reason="rest_quote_refresh")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass  # Silently continue — this is a best-effort fallback
+
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=REST_QUOTE_REFRESH_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                continue
+
     async def start(self):
         accounts = _get_alpaca_accounts()
         self._tasks.append(asyncio.create_task(self._poll_loop(accounts)))
@@ -1642,6 +2723,7 @@ class DashboardLiveStateManager:
             self._tasks.append(asyncio.create_task(self._trade_updates_loop(acct)))
         if accounts:
             self._tasks.append(asyncio.create_task(self._market_data_loop(accounts)))
+            self._tasks.append(asyncio.create_task(self._rest_quote_refresh_loop(accounts)))
         await self.refresh_and_broadcast(force=True, reason="startup")
 
     async def stop(self):
@@ -1886,6 +2968,7 @@ class DashboardLiveStateManager:
                         if item_type == "t":
                             symbol_entry["trade_price"] = _safe_float(item.get("p"))
                             symbol_entry["trade_timestamp_utc"] = str(item.get("t") or _utc_now_iso())
+                            symbol_entry["source"] = "websocket"
                             for details in self._stream_status.values():
                                 details["last_trade_utc"] = symbol_entry["trade_timestamp_utc"]
                             saw_market_update = True
@@ -1893,6 +2976,7 @@ class DashboardLiveStateManager:
                             symbol_entry["bid_price"] = _safe_float(item.get("bp"))
                             symbol_entry["ask_price"] = _safe_float(item.get("ap"))
                             symbol_entry["quote_timestamp_utc"] = str(item.get("t") or _utc_now_iso())
+                            symbol_entry["source"] = "websocket"
                             for details in self._stream_status.values():
                                 details["last_quote_utc"] = symbol_entry["quote_timestamp_utc"]
                             saw_market_update = True
@@ -1910,18 +2994,23 @@ class DashboardLiveStateManager:
                 raise
             except Exception as e:
                 error_text = str(e)
+                is_connection_limit = "connection limit exceeded" in error_text.lower()
                 for details in self._stream_status.values():
-                    details["market_data_status"] = "error"
+                    details["market_data_status"] = "rest_fallback" if is_connection_limit else "error"
                     details["last_error"] = error_text
                     details["last_event_utc"] = _utc_now_iso()
                     details["reconnect_count"] = int(details.get("reconnect_count", 0)) + 1
                 current_subscribed = set()
-                if "connection limit exceeded" in error_text.lower() and accounts:
+                if is_connection_limit and accounts:
                     acct_index = (acct_index + 1) % len(accounts)
+                    reconnect_delay = max(reconnect_delay, MARKET_DATA_CONNECTION_LIMIT_COOLDOWN_SECONDS)
                 try:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=reconnect_delay)
                 except asyncio.TimeoutError:
-                    reconnect_delay = min(reconnect_delay * 2.0, 30.0)
+                    if is_connection_limit:
+                        reconnect_delay = max(MARKET_DATA_CONNECTION_LIMIT_COOLDOWN_SECONDS, reconnect_delay)
+                    else:
+                        reconnect_delay = min(reconnect_delay * 2.0, 30.0)
                     continue
 
     async def refresh_and_broadcast(self, force: bool, reason: str):
@@ -2237,6 +3326,18 @@ def gss_signal_summary():
 
 LAYOUT_PATH = REPO_ROOT / "config" / "dashboard_layout.json"
 LAYOUT_BACKUP_DIR = REPO_ROOT / "config" / "dashboard_layout_backups"
+LAYOUT_REQUIRED_WIDGETS: List[Dict[str, Any]] = [
+    {
+        "row_id": "row_quantum",
+        "widget": {
+            "id": "quantum_comparison",
+            "cols": 12,
+            "title": "Quantum vs Classical — Optimization Research",
+            "visible": True,
+            "badge": "BOUNDED SECONDARY SIGNAL",
+        },
+    }
+]
 
 class LayoutUpdateRequest(BaseModel):
     rows: List[Dict[str, Any]]
@@ -2247,7 +3348,24 @@ class LayoutUpdateRequest(BaseModel):
 def get_dashboard_layout():
     """Get current dashboard layout config."""
     if LAYOUT_PATH.exists():
-        return load_json(LAYOUT_PATH)
+        layout = load_json(LAYOUT_PATH)
+        rows = list(layout.get("rows") or [])
+        existing_ids = {
+            widget.get("id")
+            for row in rows
+            for widget in (row.get("widgets") or [])
+            if isinstance(widget, dict)
+        }
+        upgraded_widgets: List[str] = []
+        for required in LAYOUT_REQUIRED_WIDGETS:
+            widget = required["widget"]
+            if widget["id"] in existing_ids:
+                continue
+            rows.append({"id": required["row_id"], "widgets": [widget]})
+            upgraded_widgets.append(widget["id"])
+        if upgraded_widgets:
+            layout = {**layout, "rows": rows, "upgraded_widgets": upgraded_widgets}
+        return layout
     return {"error": "no layout config found"}
 
 
@@ -2271,6 +3389,7 @@ async def set_dashboard_layout(request: Request):
             "gss_signal_graph", "regime_timeline", "evidence_log",
             "politician_alpha", "alert_feed", "drawdown_chart",
             "consciousness", "order_success_rate", "sector_exposure",
+            "quantum_comparison",
             "graduation",
         }
 
@@ -2535,10 +3654,987 @@ async def admin_service_action(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# V4 Module Status Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v4/status")
+def v4_module_status():
+    """Return status of all V4 governance/hardening modules."""
+    status = {"timestamp_utc": _utc_now_iso(), "modules": {}}
+    # Policy Engine
+    try:
+        from src.core.policy_engine import PolicyEngine
+        pe = PolicyEngine(config_dir=REPO_ROOT / "config")
+        status["modules"]["policy_engine"] = {"available": True, "config_loaded": bool(pe._config)}
+    except Exception as e:
+        status["modules"]["policy_engine"] = {"available": False, "error": str(e)}
+    # Circuit Breaker
+    try:
+        from src.execution.circuit_breaker import CircuitBreaker
+        status["modules"]["circuit_breaker"] = {"available": True}
+    except Exception as e:
+        status["modules"]["circuit_breaker"] = {"available": False, "error": str(e)}
+    # Pre-Trade Controls
+    try:
+        from src.execution.pre_trade_controls import PreTradeControls
+        ptc = PreTradeControls(config_dir=REPO_ROOT / "config")
+        status["modules"]["pre_trade_controls"] = {"available": True, "config_loaded": bool(ptc._config)}
+    except Exception as e:
+        status["modules"]["pre_trade_controls"] = {"available": False, "error": str(e)}
+    # Source Quorum
+    try:
+        from src.core.source_quorum_engine import SourceQuorumEngine
+        status["modules"]["source_quorum"] = {"available": True}
+    except Exception as e:
+        status["modules"]["source_quorum"] = {"available": False, "error": str(e)}
+    # Feature Store
+    try:
+        from src.research.feature_store_builder import FeatureStoreBuilder
+        status["modules"]["feature_store"] = {"available": True}
+    except Exception as e:
+        status["modules"]["feature_store"] = {"available": False, "error": str(e)}
+    # Microstructure Regime Classifier
+    try:
+        from src.execution.microstructure_regime_classifier import MicrostructureRegimeClassifier
+        status["modules"]["microstructure_regime"] = {"available": True}
+    except Exception as e:
+        status["modules"]["microstructure_regime"] = {"available": False, "error": str(e)}
+    return status
+
+
+@app.get("/api/v4/policy-audit")
+def v4_policy_audit():
+    """Return latest policy audit report if available."""
+    try:
+        from src.reports.policy_audit_report import build_policy_audit_report
+        log_path = REPO_ROOT / "logs" / "policy_engine" / "evaluations.jsonl"
+        if not log_path.exists():
+            return {"schema_version": "policy_audit_report.v1", "evaluation_count": 0, "note": "no evaluations yet"}
+        entries = []
+        for line in log_path.read_text(encoding="utf-8").splitlines()[-500:]:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return build_policy_audit_report(entries)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# V4 Governance Endpoints
+# ---------------------------------------------------------------------------
+
+def _load_v4_feature_timestamps() -> tuple[Dict[str, datetime], Dict[str, Any]]:
+    """Best-effort discovery of runtime feature timestamps for dashboard display."""
+    searched_paths = [
+        REPO_ROOT / "logs" / "feature_timestamps.json",
+        REPO_ROOT / "logs" / "feature_store" / "feature_timestamps.json",
+        REPO_ROOT / "reports" / "feature_timestamps.json",
+        REPO_ROOT / "reports" / "feature_store" / "feature_timestamps.json",
+    ]
+
+    def _extract_timestamp(value: Any) -> Optional[datetime]:
+        if isinstance(value, dict):
+            for key in ("timestamp_utc", "last_updated", "updated_at", "last_seen_utc"):
+                parsed = _parse_iso_datetime(value.get(key))
+                if parsed is not None:
+                    return parsed
+            return None
+        return _parse_iso_datetime(value)
+
+    for path in searched_paths:
+        payload = load_json(path)
+        if not payload:
+            continue
+        raw_timestamps = payload.get("feature_timestamps", payload)
+        if not isinstance(raw_timestamps, dict):
+            continue
+
+        timestamps: Dict[str, datetime] = {}
+        for name, raw_value in raw_timestamps.items():
+            parsed = _extract_timestamp(raw_value)
+            if parsed is not None:
+                timestamps[str(name)] = parsed
+
+        return timestamps, {
+            "timestamp_source": str(path),
+            "searched_paths": [str(item) for item in searched_paths],
+            "loaded_feature_count": len(timestamps),
+        }
+
+    latest_scorecard = load_scorecards(limit=1)
+    if latest_scorecard:
+        raw_timestamps = latest_scorecard[-1].get("feature_timestamps", {})
+        if isinstance(raw_timestamps, dict):
+            timestamps = {}
+            for name, raw_value in raw_timestamps.items():
+                parsed = _extract_timestamp(raw_value)
+                if parsed is not None:
+                    timestamps[str(name)] = parsed
+            return timestamps, {
+                "timestamp_source": "scorecard.feature_timestamps",
+                "searched_paths": [str(item) for item in searched_paths],
+                "loaded_feature_count": len(timestamps),
+            }
+
+    return {}, {
+        "timestamp_source": "not_found",
+        "searched_paths": [str(item) for item in searched_paths],
+        "loaded_feature_count": 0,
+    }
+
+
+def _resolve_manifest_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize possible manifest container shapes into a raw manifest dict."""
+    if not isinstance(payload, dict):
+        return None
+    if "artifact_id" in payload and "artifact_type" in payload:
+        return payload
+    if isinstance(payload.get("_artifact_manifest"), dict):
+        return payload["_artifact_manifest"]
+    if isinstance(payload.get("manifest"), dict):
+        return payload["manifest"]
+    return None
+
+
+def _lookup_v4_lineage_manifest(artifact_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Search a small set of lineage stores for an artifact manifest."""
+    from src.lineage.artifact_manifest_builder import LineageResolver
+
+    search_paths = [
+        REPO_ROOT / "logs" / "lineage" / "manifests.jsonl",
+        REPO_ROOT / "reports" / "lineage" / "manifests.jsonl",
+    ]
+    resolver = LineageResolver()
+    matched_path: Optional[str] = None
+
+    for path in search_paths:
+        if not path.exists():
+            continue
+        for row in load_jsonl(path, limit=5000):
+            manifest_payload = _resolve_manifest_payload(row)
+            if manifest_payload is None:
+                continue
+            try:
+                resolver.register_dict(manifest_payload)
+                if str(manifest_payload.get("artifact_id")) == str(artifact_id):
+                    matched_path = str(path)
+            except Exception:
+                continue
+
+    manifest = resolver.get(str(artifact_id))
+    trace = {
+        "artifact_id": str(artifact_id),
+        "searched_paths": [str(item) for item in search_paths],
+        "matched_path": matched_path,
+        "registered_manifest_count": resolver.manifest_count,
+    }
+    if manifest is None:
+        return None, trace
+
+    ancestry = [item.to_dict() for item in resolver.get_ancestry(str(artifact_id))]
+    validation = resolver.validate_lineage(str(artifact_id))
+    trace["validation"] = validation
+    trace["ancestry_depth"] = len(ancestry)
+    return {
+        "manifest": manifest.to_dict(),
+        "validation": validation,
+        "ancestry": ancestry,
+    }, trace
+
+
+@app.get("/api/v4/governance")
+def v4_governance_status():
+    """Return governance and promotion gating state with decision traces."""
+    try:
+        from src.core.policy_engine import PolicyEngine
+        from src.core.promotion_policy_loader import load_promotion_policy
+        from src.research.encoder_promotion_gate import EncoderPromotionGate
+
+        config_path = REPO_ROOT / "config" / "promotion_policy.yaml"
+        policy = load_promotion_policy(config_path)
+        gate = EncoderPromotionGate(config_path=config_path)
+        policy_engine = PolicyEngine(config_dir=REPO_ROOT / "config")
+        current_mode = policy_engine._current_mode()
+
+        probe_metrics = {
+            "eval_days": 120,
+            "trade_count": 300,
+            "drawdown_delta_bps": 20,
+            "slippage_adjusted_win_delta_bps": 25,
+            "failure_rate": 0.01,
+            "cumulative_drift_std": 0.5,
+        }
+
+        signal_traces = []
+        for signal_type in sorted(policy.signal_thresholds):
+            decision = gate.evaluate(
+                probe_metrics,
+                signal_type=signal_type,
+                current_mode=current_mode,
+            )
+            signal_traces.append({
+                "signal_type": signal_type,
+                "allowed": decision.allowed,
+                "reason": decision.reason,
+                "gate_results": decision.gate_results,
+            })
+
+        blocked_examples = {
+            "frozen_mode": gate.evaluate(
+                probe_metrics,
+                signal_type="default",
+                current_mode="CRISIS",
+            ).to_dict(),
+            "politician_alpha": gate.evaluate(
+                probe_metrics,
+                signal_type="politician_alpha",
+                current_mode=current_mode,
+            ).to_dict(),
+        }
+
+        return {
+            "schema_version": "dashboard_governance.v1",
+            "timestamp_utc": _utc_now_iso(),
+            "current_mode": current_mode,
+            "frozen_modes": list(policy.frozen_modes),
+            "policy_engine": {
+                "available": True,
+                "current_mode": current_mode,
+                "quantum_stage": policy_engine._quantum_stage(),
+                "quantum_influence_cap": policy_engine._quantum_max_influence(),
+            },
+            "policy": {
+                "schema_version": policy.schema_version,
+                "human_approval_required": policy.human_approval_required,
+                "dual_run_required": policy.dual_run_required,
+                "rollback_required": policy.rollback_required,
+                "blocked_signals": [
+                    signal_type
+                    for signal_type, thresholds in policy.signal_thresholds.items()
+                    if thresholds.promotion_blocked
+                ],
+            },
+            "decision_trace": {
+                "signal_traces": signal_traces,
+                "blocked_examples": blocked_examples,
+                "config_path": str(config_path),
+            },
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp_utc": _utc_now_iso()}
+
+
+@app.get("/api/v4/freshness")
+def v4_feature_freshness():
+    """Return per-group feature freshness state with stale reasons."""
+    try:
+        from src.core.feature_freshness_enforcer import FeatureFreshnessEnforcer
+        from src.core.feature_registry_loader import load_feature_registry
+
+        config_dir = REPO_ROOT / "config"
+        registry = load_feature_registry(config_dir / "feature_registry.yaml")
+        enforcer = FeatureFreshnessEnforcer(config_dir=config_dir)
+        timestamps, timestamp_trace = _load_v4_feature_timestamps()
+        now = _utc_now()
+        group_results = enforcer.check_all_groups(timestamps, now)
+
+        groups = {}
+        for group_name, result in group_results.items():
+            groups[group_name] = {
+                "policy": result.policy,
+                "compliant": result.compliant,
+                "degraded": result.degraded,
+                "confidence_penalty": result.confidence_penalty,
+                "fresh_count": result.fresh_count,
+                "stale_count": result.stale_count,
+                "missing_count": result.missing_count,
+                "decision_trace": [
+                    {
+                        "feature_name": feature.feature_name,
+                        "status": feature.status,
+                        "ttl_minutes": feature.ttl_minutes,
+                        "age_minutes": feature.age_minutes,
+                        "confidence_penalty": feature.confidence_penalty,
+                        "reason": feature.stale_reason,
+                    }
+                    for feature in result.feature_results
+                ],
+            }
+
+        return {
+            "schema_version": "dashboard_feature_freshness.v1",
+            "timestamp_utc": _utc_now_iso(),
+            "summary": enforcer.summary(timestamps, now),
+            "groups": groups,
+            "decision_trace": {
+                "timestamp_trace": timestamp_trace,
+                "registry_feature_count": len(registry.features),
+                "features_without_runtime_timestamp": [
+                    feature.name
+                    for feature in registry.list_features()
+                    if feature.name not in timestamps
+                ],
+            },
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp_utc": _utc_now_iso()}
+
+
+@app.get("/api/v4/features")
+def v4_feature_registry():
+    """Return the typed feature registry used by V4 freshness governance."""
+    try:
+        from src.core.feature_registry_loader import load_feature_registry
+
+        config_path = REPO_ROOT / "config" / "feature_registry.yaml"
+        registry = load_feature_registry(config_path)
+        features_by_source: Dict[str, List[str]] = {}
+        for feature in registry.list_features():
+            features_by_source.setdefault(feature.source, []).append(feature.name)
+
+        return {
+            "schema_version": "dashboard_feature_registry.v1",
+            "timestamp_utc": _utc_now_iso(),
+            "registry": registry.to_dict(),
+            "features_by_source": {
+                source: sorted(feature_names)
+                for source, feature_names in sorted(features_by_source.items())
+            },
+            "decision_trace": {
+                "config_path": str(config_path),
+                "validation_errors": list(registry.validation_errors),
+            },
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp_utc": _utc_now_iso()}
+
+
+@app.get("/api/v4/lineage/{artifact_id}")
+def v4_lineage_lookup(artifact_id: str):
+    """Lookup a stored artifact manifest and lineage trace."""
+    try:
+        payload, trace = _lookup_v4_lineage_manifest(artifact_id)
+        if payload is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "artifact_not_found",
+                    "artifact_id": artifact_id,
+                    "decision_trace": trace,
+                    "timestamp_utc": _utc_now_iso(),
+                },
+            )
+        return {
+            "schema_version": "dashboard_lineage_lookup.v1",
+            "timestamp_utc": _utc_now_iso(),
+            "artifact_id": artifact_id,
+            **payload,
+            "decision_trace": trace,
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "artifact_id": artifact_id,
+                "timestamp_utc": _utc_now_iso(),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# SIGNAL FEED ENDPOINT (reads quantum_feed latest signal)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/signal-feed")
+def signal_feed():
+    """Read latest signal from the 24/7 data gatherer quantum feed."""
+    signal_path = REPO_ROOT / "data" / "quantum_feed" / "latest_signal.json"
+    if not signal_path.exists():
+        return JSONResponse(
+            {"error": "No signal data available", "timestamp_utc": _utc_now_iso()},
+            status_code=404,
+        )
+    try:
+        raw = signal_path.read_text()
+        data = json.loads(raw)
+        data["_served_at"] = _utc_now_iso()
+        return data
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Failed to read signal feed: {e}", "timestamp_utc": _utc_now_iso()},
+            status_code=500,
+        )
+
+
+# ---------------------------------------------------------------------------
+# V6 WAR ROOM API ENDPOINTS
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v6/warroom")
+def v6_warroom():
+    """Full war room snapshot — combines all V6 modules into one payload."""
+    scorecard = load_scorecards(limit=1)
+    card = scorecard[0] if scorecard else {}
+
+    # Strategy ideas from latest scorecard
+    strategy_ideas = card.get("v6_strategy_ideas", [])
+    edge_findings = card.get("v6_edge_findings", {})
+    cross_asset = card.get("v6_cross_asset_signals", {})
+    scanner = card.get("v6_scanner_discoveries", [])
+    deescalation = card.get("v6_deescalation", {})
+    scenarios = card.get("v6_scenarios", {})
+
+    payload = {
+        "timestamp_utc": _utc_now_iso(),
+        "source_timestamp_utc": card.get("timestamp_utc"),
+        "regime": {
+            "probability": card.get("regime_shift_probability", 0),
+            "mode": card.get("mode", "NORMAL"),
+            "confidence": card.get("confidence", 0),
+        },
+        "chokepoints": card.get("chokepoint_risk", {}),
+        "strategy_ideas": strategy_ideas,
+        "edge_findings": edge_findings,
+        "cross_asset_signals": cross_asset,
+        "scanner_discoveries": scanner,
+        "deescalation": deescalation,
+        "scenarios": scenarios,
+        "bridge_health": _build_bridge_panel_status(card) if card else {},
+        "bridge_summary": card.get("bridge_summary", {}),
+    }
+    payload.update(_freshness_metadata(card.get("timestamp_utc"), stale_after_seconds=900, degraded_after_seconds=300))
+    return payload
+
+
+@app.get("/api/v6/strategies")
+def v6_strategies():
+    """All 15 war strategies with current status."""
+    try:
+        import yaml
+        config_path = REPO_ROOT / "config" / "war_strategies.yaml"
+        if config_path.exists():
+            config = yaml.safe_load(config_path.read_text()) or {}
+            strategies = config.get("strategies", {})
+            return {
+                "timestamp_utc": _utc_now_iso(),
+                "strategy_count": len(strategies),
+                "strategies": {
+                    name: {
+                        "account": s.get("account"),
+                        "timeframe": s.get("timeframe"),
+                        "target_daily_pnl": s.get("target_daily_pnl", 0),
+                        "positions": [
+                            {"symbol": p.get("symbol"), "size_usd": p.get("size_usd"), "side": p.get("side")}
+                            for p in s.get("positions", [])
+                        ],
+                    }
+                    for name, s in strategies.items()
+                },
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/v6/scenarios")
+def v6_scenarios():
+    """Run scenario simulator against current portfolio."""
+    try:
+        from src.risk.scenario_simulator import ScenarioSimulator
+        sim = ScenarioSimulator()
+        results = sim.simulate_all({})
+        return {"timestamp_utc": _utc_now_iso(), "scenarios": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/v6/watchlist")
+def v6_watchlist():
+    """Full expanded watchlist."""
+    try:
+        from src.data.watchlist_manager import WatchlistManager
+        wm = WatchlistManager(repo_root=REPO_ROOT)
+        return {
+            "timestamp_utc": _utc_now_iso(),
+            "total_symbols": len(wm.get_all_symbols()),
+            "categories": {
+                cat: wm.get_by_category(cat)
+                for cat in wm.get_categories()
+            },
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/v6/kill-switch")
+def v6_kill_switch():
+    """Emergency kill switch — activates kill_switch.json."""
+    ks_path = REPO_ROOT / "control" / "kill_switch.json"
+    ks_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "active": True,
+        "activated_at": _utc_now_iso(),
+        "reason": "Dashboard kill switch activated",
+    }
+    ks_path.write_text(json.dumps(payload, indent=2))
+    return {"status": "kill_switch_activated", "timestamp": _utc_now_iso()}
+
+
+@app.post("/api/v6/kill-switch/deactivate")
+def v6_kill_switch_deactivate():
+    """Deactivate kill switch."""
+    ks_path = REPO_ROOT / "control" / "kill_switch.json"
+    payload = {"active": False, "deactivated_at": _utc_now_iso()}
+    ks_path.write_text(json.dumps(payload, indent=2))
+    return {"status": "kill_switch_deactivated", "timestamp": _utc_now_iso()}
+
+
+@app.get("/api/v6/calendar")
+def v6_calendar():
+    """Market calendar for the week."""
+    try:
+        import yaml
+        cal_path = REPO_ROOT / "config" / "market_calendar.yaml"
+        if cal_path.exists():
+            return yaml.safe_load(cal_path.read_text()) or {}
+        return {"error": "calendar not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.websocket("/ws/warroom")
+async def ws_warroom(websocket: WebSocket):
+    """Real-time war room WebSocket — pushes state every 5 seconds."""
+    await websocket.accept()
+    try:
+        while True:
+            try:
+                data = v6_warroom()
+                await websocket.send_json(data)
+            except Exception:
+                pass
+            await asyncio.sleep(5)
+    except WebSocketDisconnect:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Serve war room dashboard (dashboard/static/)
+# ---------------------------------------------------------------------------
+
+_static_dir = Path(__file__).parent.parent / "static"
+
+@app.get("/warroom")
+@app.get("/warroom.html")
+def serve_warroom():
+    """Serve the standalone war room HTML dashboard."""
+    warroom_path = _static_dir / "warroom.html"
+    if warroom_path.exists():
+        return FileResponse(str(warroom_path), media_type="text/html")
+    return JSONResponse({"error": "warroom.html not found"}, status_code=404)
+
+# ---------------------------------------------------------------------------
 # Serve frontend static files (production)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# POSITION PRICE TRACKER — real-time prices for held positions (stocks + options)
+# ---------------------------------------------------------------------------
+
+# In-memory rolling price history for positions (survives across requests, cleared on restart)
+_position_price_history: Dict[str, List[Dict[str, Any]]] = {}
+_POSITION_HISTORY_MAX_POINTS = 500  # ~4 hours at 30s intervals
+
+@app.get("/api/position-prices")
+def position_prices():
+    """Return live prices + rolling history for all held positions.
+
+    For stocks: uses Yahoo Finance real-time quote.
+    For options: uses Alpaca option snapshots (bid/ask/mid).
+    Stores a rolling history so the frontend can chart price over time.
+    """
+    import urllib.request
+    _load_env()
+
+    accounts = _get_alpaca_accounts()
+    all_positions = []
+    for acct in accounts:
+        try:
+            acct_data = _get_cached_alpaca_account(acct)
+            for pos in acct_data.get("positions", []):
+                pos["account_label"] = acct["label"]
+                all_positions.append(pos)
+        except Exception:
+            continue
+
+    if not all_positions:
+        return {"positions": [], "timestamp_utc": _utc_now_iso()}
+
+    now_unix = int(time.time())
+    results = []
+
+    for pos in all_positions:
+        symbol = pos.get("symbol", "")
+        entry = float(pos.get("avg_entry_price", 0))
+        qty = float(pos.get("qty", 0))
+        asset_class = pos.get("asset_class", "")
+
+        # Determine if this is an option (OCC symbol format: ROOT + 6-digit date + C/P + 8-digit strike)
+        is_option = bool(
+            len(symbol) > 10
+            and any(c in symbol for c in ("C", "P"))
+            and symbol[-8:].isdigit()
+        )
+
+        price_data = {"bid": 0, "ask": 0, "mid": 0, "last": 0, "source": "unknown"}
+
+        if is_option:
+            # Fetch from Alpaca option snapshots
+            try:
+                api_key = os.getenv("ALPACA_API_KEY_LIVE") or os.getenv("ALPACA_API_KEY", "")
+                api_secret = os.getenv("ALPACA_SECRET_KEY_LIVE") or os.getenv("ALPACA_SECRET_KEY", "")
+                headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
+                url = f"https://data.alpaca.markets/v1beta1/options/snapshots?symbols={symbol}&feed=indicative"
+                req = urllib.request.Request(url, headers=headers)
+                resp = json.loads(urllib.request.urlopen(req, timeout=8).read())
+                snap = resp.get("snapshots", {}).get(symbol, {})
+                q = snap.get("latestQuote", {})
+                bid = float(q.get("bp", 0))
+                ask = float(q.get("ap", 0))
+                mid = round((bid + ask) / 2, 4) if bid and ask else 0
+                trade = snap.get("latestTrade", {})
+                last = float(trade.get("p", 0))
+                price_data = {"bid": bid, "ask": ask, "mid": mid, "last": last or mid, "source": "alpaca_option"}
+            except Exception as e:
+                price_data["error"] = str(e)[:80]
+        else:
+            # Stock: use Yahoo Finance
+            try:
+                yf_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
+                yf_req = urllib.request.Request(yf_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(yf_req, timeout=6) as resp:
+                    yf_data = json.loads(resp.read().decode())
+                meta = yf_data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+                current = meta.get("regularMarketPrice", 0)
+                price_data = {"bid": 0, "ask": 0, "mid": current, "last": current, "source": "yahoo"}
+            except Exception as e:
+                # Fallback to Alpaca position price
+                current = float(pos.get("current_price", 0))
+                price_data = {"bid": 0, "ask": 0, "mid": current, "last": current, "source": "alpaca_rest"}
+
+        current_price = price_data["mid"] or price_data["last"]
+        pnl = (current_price - entry) * qty * (100 if is_option else 1)
+        pnl_pct = ((current_price / entry) - 1) * 100 if entry else 0
+
+        # Append to rolling history
+        if symbol not in _position_price_history:
+            _position_price_history[symbol] = []
+        history = _position_price_history[symbol]
+
+        # Only append if price changed or 30s+ since last point
+        should_append = True
+        if history:
+            last_pt = history[-1]
+            if last_pt["price"] == current_price and (now_unix - last_pt["time"]) < 30:
+                should_append = False
+
+        if should_append and current_price > 0:
+            history.append({"time": now_unix, "price": current_price, "bid": price_data["bid"], "ask": price_data["ask"]})
+            # Trim to max
+            if len(history) > _POSITION_HISTORY_MAX_POINTS:
+                _position_price_history[symbol] = history[-_POSITION_HISTORY_MAX_POINTS:]
+
+        # Extract underlying for options
+        underlying = symbol
+        strike = None
+        opt_type = None
+        expiry = None
+        opt_match = None
+        if is_option:
+            import re
+            opt_match = re.match(r'^([A-Z]+)(\d{6})([CP])(\d{8})$', symbol)
+        if opt_match:
+            underlying = opt_match.group(1)
+            exp_raw = opt_match.group(2)
+            opt_type = "Call" if opt_match.group(3) == "C" else "Put"
+            strike = int(opt_match.group(4)) / 1000
+            expiry = f"20{exp_raw[:2]}-{exp_raw[2:4]}-{exp_raw[4:6]}"
+
+        results.append({
+            "symbol": symbol,
+            "underlying": underlying,
+            "is_option": is_option,
+            "strike": strike,
+            "opt_type": opt_type,
+            "expiry": expiry,
+            "qty": qty,
+            "entry_price": entry,
+            "current_price": current_price,
+            "bid": price_data["bid"],
+            "ask": price_data["ask"],
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "market_value": round(current_price * qty * (100 if is_option else 1), 2),
+            "source": price_data["source"],
+            "account": pos.get("account_label", ""),
+            "history": _position_price_history.get(symbol, []),
+        })
+
+    return {"positions": results, "timestamp_utc": _utc_now_iso()}
+
+
+# ---------------------------------------------------------------------------
+# WHAT-IF TRACKER — top suggested picks with live prices
+# ---------------------------------------------------------------------------
+
+@app.get("/api/whatif-picks")
+def whatif_picks():
+    """Return top suggested trade ideas with live prices for what-if tracking.
+
+    Reads the iran_war_brief.json for ideas, fetches current Alpaca prices,
+    and computes hypothetical P&L if $25 had been invested at the brief's
+    reference open price.
+    """
+    import urllib.request
+    import urllib.error
+    _load_env()
+
+    # Fetch live account equity for hypothetical investment sizing
+    live_equity = 0.0
+    try:
+        live_key = os.getenv("ALPACA_API_KEY_LIVE", "")
+        live_secret = os.getenv("ALPACA_SECRET_KEY_LIVE", "")
+        if live_key and live_secret:
+            eq_req = urllib.request.Request(
+                "https://api.alpaca.markets/v2/account",
+                headers={"APCA-API-KEY-ID": live_key, "APCA-API-SECRET-KEY": live_secret},
+            )
+            eq_data = json.loads(urllib.request.urlopen(eq_req, timeout=6).read())
+            live_equity = float(eq_data.get("equity", 0))
+    except Exception:
+        pass
+    # Fall back to $100 if equity fetch fails
+    if live_equity <= 0:
+        live_equity = 100.0
+
+    brief_path = REPO_ROOT / "reports" / "flash" / "iran_war_brief.json"
+    if not brief_path.exists():
+        return {"picks": [], "error": "No brief data", "timestamp_utc": _utc_now_iso()}
+
+    try:
+        brief = json.loads(brief_path.read_text())
+    except Exception:
+        return {"picks": [], "error": "Failed to read brief", "timestamp_utc": _utc_now_iso()}
+
+    ideas = brief.get("ideas", [])
+    # Filter to share-based ideas only (not options), pick top 5 non-GUSH
+    share_ideas = [
+        i for i in ideas
+        if i.get("order_type") != "option"
+        and i.get("ticker", "") not in ("GUSH",)  # exclude current holding
+    ][:5]
+
+    # Always include these long symbols even if not in the brief's share ideas
+    ALWAYS_INCLUDE_LONG = [
+        {"ticker": "USO", "direction": "LONG", "bucket": "OIL_SUPPLY",
+         "confidence": 80, "ev_pct": 20, "note": "United States Oil Fund — direct WTI crude exposure"},
+    ]
+    existing_tickers = {i.get("ticker", "") for i in share_ideas}
+    for extra in ALWAYS_INCLUDE_LONG:
+        if extra["ticker"] not in existing_tickers:
+            share_ideas.append({**extra, "vehicle": extra["ticker"], "order_type": "share"})
+
+    # Top 5 short/inverse picks — tracks bearish side of the war trade
+    SHORT_PICKS = [
+        {"ticker": "SQQQ", "direction": "LONG", "bucket": "TECH_SELLOFF",
+         "confidence": 65, "ev_pct": 20, "note": "3x Short Nasdaq — tech selloff from oil inflation"},
+        {"ticker": "JETS", "direction": "SHORT", "bucket": "AVIATION",
+         "confidence": 75, "ev_pct": 15, "note": "US Global Jets ETF — airlines crushed by oil >$100"},
+        {"ticker": "TZA", "direction": "LONG", "bucket": "MELTDOWN_HEDGE",
+         "confidence": 55, "ev_pct": 15, "note": "3x Short Russell 2000 — small caps hit hardest in recession"},
+        {"ticker": "SPXS", "direction": "LONG", "bucket": "MELTDOWN_HEDGE",
+         "confidence": 50, "ev_pct": 12, "note": "3x Short S&P 500 — broad market meltdown hedge"},
+        {"ticker": "TLT", "direction": "LONG", "bucket": "MELTDOWN_HEDGE",
+         "confidence": 55, "ev_pct": 10, "note": "20Y+ Treasuries — flight to safety if recession hits"},
+    ]
+    for sp in SHORT_PICKS:
+        if sp["ticker"] not in existing_tickers:
+            share_ideas.append({**sp, "vehicle": sp["ticker"], "order_type": "share"})
+
+    if not share_ideas:
+        return {"picks": [], "error": "No share ideas in brief", "timestamp_utc": _utc_now_iso()}
+
+    picks = []
+    for idea in share_ideas:
+        ticker = idea.get("ticker", "")
+        if not ticker:
+            continue
+
+        pick = {
+            "symbol": ticker,
+            "direction": idea.get("direction", "LONG"),
+            "note": idea.get("note", ""),
+            "confidence": idea.get("confidence", 0),
+            "ev_pct": idea.get("ev_pct", 0),
+            "bucket": idea.get("bucket", ""),
+            "hypothetical_investment": 0,  # set after we know pick count
+            "current_price": 0,
+            "open_price": 0,
+            "change_pct": 0,
+            "hypothetical_pnl": 0,
+            "hypothetical_value": 0,  # set after we know pick count
+        }
+
+        # Fetch live price from Yahoo Finance (real-time, free, no subscription)
+        try:
+            yf_url = (
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+                f"?interval=1m&range=1d"
+            )
+            yf_req = urllib.request.Request(yf_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(yf_req, timeout=6) as resp:
+                yf_data = json.loads(resp.read().decode())
+
+            yf_result = yf_data.get("chart", {}).get("result", [])
+            if not yf_result:
+                pick["error"] = "No Yahoo data"
+                picks.append(pick)
+                continue
+
+            meta = yf_result[0].get("meta", {})
+            current = meta.get("regularMarketPrice", 0)
+            prev_close = meta.get("chartPreviousClose", 0) or meta.get("previousClose", 0)
+            # Use official opening bell price as daily benchmark
+            open_price = meta.get("regularMarketOpen", 0)
+            if not open_price:
+                # Fallback: first candle's open
+                quotes = yf_result[0].get("indicators", {}).get("quote", [{}])[0]
+                opens = quotes.get("open", [])
+                open_price = opens[0] if opens and opens[0] is not None else 0
+
+            if current and open_price:
+                # Track change from today's open, not prev close
+                day_change = ((current - open_price) / open_price * 100) if open_price else 0
+                invest_amount = live_equity  # full portfolio in each pick
+                shares = invest_amount / open_price if open_price else 0
+                hyp_value = shares * current
+                hyp_pnl = hyp_value - invest_amount
+                hyp_pnl_pct = ((current - open_price) / open_price * 100) if open_price else 0
+
+                pick["hypothetical_investment"] = round(invest_amount, 2)
+                pick["current_price"] = round(current, 2)
+                pick["open_price"] = round(open_price, 2)
+                pick["prev_close"] = round(prev_close, 2)
+                pick["change_pct"] = round(day_change, 2)
+                pick["hypothetical_pnl"] = round(hyp_pnl, 2)
+                pick["hypothetical_value"] = round(hyp_value, 2)
+                pick["hypothetical_pnl_pct"] = round(hyp_pnl_pct, 2)
+                pick["hypothetical_shares"] = round(shares, 4)
+
+        except Exception as e:
+            pick["error"] = str(e)
+
+        picks.append(pick)
+
+    # Sort by hypothetical P&L descending
+    picks.sort(key=lambda x: x.get("hypothetical_pnl", 0), reverse=True)
+
+    # Build top 5 scenarios from signal data
+    buckets = brief.get("buckets", {})
+    quotes_data = brief.get("quotes", {})
+    oil_score = buckets.get("OIL_SUPPLY", {}).get("score", 0)
+    oil_price = quotes_data.get("CL=F", {}).get("price", 0)
+    shipping_score = buckets.get("SHIPPING", {}).get("score", 0)
+    geo_score = buckets.get("GEOPOLITICAL", {}).get("score", 0)
+    vix = brief.get("fear_greed", {}).get("vix", 0)
+
+    scenarios = [
+        {
+            "rank": 1,
+            "name": "Hormuz Stays Closed (4+ weeks)",
+            "probability": 40,
+            "impact": "Oil $120-150, GUSH +50-80%, tankers ATH, airlines -20%",
+            "action": "Hold GUSH/UCO, add FRO. Hedge with TLT.",
+            "color": "red",
+        },
+        {
+            "rank": 2,
+            "name": "Escalation — US/Israel Strikes Iran",
+            "probability": 25,
+            "impact": "Oil $130+, VIX 40+, S&P -5-8%, gold $5500+",
+            "action": "All-in energy + defense + gold. Add SQQQ for tech short.",
+            "color": "red",
+        },
+        {
+            "rank": 3,
+            "name": "Stalemate — Slow Grind (2-4 weeks)",
+            "probability": 20,
+            "impact": f"Oil $95-110, vol elevated (VIX {vix:.0f}+), sector rotation",
+            "action": "Hold current positions. Watch for breakout above $110.",
+            "color": "yellow",
+        },
+        {
+            "rank": 4,
+            "name": "Partial De-escalation — Hormuz Reopens",
+            "probability": 10,
+            "impact": "Oil drops to $80-85, GUSH -25%, airlines +10%, VIX <22",
+            "action": "EXIT leveraged oil immediately. Rotate to defensives.",
+            "color": "green",
+        },
+        {
+            "rank": 5,
+            "name": "Full Ceasefire / Peace Deal",
+            "probability": 5,
+            "impact": "Oil $70-75, GUSH -40%+, full risk-on rally, VIX <18",
+            "action": "EXIT all war trades. Buy QQQ/tech dip.",
+            "color": "green",
+        },
+    ]
+
+    return {
+        "picks": picks,
+        "scenarios": scenarios,
+        "live_equity": round(live_equity, 2),
+        "per_pick_amount": round(live_equity, 2),
+        "brief_timestamp": brief.get("timestamp_utc", ""),
+        "signal_summary": {
+            "oil_score": oil_score,
+            "oil_price": oil_price,
+            "shipping_score": shipping_score,
+            "geo_score": geo_score,
+            "vix": vix,
+        },
+        "timestamp_utc": _utc_now_iso(),
+    }
+
+
+@app.get("/api/whatif-scores")
+def whatif_scores():
+    """Return learner quality scores for what-if picks."""
+    scores_path = REPO_ROOT / "data" / "whatif_learning" / "pick_quality_scores.json"
+    if not scores_path.exists():
+        return {"scores": {}, "status": "no data yet", "timestamp_utc": _utc_now_iso()}
+    try:
+        data = json.loads(scores_path.read_text())
+        return {**data, "timestamp_utc": _utc_now_iso()}
+    except Exception as e:
+        return {"scores": {}, "error": str(e), "timestamp_utc": _utc_now_iso()}
+
+
 frontend_dist = Path(__file__).parent.parent / "frontend" / "out"
+
+@app.get("/trading")
+def serve_trading():
+    """Serve the trading dashboard page."""
+    trading_path = frontend_dist / "trading.html"
+    if trading_path.exists():
+        return FileResponse(str(trading_path), media_type="text/html")
+    return JSONResponse({"error": "trading page not found"}, status_code=404)
+
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
 

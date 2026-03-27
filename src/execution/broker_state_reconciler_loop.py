@@ -18,6 +18,7 @@ Env:
 """
 
 from __future__ import annotations
+import gc
 
 import argparse
 import json
@@ -280,6 +281,7 @@ class BrokerStateReconcilerLoop:
             except Exception as e:
                 self._log_event("reconciler_loop_crash", {"error": str(e)})
             time.sleep(loop_seconds)
+            gc.collect()
 
 
 def parse_args():

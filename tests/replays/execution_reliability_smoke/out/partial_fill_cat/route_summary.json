@@ -1,0 +1,65 @@
+{
+  "schema_version": "shadow_order_router_run.v1",
+  "timestamp_utc": "2026-03-04T19:25:52.996527+00:00",
+  "router_run_id": "router-c7f590d160",
+  "broker_name": "mock",
+  "broker_account_id": null,
+  "package_id": "pkg-smokeexec01",
+  "package_timestamp_utc": "2026-03-04T20:45:00+00:00",
+  "effective_mode": "shadow",
+  "time_window_name": "power_hour",
+  "watchlist_only_window": false,
+  "global_blocks": [],
+  "candidate_count_in_package": 3,
+  "blocked_candidate_count_in_package": 0,
+  "selected_candidates": [
+    {
+      "symbol": "XOM",
+      "candidate_id": "cand-smoke-xom",
+      "intent_id": "intent-63b555616d5c49dd",
+      "client_order_id": "gs-9b27d1c594eec525",
+      "confidence_score": 0.83,
+      "strategy_style": "momentum_follow_through",
+      "template_key": "power_hour_continuation",
+      "direction": "long"
+    },
+    {
+      "symbol": "CAT",
+      "candidate_id": "cand-smoke-cat",
+      "intent_id": "intent-1de5842383ee4eb0",
+      "client_order_id": "gs-50a97288d38f47ba",
+      "confidence_score": 0.72,
+      "strategy_style": "momentum_follow_through",
+      "template_key": "power_hour_continuation",
+      "direction": "long"
+    }
+  ],
+  "submitted_orders": [
+    {
+      "symbol": "XOM",
+      "candidate_id": "cand-smoke-xom",
+      "intent_id": "intent-63b555616d5c49dd",
+      "client_order_id": "gs-9b27d1c594eec525",
+      "broker_order_id": "mock-6bac3bcde61d",
+      "broker_status": "accepted",
+      "shadow_mode": true
+    },
+    {
+      "symbol": "CAT",
+      "candidate_id": "cand-smoke-cat",
+      "intent_id": "intent-1de5842383ee4eb0",
+      "client_order_id": "gs-50a97288d38f47ba",
+      "broker_order_id": "mock-b9811f580ea2",
+      "broker_status": "accepted",
+      "shadow_mode": true
+    }
+  ],
+  "skipped_candidates": [
+    {
+      "symbol": "NVDA",
+      "candidate_id": "cand-smoke-nvda-blocked",
+      "reason": "fill_sim_do_not_route"
+    }
+  ],
+  "errors": []
+}

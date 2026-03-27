@@ -1,0 +1,92 @@
+schema_version: quantum_experiment_registry.v1
+
+experiments:
+  portfolio_optimization:
+    problem_family: portfolio_optimization
+    algorithm_family: qaoa
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: classical_strong_baseline
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Primary portfolio-construction study path. Keep artifact-only."
+
+  robust_portfolio_design:
+    problem_family: robust_portfolio_design
+    algorithm_family: vqe
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: classical_strong_baseline
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Risk-aware design experiments with paired classical comparator."
+
+  scenario_allocation:
+    problem_family: scenario_allocation
+    algorithm_family: qaoa
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: classical_optimizer_baseline
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Scenario-conditioned allocation experiments."
+
+  derivative_pricing_research:
+    problem_family: derivative_pricing_research
+    algorithm_family: monte_carlo
+    local_sim_support: true
+    qcloud_support: false
+    classical_comparator: monte_carlo_scenario_engine
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Research-only pricing experiments; compare local sim against classical MC."
+
+  anomaly_detection_research:
+    problem_family: anomaly_detection_research
+    algorithm_family: hybrid
+    local_sim_support: true
+    qcloud_support: false
+    classical_comparator: research_eval_harness
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Hybrid ranking/anomaly studies with optional VQNet compatibility."
+
+  hedge_basket_optimization:
+    problem_family: hedge_basket_optimization
+    algorithm_family: qaoa
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: scipy_SLSQP
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Hedge basket selection via QAOA, max 8 decision variables."
+
+  risk_management_research:
+    problem_family: risk_management_research
+    algorithm_family: vqe
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: scipy_SLSQP
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Risk management VQE studies including CVaR and drawdown minimization."
+
+  cvar_optimization:
+    problem_family: portfolio_optimization
+    algorithm_family: qaoa
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: scipy_SLSQP
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "CVaR objective - higher-order risk measure via QAOA."
+
+  drawdown_optimization:
+    problem_family: risk_management_research
+    algorithm_family: vqe
+    local_sim_support: true
+    qcloud_support: true
+    classical_comparator: scipy_SLSQP
+    artifact_schema: quantum_experiment_artifact.v1
+    reproducibility_required: true
+    notes: "Maximum drawdown minimization via VQE."

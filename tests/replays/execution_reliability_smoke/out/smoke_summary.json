@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "submitted_orders": 2,
+  "skipped_candidates": 1,
+  "reconciled_count": 6,
+  "error_count": 0,
+  "out_dir": "/Users/mosestut/global-sentinel/tests/replays/execution_reliability_smoke/out"
+}

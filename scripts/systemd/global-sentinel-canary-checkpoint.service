@@ -1,0 +1,22 @@
+[Unit]
+Description=Global Sentinel Canary Stabilization Checkpoint
+After=network.target global-sentinel.service
+Wants=global-sentinel.service
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/run_canary_stabilization_checkpoint.py --repo-root /opt/global-sentinel
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=global-sentinel-canary-checkpoint
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/tmp

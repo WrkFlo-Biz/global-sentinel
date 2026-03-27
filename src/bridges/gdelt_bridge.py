@@ -29,7 +29,8 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def safe_get_json(url: str, timeout: int = 20, retries: int = 2) -> Any:
+def safe_get_json(url: str, timeout: int = 20, retries: int = 4) -> Any:
+    """Fetch JSON with exponential backoff (5s, 10s, 20s, 40s)."""
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(
@@ -39,11 +40,15 @@ def safe_get_json(url: str, timeout: int = 20, retries: int = 2) -> Any:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", errors="ignore"))
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < retries:
-                time.sleep(5 * (attempt + 1))  # Backoff: 5s, 10s
+            if e.code in (429, 503) and attempt < retries:
+                backoff = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
+                time.sleep(backoff)
                 continue
             return None
         except Exception:
+            if attempt < retries:
+                time.sleep(5 * (2 ** attempt))
+                continue
             return None
 
 
@@ -61,9 +66,17 @@ def safe_get_text(url: str, timeout: int = 20) -> Optional[str]:
 
 # Consolidated queries to reduce API calls (GDELT rate limits at ~1 req/sec)
 GDELT_QUERIES = [
+    # Original broad queries
     "war OR conflict OR sanctions OR tariff OR embargo OR missile",
     "airline disruption OR flight cancellation OR airspace OR energy crisis OR OPEC",
-    "central bank OR inflation OR recession OR cyber attack OR supply chain",
+    "central bank OR inflation OR recession OR supply chain disruption",
+    # Expanded category-specific queries
+    "energy infrastructure OR pipeline sabotage OR LNG terminal OR refinery attack OR power grid",
+    "Suez Canal OR Strait of Hormuz OR Panama Canal OR Bab el-Mandeb OR shipping disruption OR Houthi",
+    "defense spending OR military budget OR arms deal OR NATO expansion OR weapons procurement",
+    "emerging market crisis OR currency collapse OR sovereign debt OR IMF bailout OR capital flight",
+    "China trade war OR rare earth OR Taiwan strait OR Belt and Road OR China property crisis",
+    "cyber attack OR ransomware OR critical infrastructure hack OR state-sponsored cyber OR zero day",
 ]
 
 
@@ -72,6 +85,10 @@ class GDELTBridge:
     Queries GDELT for geopolitical events relevant to regime shift scoring.
     Free, no API key. Rate limit: be respectful (1 query/sec).
     """
+
+    # Response cache: avoid re-querying GDELT within 30 min
+    _response_cache: dict = {}
+    _cache_ttl_seconds: int = 1800  # 30 minutes
 
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
@@ -110,16 +127,23 @@ class GDELTBridge:
         }
 
     def _query_gdelt_doc(self, query: str) -> List[Dict[str, Any]]:
-        """Query GDELT DOC API for articles matching a query."""
+        """Query GDELT DOC API for articles matching a query (cached 30 min)."""
         params = {
             "query": query,
             "mode": "ArtList",
-            "maxrecords": "25",
+            "maxrecords": "15",
             "timespan": "24h",
             "format": "json",
             "sort": "ToneDesc",
         }
         url = f"https://api.gdeltproject.org/api/v2/doc/doc?{urllib.parse.urlencode(params)}"
+
+        # Check response cache
+        now = time.time()
+        cached = GDELTBridge._response_cache.get(query)
+        if cached and (now - cached["ts"]) < self._cache_ttl_seconds:
+            return cached["data"]
+
         data = safe_get_json(url)
 
         if not data:
@@ -150,6 +174,8 @@ class GDELTBridge:
                 "timestamp_utc": iso_now(),
             })
 
+        # Store in response cache
+        GDELTBridge._response_cache[query] = {"ts": time.time(), "data": events}
         return events
 
     def _parse_tone(self, tone: Any) -> float:

@@ -130,7 +130,23 @@ class FedBoardBridge:
                 packets.extend(feed_packets)
             except Exception as e:
                 packets.append(self._error_packet(url, str(e)))
+        self._write_poll_snapshot(packets)
         return packets
+
+    def _write_poll_snapshot(self, packets: List[Dict[str, Any]]) -> None:
+        tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        snapshot = {
+            "timestamp_utc": iso_now(),
+            "bridge_name": "fed_board_bridge",
+            "packet_count": len(packets),
+            "feed_count": len(self.rss_feeds),
+            "packets": packets[:50],
+        }
+        path = self.cache_dir / f"fed_board_{tag}.json"
+        try:
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def _poll_rss(self, feed_url: str) -> List[Dict[str, Any]]:
         xml_text = read_text_url(feed_url)

@@ -150,3 +150,66 @@ def test_portfolio_partial_failure_keeps_error_account_consistent(monkeypatch):
     assert failed_account["portfolio_value"] == 0.0
     assert failed_account["positions"] == []
     assert failed_account["position_count"] == 0
+
+
+def test_portfolio_uses_live_state_manager_cache(monkeypatch):
+    _clear_cache()
+
+    class DummyLiveStateManager:
+        def get_latest_portfolio(self):
+            return {
+                "schema_version": "dashboard.portfolio.v1",
+                "status": "ok",
+                "equity": 12345.0,
+                "cash": 5000.0,
+                "buying_power": 10000.0,
+                "portfolio_value": 12345.0,
+                "positions": [
+                    {
+                        "symbol": "XLE",
+                        "qty": 1.0,
+                        "side": "long",
+                        "account": "day_trade",
+                        "current_price": 100.0,
+                        "market_value": 100.0,
+                        "pricing_timestamp_utc": "2026-03-08T00:00:00+00:00",
+                    }
+                ],
+                "accounts": [
+                    {
+                        "label": "day_trade",
+                        "status": "ok",
+                        "equity": 12345.0,
+                        "cash": 5000.0,
+                        "buying_power": 10000.0,
+                        "portfolio_value": 12345.0,
+                        "positions": [
+                            {
+                                "symbol": "XLE",
+                                "qty": 1.0,
+                                "side": "long",
+                                "current_price": 100.0,
+                                "market_value": 100.0,
+                                "pricing_timestamp_utc": "2026-03-08T00:00:00+00:00",
+                            }
+                        ],
+                        "position_count": 1,
+                    }
+                ],
+                "account_errors": [],
+                "position_count_total": 1,
+                "position_count_by_account": {"day_trade": 1},
+                "account_count": 1,
+                "consistency": {},
+                "timestamp_utc": "2026-03-08T00:00:00+00:00",
+                "stream_health": {},
+            }
+
+    monkeypatch.setattr(server, "dashboard_live_state_manager", DummyLiveStateManager())
+    monkeypatch.setattr(server, "_fetch_alpaca_account", lambda acct: (_ for _ in ()).throw(AssertionError("should not fetch direct account data")))
+
+    payload = server.portfolio(account="all")
+
+    assert payload["equity"] == 12345.0
+    assert payload["position_count_total"] == 1
+    assert payload["positions"][0]["symbol"] == "XLE"

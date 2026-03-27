@@ -18,6 +18,14 @@ function formatAccountTag(label?: string): string {
   return (label || "").slice(0, 3).toUpperCase();
 }
 
+function formatAge(ageSeconds?: number | null): string {
+  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
+  if (ageSeconds < 60) return `${ageSeconds}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
+  return `${Math.floor(ageSeconds / 86400)}d`;
+}
+
 function OpenPositionsView({ portfolio }: { portfolio: PortfolioData }) {
   const totalPL = portfolio.positions.reduce((acc, p) => acc + p.unrealized_pl, 0);
   const plColor = totalPL >= 0 ? "text-emerald-400" : "text-red-400";
@@ -40,6 +48,18 @@ function OpenPositionsView({ portfolio }: { portfolio: PortfolioData }) {
       {accountErrors.length > 0 && (
         <div className="mb-3 rounded border border-amber-900/40 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-200">
           {accountErrors.length} account issue{accountErrors.length === 1 ? "" : "s"} detected in portfolio feed.
+        </div>
+      )}
+      {portfolio.pricing_summary && (
+        <div className={`mb-3 rounded border px-2 py-1 text-[10px] ${
+          portfolio.pricing_summary.market_data_health === "stale"
+            ? "border-red-900/40 bg-red-950/20 text-red-200"
+            : portfolio.pricing_summary.market_data_health !== "live"
+              ? "border-amber-900/40 bg-amber-950/20 text-amber-200"
+              : "border-emerald-900/40 bg-emerald-950/20 text-emerald-200"
+        }`}>
+          Open-position pricing is {portfolio.pricing_summary.market_data_health}.
+          {" "}Oldest price age: {formatAge(portfolio.pricing_summary.oldest_pricing_age_seconds)}.
         </div>
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
@@ -86,6 +106,10 @@ export default function PerformancePanel({ data, portfolio }: { data: Performanc
 
   return (
     <div>
+      <div className="text-[10px] text-gray-500 mb-3">
+        Source {data.source_freshness || "unknown"}
+        {data.source_age_seconds !== undefined && data.source_age_seconds !== null ? ` · age ${formatAge(data.source_age_seconds)}` : ""}
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
         <StatBox label="Total P&L" value={`$${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl.toFixed(2)}`} color={pnlColor} />
         <StatBox label="Win Rate" value={`${(data.win_rate * 100).toFixed(1)}%`} color={wrColor} />

@@ -1,0 +1,108 @@
+{
+  "mcpServers": {
+    "global-sentinel-filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-server-filesystem",
+        "/opt/global-sentinel/config",
+        "/opt/global-sentinel/logs",
+        "/opt/global-sentinel/reports",
+        "/opt/global-sentinel/control",
+        "/opt/global-sentinel/src",
+        "/opt/global-sentinel/dashboard",
+        "/opt/global-sentinel/scripts"
+      ],
+      "description": "Read-only access to Global Sentinel repo (config, logs, reports, source)"
+    },
+    "global-sentinel-api": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-server-fetch"
+      ],
+      "env": {
+        "GS_DASHBOARD_URL": "http://20.124.180.8:8501"
+      },
+      "description": "HTTP fetch for Global Sentinel dashboard API endpoints"
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "GitHub access for Wrk-Flo/global-sentinel repo, issues, PRs"
+    },
+    "alpaca-trading": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-server-fetch"
+      ],
+      "env": {
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets/v2"
+      },
+      "description": "Alpaca paper trading API (shadow mode only)"
+    }
+  },
+  "cowork_project": {
+    "name": "Global Sentinel V5",
+    "description": "24/7 geopolitical risk intelligence + supervised shadow execution system",
+    "personas": {
+      "data_engineer": {
+        "role": "Data Engineer",
+        "focus": "Bridge health, data freshness, FRED/GDELT/Exa pipeline reliability",
+        "tools": ["global-sentinel-filesystem", "global-sentinel-api"]
+      },
+      "macro_strategist": {
+        "role": "Macro Strategist",
+        "focus": "Regime scoring, trade ideas, Hormuz cascade, 2nd/3rd-order effects",
+        "tools": ["global-sentinel-filesystem", "global-sentinel-api"]
+      },
+      "risk_officer": {
+        "role": "Risk Officer",
+        "focus": "Kill switch, veto, VaR gate, impact budget, position limits",
+        "tools": ["global-sentinel-filesystem", "global-sentinel-api"]
+      },
+      "chief_of_staff": {
+        "role": "Chief of Staff",
+        "focus": "CIO/CFO/COO/CAIO briefings, executive summaries, coordination",
+        "tools": ["global-sentinel-filesystem", "global-sentinel-api", "github"]
+      }
+    },
+    "artifact_paths": {
+      "scorecards": "/opt/global-sentinel/logs/scorecards/",
+      "risk_checks": "/opt/global-sentinel/logs/risk_checks/",
+      "orders": "/opt/global-sentinel/logs/events/order_intent_registry.jsonl",
+      "flash_reports": "/opt/global-sentinel/reports/flash/",
+      "weekly_reports": "/opt/global-sentinel/reports/weekly/",
+      "cio_reports": "/opt/global-sentinel/reports/cio/",
+      "bridge_cache": "/opt/global-sentinel/logs/bridge_cache/"
+    },
+    "api_endpoints": {
+      "heartbeat": "/api/heartbeat",
+      "scorecard": "/api/scorecard/latest",
+      "portfolio": "/api/portfolio",
+      "portfolio_history": "/api/portfolio-history",
+      "orders": "/api/orders",
+      "alerts": "/api/alerts",
+      "controls": "/api/controls",
+      "execution_mode": "/api/execution-mode",
+      "trade_analysis": "/api/trade-analysis",
+      "performance": "/api/performance",
+      "consciousness": "/api/consciousness",
+      "politician_alpha": "/api/politician-alpha"
+    },
+    "safety_rules": [
+      "Shadow/paper only — NO live orders without explicit human approval",
+      "Kill switch and manual veto checked every cycle",
+      "Config freeze in CRISIS mode",
+      "No single-source escalations — freshness quorum required",
+      "Human approval required for any order draft export"
+    ]
+  }
+}

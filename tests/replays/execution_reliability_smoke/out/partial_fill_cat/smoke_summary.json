@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "scenario": "partial_fill_cat",
+  "fault_profile": {
+    "partial_fill_only_symbols": [
+      "CAT"
+    ]
+  },
+  "submitted_orders": 2,
+  "skipped_candidates": 1,
+  "router_errors": 0,
+  "reconciled_count": 7,
+  "reconciler_errors": 0,
+  "stale_intent_count": 0
+}

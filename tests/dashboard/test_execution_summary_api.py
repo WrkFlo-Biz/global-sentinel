@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from dashboard.api import server
 
 
@@ -20,6 +22,11 @@ def _alpaca_account(label: str) -> dict:
 
 
 def test_execution_summary_separates_routing_and_fill_state(monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    def recent(minutes_ago: int) -> str:
+        return (now - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z")
+
     router_rows = [
         _router_event(
             {
@@ -58,13 +65,13 @@ def test_execution_summary_separates_routing_and_fill_state(monkeypatch):
     def fake_fetch_orders(acct: dict, limit: int = 100, status: str = "all") -> list[dict]:
         if acct["label"] == "day_trade":
             return [
-                {"status": "filled", "submitted_at": "2026-03-06T17:00:00Z"},
-                {"status": "new", "submitted_at": "2026-03-06T17:10:00Z"},
+                {"status": "filled", "submitted_at": recent(30)},
+                {"status": "new", "submitted_at": recent(20)},
             ]
         return [
-            {"status": "partially_filled", "submitted_at": "2026-03-06T17:20:00Z"},
-            {"status": "rejected", "submitted_at": "2026-03-06T17:30:00Z"},
-            {"status": "canceled", "submitted_at": "2026-03-06T17:40:00Z"},
+            {"status": "partially_filled", "submitted_at": recent(15)},
+            {"status": "rejected", "submitted_at": recent(10)},
+            {"status": "canceled", "submitted_at": recent(5)},
         ]
 
     monkeypatch.setattr(server, "load_jsonl", lambda path, limit=500: router_rows)

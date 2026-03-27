@@ -1,0 +1,28 @@
+# Signal Authority Policy — which signals can drive execution
+schema_version: "signal_authority.v1"
+
+authority_levels:
+  authoritative:
+    description: "Can directly generate trade ideas for execution"
+    signals:
+      - regime_scorer
+      - trade_analysis_engine
+      - pre_trade_controls
+      - strategy_engine
+      - war_opportunity_scanner
+  advisory:
+    description: "Information only — tagged on trade ideas but cannot auto-generate"
+    signals:
+      - chokepoint_monitor
+      - historical_analog
+      - sentiment_bridge
+      - exa_ai_bridge
+      - edge_detector
+      - momentum_tracker
+      - cross_asset_signals
+      - correlation_monitor
+  blocked:
+    description: "Cannot influence execution pipeline"
+    signals:
+      - quantum_lane
+      - political_disclosure

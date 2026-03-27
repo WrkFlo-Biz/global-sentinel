@@ -113,7 +113,23 @@ class WhiteHousePolicyBridge:
                 packets.extend(self._poll_page(page_name, url))
             except Exception as e:
                 packets.append(self._error_packet(url, f"page_error:{e}", page_name=page_name))
+        self._write_poll_snapshot(packets)
         return packets
+
+    def _write_poll_snapshot(self, packets: List[Dict[str, Any]]) -> None:
+        tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        snapshot = {
+            "timestamp_utc": iso_now(),
+            "bridge_name": "whitehouse_policy_bridge",
+            "packet_count": len(packets),
+            "page_count": len(self.pages),
+            "packets": packets[:50],
+        }
+        path = self.cache_dir / f"whitehouse_policy_{tag}.json"
+        try:
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def _poll_page(self, page_name: str, url: str) -> List[Dict[str, Any]]:
         html = read_text_url(url)

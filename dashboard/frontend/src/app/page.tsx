@@ -7,6 +7,7 @@ import {
   type GraduationReport, type PortfolioData, type TradeAnalysis,
   type ConsciousnessData, type ExecutionModeData, type PoliticianAlphaData,
   type DashboardLayout, type DashboardWidget, type ExecutionSummary,
+  type BridgeStatusResponse,
 } from "@/lib/api";
 import ModeIndicator from "@/components/ModeIndicator";
 import RegimeGauge from "@/components/RegimeGauge";
@@ -32,6 +33,8 @@ import PnLWaterfall from "@/components/PnLWaterfall";
 import DrawdownChart from "@/components/DrawdownChart";
 import SectorExposure from "@/components/SectorExposure";
 import OrderSuccessRate from "@/components/OrderSuccessRate";
+import QuantumPanel from "@/components/QuantumPanel";
+import type { QuantumData } from "@/components/QuantumPanel";
 
 function timeAgo(ts?: string): string {
   if (!ts) return "never";
@@ -53,6 +56,9 @@ const DEFAULT_ROWS = [
   { id: "row_equity_portfolio", widgets: [
     { id: "equity_curve", cols: 7, title: "Equity Curve", visible: true },
     { id: "portfolio", cols: 5, title: "Portfolio", visible: true },
+  ]},
+  { id: "row_sector_exposure", widgets: [
+    { id: "sector_exposure", cols: 12, title: "Sector & Asset Class Exposure", visible: true },
   ]},
   { id: "row_exec_perf_pnl", widgets: [
     { id: "execution_mode", cols: 3, title: "Execution Mode", visible: true },
@@ -83,13 +89,47 @@ const DEFAULT_ROWS = [
     { id: "consciousness", cols: 3, title: "Consciousness", visible: true },
     { id: "order_success_rate", cols: 4, title: "Order Success Rate", visible: true },
   ]},
-  { id: "row_sector_exposure", widgets: [
-    { id: "sector_exposure", cols: 12, title: "Sector & Asset Class Exposure", visible: true },
+  { id: "row_quantum", widgets: [
+    { id: "quantum_comparison", cols: 12, title: "Quantum vs Classical — Optimization Research", visible: true, badge: "BOUNDED SECONDARY SIGNAL" },
   ]},
   { id: "row_graduation", widgets: [
     { id: "graduation", cols: 12, title: "Graduation Progress", visible: true },
   ]},
 ];
+
+function mergeLayoutRows(layoutRows?: DashboardLayout["rows"] | null): DashboardLayout["rows"] {
+  if (!layoutRows || layoutRows.length === 0) return DEFAULT_ROWS;
+
+  const defaultWidgets = new Map(
+    DEFAULT_ROWS.flatMap((row) => row.widgets.map((widget) => [widget.id, widget] as const)),
+  );
+  const seen = new Set<string>();
+
+  const mergedRows = layoutRows.map((row) => {
+    const widgets = row.widgets
+      .map((widget) => {
+        const fallback = defaultWidgets.get(widget.id);
+        seen.add(widget.id);
+        return fallback ? { ...fallback, ...widget } : widget;
+      })
+      .filter(Boolean);
+    return { ...row, widgets };
+  });
+
+  for (const defaultRow of DEFAULT_ROWS) {
+    const missingWidgets = defaultRow.widgets
+      .filter((widget) => !seen.has(widget.id))
+      .map((widget) => ({ ...widget }));
+    if (missingWidgets.length > 0) {
+      mergedRows.push({
+        id: `${defaultRow.id}_upgrade`,
+        widgets: missingWidgets,
+      });
+    }
+  }
+
+  return mergedRows;
+}
 
 const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
 
@@ -101,6 +141,7 @@ export default function Dashboard() {
   const [controls, setControls] = useState<Controls | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [executionSummary, setExecutionSummary] = useState<ExecutionSummary | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusResponse | null>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [graduation, setGraduation] = useState<GraduationReport | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -109,6 +150,7 @@ export default function Dashboard() {
   const [consciousness, setConsciousness] = useState<ConsciousnessData | null>(null);
   const [executionMode, setExecutionMode] = useState<ExecutionModeData | null>(null);
   const [politicianAlpha, setPoliticianAlpha] = useState<PoliticianAlphaData | null>(null);
+  const [quantum, setQuantum] = useState<QuantumData | null>(null);
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -117,11 +159,12 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, ord, execSummary, al, grad, port, ta, perf, cons, execMode, polAlpha, ly] = await Promise.all([
+      const [hb, sc, tl, ctrl, bridgeState, ord, execSummary, al, grad, port, ta, perf, cons, execMode, polAlpha, ly, qd] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
         api.controls().catch(() => null),
+        api.bridges().catch(() => null),
         api.orders(50).catch(() => []),
         api.executionSummary(100, 100, 24).catch(() => null),
         api.alerts(30).catch(() => []),
@@ -133,11 +176,13 @@ export default function Dashboard() {
         api.executionMode().catch(() => null),
         api.politicianAlpha().catch(() => null),
         api.dashboardLayout().catch(() => null),
+        api.quantum().catch(() => null),
       ]);
       if (hb) setHeartbeat(hb);
       if (sc && !("error" in sc)) setScorecard(sc);
       if (Array.isArray(tl)) setTimeline(tl);
       if (ctrl) setControls(ctrl);
+      if (bridgeState) setBridgeStatus(bridgeState);
       if (Array.isArray(ord)) setOrders(ord);
       if (execSummary) setExecutionSummary(execSummary);
       if (Array.isArray(al)) setAlerts(al);
@@ -149,6 +194,7 @@ export default function Dashboard() {
       if (execMode) setExecutionMode(execMode);
       if (polAlpha) setPoliticianAlpha(polAlpha);
       if (ly && !ly.error && ly.rows) setLayout(ly);
+      if (qd && !qd.error) setQuantum(qd);
       setError(null);
       setLastRefresh(new Date());
     } catch (e: any) {
@@ -245,6 +291,7 @@ export default function Dashboard() {
             <div className="mt-3">
               <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-2">Bridge Health</h3>
               <BridgeHealth
+                bridges={bridgeStatus?.bridges}
                 freshness={(scorecard?.data_freshness_status || {}) as Record<string, boolean>}
                 summary={(scorecard?.bridge_summary || {}) as Record<string, number | undefined>}
               />
@@ -290,6 +337,8 @@ export default function Dashboard() {
         return <OrderSuccessRate summary={executionSummary} />;
       case "sector_exposure":
         return <SectorExposure portfolio={portfolio} />;
+      case "quantum_comparison":
+        return <QuantumPanel data={quantum} />;
       case "graduation":
         return graduation ? (
           <GraduationProgress
@@ -308,7 +357,7 @@ export default function Dashboard() {
     }
   }
 
-  const rows = layout?.rows || DEFAULT_ROWS;
+  const rows = mergeLayoutRows(layout?.rows);
 
   return (
     <div className="min-h-screen p-2 sm:p-4 max-w-[1600px] mx-auto">
@@ -316,6 +365,12 @@ export default function Dashboard() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
           <h1 className="text-base sm:text-lg font-bold text-gray-200 tracking-tight">GLOBAL SENTINEL</h1>
+          <a
+            href="/trading"
+            className="px-3 py-1.5 rounded text-xs font-medium bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/30 transition"
+          >
+            Trading
+          </a>
           <ModeIndicator mode={mode} />
           {tw && (
             <TimeWindowBadge

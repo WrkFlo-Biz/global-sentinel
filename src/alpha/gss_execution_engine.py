@@ -140,28 +140,36 @@ class GSSExecutionEngine:
             GSS decision dict with signal, action, recommendations,
             and advisory_only flag.
         """
+        # --- Defensive: ensure all sub-dicts are actually dicts ---
+        def _safe_dict(val):
+            return val if isinstance(val, dict) else {}
+
         # --- Extract field layer (GCP consciousness) ---
-        gcp = snapshot.get("gcp_consciousness", {})
+        gcp = _safe_dict(snapshot.get("gcp_consciousness", {}))
         z_score = float(gcp.get("max_z", 0))
         coherence_level = gcp.get("coherence_level", "random")
         regional_spikes = gcp.get("regional_spikes", [])
+        regional_spikes = regional_spikes if isinstance(regional_spikes, list) else []
 
         # --- Extract narrative layer ---
-        narrative = snapshot.get("narrative_velocity", {})
+        narrative = _safe_dict(snapshot.get("narrative_velocity", {}))
         narrative_vel = self._normalize_narrative_velocity(narrative)
         dominant_narrative = narrative.get("dominant_narrative", "none")
 
         # --- Extract execution layer ---
         micro = snapshot.get("market_microstructure", {})
-        options = snapshot.get("options_greeks", {})
+        micro = micro if isinstance(micro, dict) else {}
+        options = _safe_dict(snapshot.get("options_greeks", {}))
         gamma_exposure = options.get("net_gamma_exposure", 0.0)
         put_call_ratio = options.get("put_call_ratio", 1.0)
         open_interest_data = options.get("open_interest", {})
+        open_interest_data = open_interest_data if isinstance(open_interest_data, dict) else {}
         vix = self._extract_vix(snapshot)
 
         # --- Extract politician alpha layer ---
-        politician_alpha = snapshot.get("politician_alpha", {})
+        politician_alpha = _safe_dict(snapshot.get("politician_alpha", {}))
         pol_scores = politician_alpha.get("political_alpha_scores", {})
+        pol_scores = pol_scores if isinstance(pol_scores, dict) else {}
         pol_sentiment = politician_alpha.get("aggregate_sentiment", "neutral")
         pol_avg_score = (
             sum(pol_scores.values()) / len(pol_scores)
@@ -169,7 +177,7 @@ class GSSExecutionEngine:
         )
 
         # --- Extract portfolio/margin data ---
-        portfolio = snapshot.get("portfolio", {})
+        portfolio = _safe_dict(snapshot.get("portfolio", {}))
 
         # --- Run decision matrix (priority order) ---
         # 1. Margin emergency overrides everything
@@ -443,6 +451,8 @@ class GSSExecutionEngine:
         # Identify squeeze candidates from open interest concentration
         squeeze_candidates = []
         for symbol, oi_data in open_interest_data.items():
+            if not isinstance(oi_data, dict):
+                continue
             call_oi = float(oi_data.get("call_oi", 0))
             put_oi = float(oi_data.get("put_oi", 0))
             total_oi = call_oi + put_oi
@@ -1034,8 +1044,9 @@ class GSSExecutionEngine:
 
         # Check market microstructure for VIX-related symbols
         micro = snapshot.get("market_microstructure", {})
+        micro = micro if isinstance(micro, dict) else {}
         for sym in ("VIX", "^VIX", "VIXY", "UVXY"):
-            if sym in micro:
+            if sym in micro and isinstance(micro[sym], dict):
                 price = micro[sym].get("last_price") or micro[sym].get("close", 0)
                 if price:
                     return float(price)
@@ -1043,6 +1054,8 @@ class GSSExecutionEngine:
         # Estimate from realized vol if no direct VIX
         sigmas = []
         for sym, data in micro.items():
+            if not isinstance(data, dict):
+                continue
             sigma = data.get("sigma_daily_pct", 0)
             if sigma > 0:
                 sigmas.append(sigma)

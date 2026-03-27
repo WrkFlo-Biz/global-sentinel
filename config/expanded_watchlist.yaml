@@ -1,0 +1,355 @@
+schema_version: expanded_watchlist.v1
+categories:
+  energy_direct:
+    description: Crude oil ETFs, majors, and E&P companies
+    symbols:
+    - USO
+    - XOP
+    - OXY
+    - XLE
+    - XOM
+    - CVX
+    - COP
+    - EOG
+    - PXD
+    - DVN
+    - FANG
+    - MRO
+    - APA
+    - HAL
+    - SLB
+    - BKR
+  energy_nat_gas:
+    description: Natural gas producers and LNG exporters
+    symbols:
+    - LNG
+    - AR
+    - EQT
+    - RRC
+    - SWN
+    - CTRA
+    - TELL
+    - NEXT
+  shipping_tankers:
+    description: Tanker companies, dry bulk, and container shipping
+    symbols:
+    - STNG
+    - FRO
+    - ZIM
+    - NAT
+    - EURN
+    - TNK
+    - DHT
+    - INSW
+    - ASC
+    - GOGL
+    - SBLK
+  defense_aerospace:
+    description: Prime defense contractors and aerospace suppliers
+    symbols:
+    - LMT
+    - RTX
+    - NOC
+    - KTOS
+    - AVAV
+    - BA
+    - GD
+    - HII
+    - TDG
+    - LHX
+    - LDOS
+    - BWXT
+    - HEI
+  safe_haven_gold:
+    description: "Gold/silver ETFs \u2014 REDUCED WEIGHT (gold failing as safe haven,\
+      \ -14.5% from ATH despite war)"
+    symbols:
+    - GLD
+    - GDX
+    - SLV
+    - GOLD
+    - NEM
+    - AEM
+    - WPM
+    - FNV
+    - RGLD
+    - IAU
+  safe_haven_bonds:
+    description: Treasury and bond ETFs across the curve
+    symbols:
+    - TLT
+    - TIP
+    - IEF
+    - SHY
+    - BND
+    - AGG
+    - GOVT
+    - VGSH
+    - VCSH
+    - LQD
+  volatility:
+    description: VIX-linked instruments for spike scalping
+    symbols:
+    - SVXY
+    - UVXY
+    - VXX
+    - VIXY
+  airlines:
+    description: Airline ETF and individual carriers (short candidates during war)
+    symbols:
+    - JETS
+    - UAL
+    - AAL
+    - DAL
+    - LUV
+    - ALK
+    - JBLU
+    - SAVE
+  europe:
+    description: European equity ETFs (energy crisis exposure)
+    symbols:
+    - EZU
+    - EWG
+    - EWQ
+    - EWP
+    - EWI
+    - EWU
+    - FEZ
+    - HEDJ
+    - VGK
+  emerging_markets:
+    description: EM equity ETFs for capital flight and risk-off trades
+    symbols:
+    - EEM
+    - INDA
+    - EWJ
+    - EWZ
+    - EWT
+    - EWY
+    - EWH
+    - EWS
+    - IEMG
+    - VWO
+    - EWA
+    - EWM
+    - THD
+    - EPHE
+  agriculture_food:
+    description: Fertilizer producers, ag commodity ETFs, and grain processors
+    symbols:
+    - MOS
+    - CF
+    - NTR
+    - WEAT
+    - DBA
+    - ADM
+    - BG
+    - CORN
+    - SOYB
+    - COW
+  nuclear_uranium:
+    description: Uranium miners, SMR developers, and nuclear fuel companies
+    symbols:
+    - CCJ
+    - URA
+    - SMR
+    - LEU
+    - UUUU
+    - DNN
+    - NXE
+  cyber_security:
+    description: Cybersecurity platform companies (event-driven on cyberattacks)
+    symbols:
+    - PANW
+    - CRWD
+    - FTNT
+    - ZS
+    - NET
+    - OKTA
+    - S
+    - CYBR
+  refining:
+    description: US refiners benefiting from crack spread widening
+    symbols:
+    - MPC
+    - VLO
+    - PSX
+    - PBF
+    - DINO
+    - HFC
+    - DK
+  canadian_oil:
+    description: Canadian oil sands and pipeline operators
+    symbols:
+    - CNQ
+    - SU
+    - IMO
+    - TRP
+    - ENB
+    - PPL
+  financials_vol:
+    description: Wall Street banks and brokers benefiting from volatility
+    symbols:
+    - GS
+    - MS
+    - JPM
+    - C
+    - BAC
+    - SCHW
+    - IBKR
+  insurance_reinsurance:
+    description: Insurance and reinsurance companies (war risk premiums)
+    symbols:
+    - RNR
+    - MKL
+    - AIG
+    - ALL
+    - PGR
+    - TRV
+    - CB
+  satellite_isr:
+    description: Satellite imagery, launch, and ISR companies
+    symbols:
+    - RKLB
+    - BKSY
+    - PL
+    - IRDM
+    - GSAT
+  petrochemical_short:
+    description: Petrochemical companies (short candidates on feedstock cost spike)
+    symbols:
+    - DOW
+    - LYB
+    - EMN
+    - CE
+    - HUN
+    - WLK
+  ev_acceleration:
+    description: EV manufacturers and charging infrastructure
+    symbols:
+    - TSLA
+    - RIVN
+    - LCID
+    - NIO
+    - XPEV
+    - LI
+    - CHPT
+    - BLNK
+  water_infrastructure:
+    description: Water technology and utility companies
+    symbols:
+    - XYL
+    - AWK
+    - WTR
+    - WTRG
+    - ECL
+  aluminum_materials:
+    description: Aluminum producers and steel/metals companies
+    symbols:
+    - AA
+    - CENX
+    - ARNC
+    - X
+    - CLF
+    - NUE
+    - STLD
+  copper_post_war:
+    description: Copper miners and diversified mining (reconstruction play)
+    symbols:
+    - COPX
+    - FCX
+    - SCCO
+    - TECK
+    - RIO
+    - BHP
+    - VALE
+    - MT
+  indexes:
+    description: Major index and sector ETFs for broad market tracking
+    symbols:
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+    - XLF
+    - XLK
+    - XLV
+    - XLP
+    - XLU
+    - XLRE
+    - XLI
+    - XLB
+    - XLE
+    - XLY
+    - MDY
+    - RSP
+  currency:
+    description: Currency ETFs for dollar strength and FX exposure
+    symbols:
+    - UUP
+    - FXE
+    - FXY
+    - FXB
+    - FXA
+    - FXC
+    - CYB
+    - DXJ
+    - USDU
+  rare_earth_lithium:
+    description: Rare earth and lithium miners for supply chain disruption
+    symbols:
+    - MP
+    - LAC
+    - ALB
+    - LTHM
+    - PLL
+    - ALTM
+  healthcare_biodefense:
+    description: Biodefense and medical countermeasures
+    symbols:
+    - EBS
+    - BCRX
+    - MRNA
+    - PFE
+    - JNJ
+    - NVAX
+  commodities_broad:
+    description: Broad commodity ETFs and futures-based products
+    symbols:
+    - GSG
+    - DJP
+    - PDBC
+    - COMT
+    - CPER
+    - JJC
+    - PALL
+    - PPLT
+  crypto:
+    description: Cryptocurrency pairs traded 24/7 on Alpaca
+    symbols:
+    - BTC/USD
+    - ETH/USD
+    - SOL/USD
+    - XRP/USD
+    - ADA/USD
+    - AVAX/USD
+    - DOT/USD
+    - LINK/USD
+    - DOGE/USD
+    - SHIB/USD
+    - PEPE/USD
+    - BONK/USD
+    - PAXG/USD
+    - UNI/USD
+    - RENDER/USD
+    - ONDO/USD
+    - TRUMP/USD
+    - AAVE/USD
+    - CRV/USD
+    - LDO/USD
+    - FIL/USD
+    - GRT/USD
+    - ARB/USD
+    - WIF/USD
+    - LTC/USD
+    - BCH/USD

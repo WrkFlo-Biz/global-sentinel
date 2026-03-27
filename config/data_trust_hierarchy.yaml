@@ -1,0 +1,56 @@
+schema_version: data_trust_hierarchy.v1
+
+tiers:
+  tier_1_official:
+    weight: 1.0
+    description: "Official / highest trust"
+    sources:
+      - fed
+      - fred
+      - bls
+      - eia
+      - sec
+      - cftc
+      - whitehouse
+      - noaa
+
+  tier_2_operational:
+    weight: 0.8
+    description: "Strong operational / event sources"
+    sources:
+      - gdelt
+      - maritime
+      - maritime_bridge
+      - sentiment
+      - exchange_market_data
+      - cds_sovereign
+      - cds_sovereign_bridge
+
+  tier_3_research:
+    weight: 0.5
+    description: "Research-only alternative sources"
+    sources:
+      - options_greeks
+      - options_greeks_bridge
+      - congressional_disclosures
+      - policy_uncertainty
+      - alt_supply_chain
+      - gpr_index
+      - gpr_index_bridge
+      - semiconductor_supply
+      - semiconductor_supply_bridge
+
+  tier_4_experimental:
+    weight: 0.2
+    description: "Experimental only; never direct execution inputs"
+    sources:
+      - global_consciousness
+      - rng_anomaly
+      - field_signal
+
+rules:
+  execution_block_tier_4: true
+  require_tier_1_or_tier_2_confirmation_for_execution: true
+  max_experimental_influence: 0.05
+  compliance_review_required_sources:
+    - congressional_disclosures

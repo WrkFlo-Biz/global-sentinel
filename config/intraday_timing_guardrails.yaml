@@ -103,8 +103,8 @@ timing_policy:
         min_rvol: 2.0
         breakout_candle_minutes: [5, 15]
         require_volume_confirmation: true
-      confidence_multiplier: 1.05
-      size_multiplier: 1.00
+      confidence_multiplier: 1.10
+      size_multiplier: 1.30
 
     late_morning_mean_reversion:
       start: "10:30"
@@ -132,6 +132,11 @@ timing_policy:
       thresholds:
         min_rvol: 2.5
         require_multi_source_confirmation: true
+        watchlist_min_confidence: 0.55
+        apply_to_holding_periods:
+          - day
+          - intraday_scalp
+          - intraday_momentum
       confidence_multiplier: 0.80
       size_multiplier: 0.50
       notes: "High fakeout risk / low sustained volume."
@@ -144,8 +149,8 @@ timing_policy:
       preferred_setups:
         - trend_reconfirmation
         - catalyst_followthrough
-      confidence_multiplier: 0.95
-      size_multiplier: 0.80
+      confidence_multiplier: 1.00
+      size_multiplier: 1.00
 
     power_hour:
       start: "15:00"
@@ -159,8 +164,8 @@ timing_policy:
       thresholds:
         require_trend_strength_confirmation: true
         require_liquidity_ok: true
-      confidence_multiplier: 1.05
-      size_multiplier: 1.00
+      confidence_multiplier: 1.10
+      size_multiplier: 1.20
 
     close_exhaustion_watch:
       start: "15:50"
@@ -272,17 +277,17 @@ timing_policy:
       max_new_positions: 2
       max_loss_budget_pct_of_daily: 20
     opening_range_breakout_window:
-      max_gross_exposure_pct: 70
-      max_new_positions: 4
-      max_loss_budget_pct_of_daily: 35
+      max_gross_exposure_pct: 80
+      max_new_positions: 5
+      max_loss_budget_pct_of_daily: 40
     lunch_lull:
-      max_gross_exposure_pct: 25
-      max_new_positions: 1
+      max_gross_exposure_pct: 30
+      max_new_positions: 2
       max_loss_budget_pct_of_daily: 10
     power_hour:
-      max_gross_exposure_pct: 65
-      max_new_positions: 3
-      max_loss_budget_pct_of_daily: 25
+      max_gross_exposure_pct: 75
+      max_new_positions: 4
+      max_loss_budget_pct_of_daily: 30
     close_exhaustion_watch:
       max_gross_exposure_pct: 0
       max_new_positions: 0

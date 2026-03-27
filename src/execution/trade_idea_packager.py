@@ -5,7 +5,7 @@ Global Sentinel V5.1 — Trade Idea Packager
 Bridges the Trade Analysis Engine output to the Shadow Order Router input.
 Converts trade ideas into candidate packages the router can process.
 
-Safety: All packages are marked shadow_mode=True. No live orders.
+Execution: Packages route to broker adapter for order submission.
 """
 
 from __future__ import annotations
@@ -37,7 +37,9 @@ SHORT_TO_INVERSE = {
 # Symbols that are known hard-to-borrow or cannot be shorted on Alpaca paper.
 # For these, we MUST use the inverse ETF fallback (if available) or skip.
 HARD_TO_BORROW = {
-    # Add symbols here if Alpaca rejects short orders for them
+    "HYG",
+    "IYT",
+    "JETS",
 }
 
 # Symbols permanently blocked from new buy/short ideas.
@@ -58,6 +60,7 @@ class TradeIdeaPackager:
         max_ideas: int = 10,
         politician_alpha: Optional[Dict[str, Any]] = None,
         bridge_signals: Optional[Dict[str, Any]] = None,
+        max_side_bias_pct: int = 65,
     ) -> Dict[str, Any]:
         """
         Build a router-compatible package from trade analysis output.
@@ -90,8 +93,18 @@ class TradeIdeaPackager:
         tw_strategy_elig = time_window.get("strategy_eligibility", {})
         tw_preferred_setups = time_window.get("preferred_setups", [])
         tw_restrictions = time_window.get("restrictions", {})
+        tw_thresholds = time_window.get("thresholds", {})
         tw_blocked = time_window.get("shadow_execution_window_blocked", False)
         max_new_positions = tw_risk_budget.get("max_new_positions")
+        watchlist_min_conf = float(tw_thresholds.get("watchlist_min_confidence", 0.55))
+        watchlist_gate_periods = {
+            str(period).strip()
+            for period in tw_thresholds.get(
+                "apply_to_holding_periods",
+                ["day", "intraday_scalp", "intraday_momentum"],
+            )
+            if str(period).strip()
+        }
 
         # Compute signal-based confidence adjustments from ALL bridge data
         signal_boost = self._compute_signal_boost(signals, scorecard)
@@ -126,6 +139,7 @@ class TradeIdeaPackager:
         candidates = []
         blocked_candidates = []
         for idea in ideas:
+            source_holding_period = str(idea.get("holding_period", "")).strip()
             # Check strategy eligibility for this window
             strategy_style = idea.get("strategy_style", "regime_playbook")
             strat_elig = tw_strategy_elig.get(strategy_style, {})
@@ -144,11 +158,33 @@ class TradeIdeaPackager:
             if cand:
                 # Apply window-specific restrictions
                 if tw_restrictions.get("watchlist_only_unless_exceptional_catalyst"):
-                    if cand["confidence_score"] < 0.55:
+                    holding_period = source_holding_period or str(cand.get("holding_period", "")).strip()
+                    if (
+                        holding_period in watchlist_gate_periods
+                        and cand.get("raw_confidence_score", cand["confidence_score"]) < watchlist_min_conf
+                    ):
                         blocked_candidates.append({
                             "symbol": cand["symbol"],
-                            "reason": f"below catalyst threshold in {current_window} (lunch lull)",
+                            "reason": f"below catalyst threshold in {current_window}",
                             "confidence": cand["confidence_score"],
+                            "holding_period": holding_period,
+                            "threshold": watchlist_min_conf,
+                        })
+                        continue
+
+                # --- Side-bias limit: prevent 100% long or 100% short ---
+                if max_side_bias_pct and max_side_bias_pct < 100 and len(candidates) >= 2:
+                    cand_side = cand.get("side", "long")
+                    same_side_count = sum(1 for c in candidates if c.get("side") == cand_side)
+                    total_after = len(candidates) + 1
+                    side_pct = (same_side_count + 1) / total_after * 100
+                    if side_pct > max_side_bias_pct:
+                        blocked_candidates.append({
+                            "symbol": cand["symbol"],
+                            "reason": "side_bias_limit_exceeded",
+                            "side": cand_side,
+                            "side_pct": round(side_pct, 1),
+                            "max_side_bias_pct": max_side_bias_pct,
                         })
                         continue
 
@@ -645,6 +681,27 @@ class TradeIdeaPackager:
                 elif hormuz_hits >= 1:
                     boost["exa_hormuz_alert"] = -0.06
 
+        # --- 19. Broad Market Selloff Detection ---
+        # When multiple macro stress components fire simultaneously, boost bearish conviction
+        # for all short candidates. This catches days when "all indexes are down" and the
+        # system should lean harder into short ideas.
+        components = scorecard.get("component_scores", {})
+        sc_market_vol = components.get("market_volatility", 0)
+        sc_commodity = components.get("commodity_shock", 0)
+        sc_policy = components.get("policy_signals", 0)
+        if (isinstance(sc_market_vol, (int, float)) and sc_market_vol > 0.4
+                and isinstance(sc_commodity, (int, float)) and sc_commodity > 0.4
+                and isinstance(sc_policy, (int, float)) and sc_policy > 0.5):
+            boost["broad_selloff"] = -0.08  # Bearish boost for all short candidates
+
+        # VIX term structure backwardation from options_greeks bridge data
+        # Backwardation (near-term VIX > longer-term) = market expects imminent stress
+        options_for_vix = signals.get("options_greeks", {})
+        if isinstance(options_for_vix, dict):
+            vix_term_structure = options_for_vix.get("vix_term_structure", "")
+            if vix_term_structure == "backwardation":
+                boost["vix_backwardation"] = -0.05  # Near-term fear exceeds long-term
+
         return boost
 
     def _idea_to_candidate(
@@ -712,6 +769,7 @@ class TradeIdeaPackager:
         # --- Apply time window confidence multiplier ---
         # Opening: 0.90x (cautious), ORB: 1.05x (aggressive), Lunch: 0.80x (avoid),
         # Power hour: 1.05x (aggressive), Close: 0.85x (wind down)
+        raw_conf_score = conf_score  # Preserve raw score for watchlist gate check
         conf_score = round(min(1.0, max(0.05, conf_score * tw_confidence_mult)), 3)
 
         # Price hints from trade idea or microstructure
@@ -754,6 +812,7 @@ class TradeIdeaPackager:
             "template_key": f"regime_{side}_{symbol.lower()}",
             "instrument_types": ["equity"],
             "confidence_score": conf_score,
+            "raw_confidence_score": raw_conf_score,
             "size_multiplier_suggestion": size_mult,
             "status": "eligible",
             "block_reasons": [],

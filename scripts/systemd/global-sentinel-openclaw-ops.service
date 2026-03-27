@@ -1,0 +1,35 @@
+[Unit]
+Description=Global Sentinel OpenClaw Ops Bot
+After=network.target global-sentinel.service
+Wants=global-sentinel.service
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+Environment=OPENCLAW_MIN_WORKERS=2
+Environment=OPENCLAW_MAX_WORKERS=4
+Environment=OPENCLAW_SEED_INTERVAL_SEC=20
+Environment=OPENCLAW_DISPATCH_INTERVAL_SEC=10
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/agent_factory.py run --bot ops --config /opt/global-sentinel/config/thresholds.yaml
+
+Restart=on-failure
+RestartSec=20
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=global-sentinel-openclaw-ops
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/opt/global-sentinel/control
+ReadWritePaths=/opt/global-sentinel/config/staging
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

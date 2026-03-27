@@ -1,0 +1,78 @@
+# Global Sentinel V6 — Market Calendar
+schema_version: "market_calendar.v1"
+
+# Week of March 9-14, 2026
+week_events:
+  "2026-03-09":
+    - type: weekend
+      note: "Sunday - crypto only"
+  "2026-03-10":
+    - type: market_open
+      time: "09:30 ET"
+    - type: data_release
+      name: "Treasury Budget Statement"
+      time: "14:00 ET"
+      impact: medium
+      affected: [TLT, TIP, UUP]
+  "2026-03-11":
+    - type: data_release
+      name: "CPI (Feb)"
+      time: "08:30 ET"
+      impact: high
+      affected: [TIP, GLD, TLT, SPY]
+      note: "Key inflation data - could move gold and bonds significantly"
+    - type: data_release
+      name: "NFIB Small Business Index"
+      time: "06:00 ET"
+      impact: low
+  "2026-03-12":
+    - type: data_release
+      name: "PPI (Feb)"
+      time: "08:30 ET"
+      impact: medium
+      affected: [TIP, MOS, CF]
+    - type: data_release
+      name: "EIA Petroleum Status"
+      time: "10:30 ET"
+      impact: high
+      affected: [USO, XOP, OXY, MPC, VLO, STNG]
+      note: "Key oil inventory data"
+  "2026-03-13":
+    - type: data_release
+      name: "Initial Jobless Claims"
+      time: "08:30 ET"
+      impact: medium
+    - type: data_release
+      name: "Import/Export Prices"
+      time: "08:30 ET"
+      impact: low
+  "2026-03-14":
+    - type: data_release
+      name: "Michigan Consumer Sentiment (Prelim)"
+      time: "10:00 ET"
+      impact: medium
+      affected: [SPY, XLP]
+    - type: options
+      name: "Weekly options expiration"
+      impact: medium
+
+# Regular schedule awareness
+regular_schedule:
+  market_open: "09:30 ET"
+  market_close: "16:00 ET"
+  pre_market: "04:00 ET"
+  after_hours_close: "20:00 ET"
+  crypto: "24/7"
+
+# OPEC and geopolitical calendar
+geopolitical_watch:
+  - name: "OPEC+ monitoring meeting"
+    date: "2026-03-15"
+    impact: high
+    affected: [USO, XOP, OXY, STNG, FRO]
+  - name: "UN Security Council session"
+    frequency: ongoing
+    impact: variable
+  - name: "G7 foreign ministers meeting"
+    date: "2026-03-17"
+    impact: medium

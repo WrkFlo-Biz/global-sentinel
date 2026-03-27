@@ -1,0 +1,46 @@
+schema_version: research_promotion_registry.v1
+
+signals:
+  quantum_portfolio_optimizer:
+    current_stage: "research_only"
+    stages:
+      - experimental
+      - research_only
+      - bounded_research_score
+      - bounded_candidate_contribution
+      - bounded_sizing_contribution
+      - paper_trade_validation
+      - human_reviewed_graduation
+      - production_shadow_bounded
+    promotion_criteria:
+      min_eval_days: 60
+      min_trade_count: 100
+      max_drawdown_delta_bps: 50
+      min_slippage_adjusted_win_delta_bps: 10
+      max_failure_rate: 0.05
+      max_cumulative_drift: 2.0
+      reproducibility_required: true
+      no_safety_regressions: true
+
+  classical_baseline:
+    current_stage: "bounded_research_score"
+    stages:
+      - research_only
+      - bounded_research_score
+      - production_shadow_bounded
+    promotion_criteria:
+      min_eval_days: 30
+      min_trade_count: 50
+      max_drawdown_delta_bps: 75
+      min_slippage_adjusted_win_delta_bps: 5
+      max_failure_rate: 0.10
+
+  politician_alpha:
+    current_stage: "production_shadow_bounded"
+    stages:
+      - research_only
+      - production_shadow_bounded
+    promotion_criteria:
+      min_eval_days: 14
+      min_trade_count: 20
+      max_failure_rate: 0.10

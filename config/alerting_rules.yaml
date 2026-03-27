@@ -1,0 +1,92 @@
+# Global Sentinel V6 — Alerting Rules
+schema_version: "alerting_rules.v1"
+
+rules:
+  bridge_stale_tier1:
+    condition: "tier_1 bridge stale 2+ cycles"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 15
+
+  bridge_stale_multiple:
+    condition: "3+ bridges stale simultaneously"
+    level: CRITICAL
+    channels: [telegram, dashboard]
+    dedup_minutes: 5
+
+  daily_loss_warn:
+    condition: "daily_loss_usd > 1000"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 30
+
+  daily_loss_critical:
+    condition: "daily_loss_usd > 2000"
+    level: CRITICAL
+    channels: [telegram, dashboard]
+    dedup_minutes: 5
+
+  sector_concentration:
+    condition: "single_sector_pct > 30"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 60
+
+  oil_correlation:
+    condition: "oil_correlation_pct > 60"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 60
+
+  ceasefire_detected:
+    condition: "ceasefire_confidence > 0.7"
+    level: EMERGENCY
+    channels: [telegram, dashboard]
+    dedup_minutes: 1
+
+  vix_elevated:
+    condition: "vix > 40"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 30
+
+  vix_extreme:
+    condition: "vix > 55"
+    level: CRITICAL
+    channels: [telegram, dashboard]
+    dedup_minutes: 5
+
+  margin_usage:
+    condition: "margin_usage_pct > 70"
+    level: CRITICAL
+    channels: [telegram, dashboard]
+    dedup_minutes: 5
+
+  chokepoint_composite:
+    condition: "chokepoint_composite > 0.7"
+    level: WARN
+    channels: [telegram, dashboard]
+    dedup_minutes: 30
+
+  cascade_pending:
+    condition: "edge_detector cascade pending"
+    level: INFO
+    channels: [telegram, dashboard]
+    dedup_minutes: 60
+
+  divergence_detected:
+    condition: "sector correlation break"
+    level: INFO
+    channels: [telegram, dashboard]
+    dedup_minutes: 30
+
+  scanner_discovery:
+    condition: "new hidden opportunity found"
+    level: INFO
+    channels: [telegram, dashboard]
+    dedup_minutes: 60
+
+escalation:
+  warn_to_critical_count: 3
+  critical_to_emergency_count: 2
+  escalation_window_minutes: 30

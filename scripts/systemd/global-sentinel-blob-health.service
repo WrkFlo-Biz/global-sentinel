@@ -1,0 +1,24 @@
+[Unit]
+Description=Global Sentinel Blob Persistence Health Check
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/check_blob_persistence_health.py --repo-root /opt/global-sentinel --output-json /opt/global-sentinel/reports/operational/blob_persistence_health.json
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=global-sentinel-blob-health
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/tmp

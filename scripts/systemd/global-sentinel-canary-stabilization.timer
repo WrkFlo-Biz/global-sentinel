@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Global Sentinel canary stabilization report periodically
+
+[Timer]
+OnBootSec=9min
+OnUnitActiveSec=25min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -142,6 +142,42 @@ macro_policy_intel:
           - "TEDRATE"       # TED Spread (credit risk)
         policy_uncertainty_proxies:
           - "VIXCLS"
+        growth:
+          - "GDPNOW"     # Atlanta Fed GDP Nowcast
+        consumer_sentiment:
+          - "UMCSENT"    # UMich Consumer Sentiment
+        housing:
+          - "HOUST"      # Housing Starts
+          - "PERMIT"     # Building Permits
+        breakeven_inflation:
+          - "T5YIE"      # 5yr Breakeven Inflation
+          - "T10YIE"     # 10yr Breakeven Inflation
+        monetary_aggregates:
+          - "M2SL"       # M2 Money Supply
+        trade:
+          - "DTWEXBGS"   # Trade-Weighted Dollar Index
+        consumer_credit:
+          - "TOTALSL"    # Consumer Credit
+        fed_balance_sheet:
+          - "WALCL"      # Fed Total Assets (QT/QE tracker)
+          - "RRPONTSYD"  # Overnight Reverse Repo (liquidity drain)
+          - "WTREGEN"    # Fed Treasury Holdings
+        financial_conditions:
+          - "STLFSI4"    # St. Louis Financial Stress Index
+          - "NFCI"       # Chicago Fed National Financial Conditions
+          - "ANFCI"      # Adjusted NFCI
+        real_rates:
+          - "DFII5"      # 5Y TIPS (real yield)
+          - "DFII10"     # 10Y TIPS (real yield)
+          - "REAINTRATREARAT1YE"  # 1Y Real Interest Rate
+        lending:
+          - "SOFR"       # Secured Overnight Financing Rate
+          - "EFFR"       # Effective Fed Funds Rate (daily)
+          - "MORTGAGE30US"  # 30Y Mortgage Rate
+        commodities:
+          - "DCOILWTICO"   # WTI Crude Oil
+          - "GOLDAMGBD228NLBM"  # Gold London Fix
+          - "DCOILBRENTEU" # Brent Crude
       rate_check_thresholds:
         DGS1MO_abs_delta: 0.05
         DGS3MO_abs_delta: 0.05

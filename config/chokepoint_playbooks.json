@@ -1,0 +1,203 @@
+{
+  "schema_version": "chokepoint_playbooks.v1",
+  "combined_scenarios": {
+    "hormuz_only": {
+      "name": "Hormuz Disruption Only",
+      "probability_current": 0.35,
+      "severity": 0.8,
+      "oil_impact_pct": 15.0,
+      "sp500_impact_pct": -5.0,
+      "vix_target": 30,
+      "duration_estimate_days": 14,
+      "playbook_ref": "hormuz.disruption_confirmed"
+    },
+    "hormuz_plus_bab_el_mandeb": {
+      "name": "Dual Chokepoint: Hormuz + Bab el-Mandeb",
+      "probability_current": 0.2,
+      "severity": 0.95,
+      "oil_impact_pct": 30.0,
+      "sp500_impact_pct": -10.0,
+      "vix_target": 40,
+      "gas_impact_pct": 20.0,
+      "shipping_disruption": "severe",
+      "duration_estimate_days": 30,
+      "combined_playbook": {
+        "immediate_longs": [
+          {
+            "symbol": "USO",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "XLE",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "XOP",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "ZIM",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "GLD",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "UVXY",
+            "allocation": 1.0
+          },
+          {
+            "symbol": "LMT",
+            "allocation": 1.0
+          }
+        ],
+        "immediate_shorts": [
+          {
+            "symbol": "JETS",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "EZU",
+            "allocation": 2.0
+          },
+          {
+            "symbol": "EEM",
+            "allocation": 1.5
+          },
+          {
+            "symbol": "SPY",
+            "allocation": 1.0
+          }
+        ],
+        "max_gross_exposure_pct": 10.0,
+        "hold_period": "1-4 weeks, reassess as the situation develops",
+        "critical_exit": "UN Security Council resolution or US-Iran direct talks"
+      }
+    },
+    "triple_chokepoint": {
+      "name": "Triple Chokepoint Crisis: Hormuz + Bab el-Mandeb + Med Gas",
+      "probability_current": 0.1,
+      "severity": 1.0,
+      "oil_impact_pct": 50.0,
+      "sp500_impact_pct": -15.0,
+      "vix_target": 55,
+      "gas_impact_pct": 40.0,
+      "shipping_disruption": "global",
+      "inflation_impact": "immediate 2-3% CPI spike within 2 months",
+      "duration_estimate_days": 60,
+      "combined_playbook": {
+        "immediate_longs": [
+          {
+            "symbol": "USO",
+            "allocation": 2.0,
+            "note": "oil to $150+"
+          },
+          {
+            "symbol": "XLE",
+            "allocation": 2.0,
+            "note": "energy sector repricing"
+          },
+          {
+            "symbol": "UNG",
+            "allocation": 1.5,
+            "note": "nat gas crisis"
+          },
+          {
+            "symbol": "GLD",
+            "allocation": 2.0,
+            "note": "ultimate safe haven"
+          },
+          {
+            "symbol": "GDX",
+            "allocation": 1.0,
+            "note": "gold miners leveraged"
+          },
+          {
+            "symbol": "UVXY",
+            "allocation": 1.0,
+            "note": "VIX to 55+"
+          },
+          {
+            "symbol": "LMT",
+            "allocation": 1.0,
+            "note": "defense"
+          },
+          {
+            "symbol": "RTX",
+            "allocation": 1.0,
+            "note": "missile defense"
+          },
+          {
+            "symbol": "TLT",
+            "allocation": 1.0,
+            "note": "flight to treasuries"
+          }
+        ],
+        "immediate_shorts": [
+          {
+            "symbol": "JETS",
+            "allocation": 2.0,
+            "note": "airlines destroyed"
+          },
+          {
+            "symbol": "EZU",
+            "allocation": 2.0,
+            "note": "Europe energy crisis"
+          },
+          {
+            "symbol": "EEM",
+            "allocation": 2.0,
+            "note": "EM capital flight"
+          },
+          {
+            "symbol": "EIS",
+            "allocation": 1.0,
+            "note": "Israel direct exposure"
+          },
+          {
+            "symbol": "EUFN",
+            "allocation": 1.0,
+            "note": "European banks on energy shock"
+          }
+        ],
+        "max_gross_exposure_pct": 10.0,
+        "position_sizing": "1% per position; extreme uncertainty",
+        "hold_period": "weeks to months; regime-change event",
+        "critical_exit": "comprehensive ceasefire or naval escort guarantee for all three chokepoints",
+        "warning": "Capital preservation mode. Protect capital first."
+      }
+    },
+    "bab_el_mandeb_only": {
+      "name": "Bab el-Mandeb / Red Sea Disruption Only",
+      "probability_current": 0.5,
+      "severity": 0.6,
+      "oil_impact_pct": 5.0,
+      "sp500_impact_pct": -2.0,
+      "vix_target": 22,
+      "shipping_disruption": "moderate",
+      "duration_estimate_days": 90,
+      "playbook_ref": "bab_el_mandeb.disruption_confirmed"
+    },
+    "med_gas_only": {
+      "name": "Eastern Med Gas Disruption Only",
+      "probability_current": 0.15,
+      "severity": 0.5,
+      "gas_impact_pct": 15.0,
+      "sp500_impact_pct": -3.0,
+      "vix_target": 25,
+      "duration_estimate_days": 45,
+      "playbook_ref": "eastern_med_gas.disruption_confirmed"
+    }
+  },
+  "execution_metadata": {
+    "informational_only": true,
+    "not_for_direct_execution": true,
+    "execution_influence_forbidden": true,
+    "decision_role": "context_only",
+    "authority": "advisory_monitoring_only",
+    "script": "register_chokepoint_scenarios",
+    "refresh_expectation": "every_monitor_cycle",
+    "source_type": "live_real_time_bridge_context"
+  }
+}

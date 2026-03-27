@@ -118,8 +118,10 @@ class OrderIntentRegistry:
                 "strategy_style": candidate.get("strategy_style"),
                 "template_key": candidate.get("template_key"),
                 "direction": candidate.get("direction"),
+                "holding_period": candidate.get("holding_period"),
                 "confidence_score": candidate.get("confidence_score"),
                 "size_multiplier_suggestion": candidate.get("size_multiplier_suggestion"),
+                "price_hints": candidate.get("price_hints"),
                 "themes": candidate.get("themes"),
                 "block_reasons": candidate.get("block_reasons"),
                 "execution_constraints": candidate.get("execution_constraints"),
@@ -416,16 +418,17 @@ class OrderIntentRegistry:
         if not path.exists():
             return []
         out = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                if isinstance(obj, dict):
-                    out.append(obj)
-            except Exception:
-                continue
+        with open(path, encoding="utf-8") as _f:
+            for line in _f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except Exception:
+                    continue
         return out
 
     def _latest_by_intent_id(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

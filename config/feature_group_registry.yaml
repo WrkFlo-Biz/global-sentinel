@@ -1,0 +1,96 @@
+schema_version: feature_group_registry.v1
+
+# Feature Group Registry — logical groupings of features for lineage and validation.
+# Each group defines which features are required, their joint freshness requirements,
+# and which downstream artifacts depend on them.
+
+groups:
+  core_scoring:
+    description: "Core candidate scoring features"
+    features:
+      - base_score
+      - event_score
+      - quality_score
+      - anomaly_score
+    freshness_policy: all_fresh
+    min_features_required: 3
+    consumers:
+      - qfinance_feature_encoder
+      - online_weighted_feature_encoder
+
+  market_microstructure:
+    description: "Real-time market quality features"
+    features:
+      - liquidity_score
+      - volatility_penalty
+    freshness_policy: all_fresh
+    min_features_required: 2
+    consumers:
+      - microstructure_regime_classifier
+      - market_data_sanity_check
+      - pre_trade_controls
+
+  regime_context:
+    description: "Macro regime and alignment features"
+    features:
+      - regime_alignment
+      - gpr_index
+    freshness_policy: best_effort
+    min_features_required: 1
+    consumers:
+      - regime_conditioned_optimizer
+      - quantum_decomposition_policy
+
+  options_greeks:
+    description: "Options market derived features"
+    features:
+      - put_call_ratio
+      - implied_volatility
+      - gamma_squeeze_risk
+    freshness_policy: best_effort
+    min_features_required: 1
+    consumers:
+      - options_chain_normalizer
+      - options_liquidity_filter
+
+  geopolitical_signals:
+    description: "Geopolitical and supply chain signals"
+    features:
+      - gpr_index
+      - cds_spread
+      - semiconductor_supply_index
+      - maritime_congestion
+    freshness_policy: quorum
+    min_features_required: 2
+    consumers:
+      - source_quorum_engine
+      - crisis_monitor
+
+  optimizer_input:
+    description: "Final pre-optimization feature set"
+    features:
+      - preopt_feature_score
+      - volatility_penalty
+      - regime_alignment
+    freshness_policy: all_fresh
+    min_features_required: 3
+    consumers:
+      - classical_strong_baseline
+      - quantum_decomposition_policy
+      - candidate_universe_ranker
+
+# Freshness policies
+freshness_policies:
+  all_fresh:
+    description: "All features must be within their TTL"
+    strategy: require_all
+
+  best_effort:
+    description: "Use available features, degrade gracefully on stale"
+    strategy: use_available
+    confidence_penalty_per_stale: 0.1
+
+  quorum:
+    description: "Require minimum count of fresh features"
+    strategy: minimum_count
+    min_fresh_ratio: 0.5

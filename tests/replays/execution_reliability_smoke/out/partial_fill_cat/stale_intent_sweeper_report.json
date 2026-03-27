@@ -1,0 +1,24 @@
+{
+  "schema_version": "stale_intent_sweeper_report.v1",
+  "timestamp_utc": "2026-03-04T19:25:53.073653+00:00",
+  "config": {
+    "stale_after_minutes": 9999.0,
+    "target_statuses": [
+      "submitted",
+      "acknowledged",
+      "open",
+      "partially_filled"
+    ],
+    "mark_manual_review": false,
+    "emit_shadow_cancel_recommendations": true
+  },
+  "summary": {
+    "target_intent_count": 6,
+    "stale_intent_count": 0,
+    "stale_rate": 0.0,
+    "shadow_cancel_recommendation_count": 0
+  },
+  "stale_intents": [],
+  "shadow_cancel_recommendations": [],
+  "operator_summary": "stale sweeper | target=6 stale=0 rate=0.0 threshold_min=9999.0"
+}
