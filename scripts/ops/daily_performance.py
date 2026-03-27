@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+"""
+Daily Performance Attribution Report
+Runs at 4:30 PM ET (20:30 UTC) Mon-Fri.
+Reads today's closed paper trades from Alpaca, attributes to signal sources,
+computes per-source stats, and sends Telegram summary.
+"""
+import os
+import sys
+import json
+import logging
+import requests
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from collections import defaultdict
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("daily_performance")
+
+ROOT = Path(os.environ.get("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
+REPORTS_DIR = ROOT / "reports" / "daily_performance"
+QUANTUM_FEED = ROOT / "data" / "quantum_feed"
+FEEDBACK_FILE = QUANTUM_FEED / "trade_feedback_dataset.jsonl"
+ATTRIBUTION_FILE = QUANTUM_FEED / "performance_attribution.json"
+
+# Alpaca paper trading
+ALPACA_BASE = "https://paper-api.alpaca.markets"
+ALPACA_DATA_BASE = "https://data.alpaca.markets"
+
+
+def load_env():
+    """Load .env file."""
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+def alpaca_headers():
+    api_key = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    return {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret,
+    }
+
+
+def get_account_equity():
+    """Get current account equity."""
+    try:
+        r = requests.get(f"{ALPACA_BASE}/v2/account", headers=alpaca_headers(), timeout=15)
+        r.raise_for_status()
+        return float(r.json().get("equity", 0))
+    except Exception as e:
+        log.error(f"Failed to get equity: {e}")
+        return 0.0
+
+
+def get_today_closed_orders():
+    """Fetch today's closed orders from Alpaca paper account."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    after = f"{today}T00:00:00Z"
+    orders = []
+    params = {
+        "status": "closed",
+        "after": after,
+        "limit": 500,
+        "direction": "asc",
+    }
+    try:
+        r = requests.get(f"{ALPACA_BASE}/v2/orders", headers=alpaca_headers(),
+                         params=params, timeout=30)
+        r.raise_for_status()
+        orders = r.json()
+        log.info(f"Fetched {len(orders)} closed orders for {today}")
+    except Exception as e:
+        log.error(f"Failed to fetch orders: {e}")
+    return orders
+
+
+def load_feedback_dataset():
+    """Load trade feedback dataset for signal attribution."""
+    entries = []
+    if FEEDBACK_FILE.exists():
+        for line in FEEDBACK_FILE.read_text().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return entries
+
+
+def load_ensemble_signals():
+    """Load latest ensemble signals for source attribution."""
+    path = QUANTUM_FEED / "ensemble_signals.json"
+    if path.exists():
+        try:
+            return json.load(open(path))
+        except Exception:
+            pass
+    return {}
+
+
+def load_signal_source_files():
+    """Load individual signal source files for attribution."""
+    sources = {}
+    source_files = {
+        "orb": "orb_signals.json",
+        "ict_smc": "ict_smc_signals.json",
+        "scalping": "scalping_signals.json",
+        "overnight_gap": "overnight_gap_signals.json",
+        "momentum": "latest_signal.json",
+        "sentiment": "finbert_sentiment.json",
+        "technical": "technical_analysis.json",
+    }
+    for name, fname in source_files.items():
+        fpath = QUANTUM_FEED / fname
+        if fpath.exists():
+            try:
+                sources[name] = json.load(open(fpath))
+            except Exception:
+                pass
+    return sources
+
+
+def attribute_trade_to_sources(order, feedback_entries, ensemble_data, signal_sources):
+    """Determine which signal sources triggered a trade."""
+    symbol = order.get("symbol", "")
+    side = order.get("side", "")
+    sources_found = []
+
+    # Check feedback dataset for matching symbol/date
+    order_date = order.get("filled_at", order.get("submitted_at", ""))[:10]
+    for entry in feedback_entries:
+        if entry.get("symbol", "").startswith(symbol) and entry.get("date", "") == order_date:
+            src = entry.get("source", "unknown")
+            if src not in sources_found:
+                sources_found.append(src)
+
+    # Check ensemble signals for the symbol
+    signals = ensemble_data.get("signals", [])
+    if isinstance(signals, list):
+        for sig in signals:
+            if sig.get("symbol") == symbol:
+                agent_sigs = sig.get("agent_signals", {})
+                for agent, val in agent_sigs.items():
+                    if (side == "buy" and val > 0.3) or (side == "sell" and val < -0.3):
+                        if agent not in sources_found:
+                            sources_found.append(agent)
+
+    # Check individual signal source files
+    for src_name, src_data in signal_sources.items():
+        if isinstance(src_data, dict):
+            # Check if symbol appears in this source
+            syms = src_data.get("symbols", src_data.get("signals", []))
+            if isinstance(syms, list):
+                for item in syms:
+                    if isinstance(item, dict) and item.get("symbol") == symbol:
+                        if src_name not in sources_found:
+                            sources_found.append(src_name)
+            elif isinstance(syms, dict) and symbol in syms:
+                if src_name not in sources_found:
+                    sources_found.append(src_name)
+
+    if not sources_found:
+        sources_found.append("unattributed")
+
+    return sources_found
+
+
+def compute_trade_pnl(order):
+    """Compute P&L for a closed order."""
+    filled_avg = float(order.get("filled_avg_price", 0) or 0)
+    qty = float(order.get("filled_qty", 0) or 0)
+    side = order.get("side", "buy")
+    notional = filled_avg * qty
+
+    # For a closed order, P&L is embedded in the order legs or we estimate
+    # from limit price vs fill price. Simple approach: use filled_avg_price * qty as notional.
+    # True P&L requires matching buys/sells. We'll track by symbol.
+    return {
+        "symbol": order.get("symbol", ""),
+        "side": side,
+        "qty": qty,
+        "filled_price": filled_avg,
+        "notional": notional,
+        "order_id": order.get("id", ""),
+        "filled_at": order.get("filled_at", ""),
+        "order_type": order.get("type", ""),
+    }
+
+
+def match_trades_for_pnl(trades):
+    """Match buy/sell pairs by symbol to compute realized P&L."""
+    by_symbol = defaultdict(list)
+    for t in trades:
+        by_symbol[t["symbol"]].append(t)
+
+    results = []
+    for symbol, symbol_trades in by_symbol.items():
+        buys = [t for t in symbol_trades if t["side"] == "buy"]
+        sells = [t for t in symbol_trades if t["side"] in ("sell", "sell_short")]
+
+        if buys and sells:
+            avg_buy = sum(t["filled_price"] * t["qty"] for t in buys) / max(sum(t["qty"] for t in buys), 1)
+            avg_sell = sum(t["filled_price"] * t["qty"] for t in sells) / max(sum(t["qty"] for t in sells), 1)
+            matched_qty = min(sum(t["qty"] for t in buys), sum(t["qty"] for t in sells))
+            pnl = (avg_sell - avg_buy) * matched_qty
+            results.append({
+                "symbol": symbol,
+                "pnl": round(pnl, 2),
+                "buy_avg": round(avg_buy, 4),
+                "sell_avg": round(avg_sell, 4),
+                "qty": matched_qty,
+                "win": pnl > 0,
+            })
+        else:
+            # Unmatched — open position or partial
+            for t in symbol_trades:
+                results.append({
+                    "symbol": symbol,
+                    "pnl": 0.0,
+                    "buy_avg": t["filled_price"] if t["side"] == "buy" else 0,
+                    "sell_avg": t["filled_price"] if t["side"] == "sell" else 0,
+                    "qty": t["qty"],
+                    "win": False,
+                    "unmatched": True,
+                })
+
+    return results
+
+
+def build_report(orders, equity):
+    """Build the full performance attribution report."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    feedback_entries = load_feedback_dataset()
+    ensemble_data = load_ensemble_signals()
+    signal_sources = load_signal_source_files()
+
+    # Parse trades
+    trades = [compute_trade_pnl(o) for o in orders if float(o.get("filled_qty", 0) or 0) > 0]
+    matched = match_trades_for_pnl(trades)
+
+    # Attribution
+    source_stats = defaultdict(lambda: {"trades": 0, "wins": 0, "total_pnl": 0.0, "pnls": []})
+    for order in orders:
+        if float(order.get("filled_qty", 0) or 0) <= 0:
+            continue
+        sources = attribute_trade_to_sources(order, feedback_entries, ensemble_data, signal_sources)
+        symbol = order.get("symbol", "")
+        # Find matching P&L
+        match = next((m for m in matched if m["symbol"] == symbol and not m.get("counted")), None)
+        pnl = match["pnl"] if match else 0.0
+        win = match["win"] if match else False
+        if match:
+            match["counted"] = True
+
+        for src in sources:
+            source_stats[src]["trades"] += 1
+            if win:
+                source_stats[src]["wins"] += 1
+            source_stats[src]["total_pnl"] += pnl / len(sources)  # split across sources
+            source_stats[src]["pnls"].append(pnl / len(sources))
+
+    # Per-source summary
+    per_source = {}
+    for src, stats in source_stats.items():
+        per_source[src] = {
+            "trades": stats["trades"],
+            "win_rate": round(stats["wins"] / max(stats["trades"], 1) * 100, 1),
+            "avg_pnl": round(stats["total_pnl"] / max(stats["trades"], 1), 2),
+            "total_pnl": round(stats["total_pnl"], 2),
+        }
+
+    # Overall stats
+    total_pnl = sum(m["pnl"] for m in matched if not m.get("unmatched"))
+    wins = sum(1 for m in matched if m["win"] and not m.get("unmatched"))
+    total_matched = sum(1 for m in matched if not m.get("unmatched"))
+    best_trade = max(matched, key=lambda x: x["pnl"], default={"symbol": "N/A", "pnl": 0})
+    worst_trade = min(matched, key=lambda x: x["pnl"], default={"symbol": "N/A", "pnl": 0})
+
+    report = {
+        "date": today,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "overall": {
+            "total_pnl": round(total_pnl, 2),
+            "total_trades": len(trades),
+            "matched_roundtrips": total_matched,
+            "win_rate": round(wins / max(total_matched, 1) * 100, 1),
+            "best_trade": {"symbol": best_trade["symbol"], "pnl": best_trade["pnl"]},
+            "worst_trade": {"symbol": worst_trade["symbol"], "pnl": worst_trade["pnl"]},
+            "equity_at_close": round(equity, 2),
+        },
+        "per_source": per_source,
+        "trades": [
+            {
+                "symbol": m["symbol"],
+                "pnl": m["pnl"],
+                "qty": m["qty"],
+                "buy_avg": m.get("buy_avg", 0),
+                "sell_avg": m.get("sell_avg", 0),
+            }
+            for m in matched if not m.get("unmatched")
+        ],
+    }
+    return report
+
+
+def save_report(report):
+    """Save daily report and update rolling 30-day attribution."""
+    today = report["date"]
+
+    # Save daily
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    daily_path = REPORTS_DIR / f"perf_{today}.json"
+    daily_path.write_text(json.dumps(report, indent=2))
+    log.info(f"Saved daily report to {daily_path}")
+
+    # Update rolling 30-day attribution
+    rolling = {"days": [], "updated_at": datetime.now(timezone.utc).isoformat()}
+    if ATTRIBUTION_FILE.exists():
+        try:
+            rolling = json.load(open(ATTRIBUTION_FILE))
+        except Exception:
+            pass
+
+    days = rolling.get("days", [])
+    # Remove existing entry for today
+    days = [d for d in days if d.get("date") != today]
+    days.append({
+        "date": today,
+        "overall": report["overall"],
+        "per_source": report["per_source"],
+    })
+    # Keep only last 30 days
+    days.sort(key=lambda x: x["date"])
+    days = days[-30:]
+
+    # Compute rolling aggregates
+    rolling_sources = defaultdict(lambda: {"trades": 0, "wins": 0, "total_pnl": 0.0})
+    total_pnl_30d = 0
+    total_trades_30d = 0
+    total_wins_30d = 0
+    for day in days:
+        total_pnl_30d += day["overall"].get("total_pnl", 0)
+        total_trades_30d += day["overall"].get("matched_roundtrips", 0)
+        wr = day["overall"].get("win_rate", 0)
+        rt = day["overall"].get("matched_roundtrips", 0)
+        total_wins_30d += int(wr * rt / 100)
+        for src, stats in day.get("per_source", {}).items():
+            rolling_sources[src]["trades"] += stats["trades"]
+            rolling_sources[src]["wins"] += int(stats["win_rate"] * stats["trades"] / 100)
+            rolling_sources[src]["total_pnl"] += stats["total_pnl"]
+
+    rolling_summary = {}
+    for src, stats in rolling_sources.items():
+        rolling_summary[src] = {
+            "trades_30d": stats["trades"],
+            "win_rate_30d": round(stats["wins"] / max(stats["trades"], 1) * 100, 1),
+            "total_pnl_30d": round(stats["total_pnl"], 2),
+        }
+
+    rolling_out = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "rolling_30d": {
+            "total_pnl": round(total_pnl_30d, 2),
+            "total_trades": total_trades_30d,
+            "win_rate": round(total_wins_30d / max(total_trades_30d, 1) * 100, 1),
+        },
+        "per_source_30d": rolling_summary,
+        "days": days,
+    }
+
+    ATTRIBUTION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ATTRIBUTION_FILE.write_text(json.dumps(rolling_out, indent=2))
+    log.info(f"Updated rolling attribution at {ATTRIBUTION_FILE}")
+
+
+def send_telegram(report):
+    """Send summary to Telegram."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "7091381625")
+    if not token:
+        log.warning("No TELEGRAM_BOT_TOKEN, skipping notification")
+        return
+
+    o = report["overall"]
+    pnl_emoji = "+" if o["total_pnl"] >= 0 else ""
+    lines = [
+        f"📊 <b>Daily Performance — {report['date']}</b>",
+        f"",
+        f"<b>Overall:</b>",
+        f"  P&L: <b>{pnl_emoji}${o['total_pnl']:,.2f}</b>",
+        f"  Trades: {o['total_trades']} | Roundtrips: {o['matched_roundtrips']}",
+        f"  Win Rate: {o['win_rate']}%",
+        f"  Best: {o['best_trade']['symbol']} (${o['best_trade']['pnl']:+,.2f})",
+        f"  Worst: {o['worst_trade']['symbol']} (${o['worst_trade']['pnl']:+,.2f})",
+        f"  Equity: ${o['equity_at_close']:,.2f}",
+        f"",
+        f"<b>By Signal Source:</b>",
+    ]
+    for src, stats in sorted(report["per_source"].items(), key=lambda x: x[1]["total_pnl"], reverse=True):
+        lines.append(f"  {src}: {stats['trades']} trades, {stats['win_rate']}% WR, ${stats['total_pnl']:+,.2f}")
+
+    if not report["per_source"]:
+        lines.append("  No attributed trades today.")
+
+    text = "\n".join(lines)
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        log.info("Telegram notification sent")
+    except Exception as e:
+        log.error(f"Telegram send failed: {e}")
+
+
+def main():
+    load_env()
+    log.info("Starting daily performance attribution")
+
+    equity = get_account_equity()
+    orders = get_today_closed_orders()
+
+    if not orders:
+        log.info("No closed orders today — sending minimal report")
+
+    report = build_report(orders, equity)
+    save_report(report)
+    send_telegram(report)
+    log.info("Daily performance attribution complete")
+
+
+if __name__ == "__main__":
+    main()
