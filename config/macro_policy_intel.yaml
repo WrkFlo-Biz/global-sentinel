@@ -178,6 +178,51 @@ macro_policy_intel:
           - "DCOILWTICO"   # WTI Crude Oil
           - "GOLDAMGBD228NLBM"  # Gold London Fix
           - "DCOILBRENTEU" # Brent Crude
+        market_stress:
+          - "KCFSI"            # Kansas City Financial Stress Index
+          - "BAMLH0A1HYBB"     # ICE BofA BB High Yield OAS
+          - "BAMLH0A3HYC"      # ICE BofA CCC & Lower HY OAS (crisis canary)
+          - "BAA10Y"           # Moody's Baa minus 10Y (credit risk premium)
+          - "AAA10Y"           # Moody's Aaa minus 10Y (IG stress)
+          - "CPFF"             # Commercial Paper minus Fed Funds (funding stress)
+        leading_indicators:
+          - "RECPROUSM156N"    # Smoothed US Recession Probabilities
+          - "SAHMREALTIME"     # Real-time Sahm Rule Indicator
+          - "USSLIND"          # Philly Fed Leading Index
+          - "CFNAI"            # Chicago Fed National Activity Index (85 indicators)
+          - "NEWORDER"         # Core Capex Orders ex-Aircraft
+          - "DGORDER"          # Durable Goods New Orders
+          - "JTSJOL"           # JOLTS Job Openings
+          - "CCSA"             # Continued Claims (weekly)
+        sector_rotation:
+          - "INDPRO"           # Industrial Production
+          - "TCU"              # Capacity Utilization
+          - "RSAFS"            # Advance Retail Sales
+          - "MANEMP"           # Manufacturing Employment
+          - "CES0500000003"    # Average Hourly Earnings All Private
+          - "AHETPI"           # Avg Hourly Earnings Production Workers
+        forex:
+          - "DEXJPUS"          # JPY/USD (carry trade unwind risk)
+          - "DEXUSEU"          # USD/EUR
+          - "DEXUSUK"          # USD/GBP
+          - "DEXCHUS"          # CNY/USD (China devaluation risk)
+        liquidity:
+          - "WRESBAL"          # Reserve Balances with Fed (system liquidity)
+          - "TOTRESNS"         # Total Reserves Depository Institutions
+          - "BOGMBASE"         # Monetary Base (QT pressure gauge)
+          - "WDTGAL"           # Treasury General Account (liquidity injection/drain)
+          - "RPONTSYD"         # Overnight Repo Operations
+          - "M2V"              # Velocity of M2 (inflation/deflation signal)
+        global_macro:
+          - "CHNLOLITONOSTSAM" # China CLI (leads commodities/cyclicals 2-3mo)
+          - "EA19LOLITONOSTSAM" # Euro Area CLI
+          - "JPNLOLITONOSTSAM" # Japan CLI (BOJ/yen dynamics)
+          - "USALOLITONOSTSAM" # US CLI (OECD cross-check)
+          - "OECDLOLITOTRGYSAM" # OECD Total CLI (global growth)
+        credit_deep:
+          - "DRTSCILM"         # Banks Tightening C&I Loans (recession 6-9mo lead)
+          - "DRTSCLCC"         # Banks Tightening Credit Card Standards
+          - "BAMLC0A1CAAA"     # ICE BofA AAA Corporate OAS
       rate_check_thresholds:
         DGS1MO_abs_delta: 0.05
         DGS3MO_abs_delta: 0.05
