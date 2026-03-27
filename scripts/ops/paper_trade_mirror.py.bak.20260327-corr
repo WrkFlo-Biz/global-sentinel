@@ -21,14 +21,6 @@ try:
 except Exception:
     _SMART_ROUTER = False
 
-# Correlation guard for position limits
-_CORR_GUARD = None
-try:
-    from src.execution.position_correlation_guard import check_position as _check_position_guard
-    _CORR_GUARD = True
-except Exception:
-    _CORR_GUARD = False
-
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 REPORTS_DIR = REPO_ROOT / "reports" / "paper_trades"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -575,18 +567,6 @@ def day_trade_scan_and_enter():
         max_contracts = max(1, int(kelly_size / cost))
         qty = min(max_contracts, 3)  # Cap at 3 contracts per trade
 
-        # Correlation guard check
-        if _CORR_GUARD:
-            try:
-                guard_result = _check_position_guard(sym, account="day_trade")
-                if not guard_result.get("allowed", True):
-                    log(f"DAY TRADE: BLOCKED by correlation guard: {guard_result.get('reason', '?')}")
-                    continue
-                for w in guard_result.get("warnings", []):
-                    log(f"DAY TRADE: Guard warning: {w}")
-            except Exception as e:
-                log(f"DAY TRADE: Correlation guard error (proceeding): {e}")
-
         order = alpaca_request(DT_BASE, DT_KEY, DT_SECRET, "POST", "/v2/orders", {
             "symbol": option["symbol"],
             "qty": str(qty),
@@ -805,18 +785,6 @@ def medlong_scan_and_enter():
         position_size = kelly_size * (1 + agg.get("avg_strength", 0))
         position_size = min(position_size, equity * 0.10)
         qty = max(1, int(position_size / price))
-
-        # Correlation guard check
-        if _CORR_GUARD:
-            try:
-                guard_result = _check_position_guard(sym, account="medlong")
-                if not guard_result.get("allowed", True):
-                    log(f"MEDLONG: BLOCKED by correlation guard: {guard_result.get('reason', '?')}")
-                    continue
-                for w in guard_result.get("warnings", []):
-                    log(f"MEDLONG: Guard warning: {w}")
-            except Exception as e:
-                log(f"MEDLONG: Correlation guard error (proceeding): {e}")
 
         order = alpaca_request(ML_BASE, ML_KEY, ML_SECRET, "POST", "/v2/orders", {
             "symbol": sym, "qty": str(qty), "side": "buy",

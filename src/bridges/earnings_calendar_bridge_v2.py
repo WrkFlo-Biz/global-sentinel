@@ -115,7 +115,7 @@ class EarningsCalendarIntegration:
         from_str = self.today.isoformat()
         to_str = self.lookahead.isoformat()
         url = (
-            f"https://financialmodelingprep.com/stable/earning-calendar"
+            f"https://financialmodelingprep.com/stable/earnings-calendar"
             f"?from={from_str}&to={to_str}&apikey={self.fmp_key}"
         )
 
