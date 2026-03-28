@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, ReactNode } from "react";
 import {
   api, connectWS,
   type Heartbeat, type Scorecard, type TimelinePoint, type Controls,
-  type GraduationReport, type PortfolioData, type TradeAnalysis,
+  type PortfolioData, type TradeAnalysis,
   type ConsciousnessData, type ExecutionModeData, type PoliticianAlphaData,
   type DashboardLayout, type DashboardWidget, type ExecutionSummary,
   type BridgeStatusResponse,
@@ -15,11 +15,9 @@ import ComponentBars from "@/components/ComponentBars";
 import RegimeChart from "@/components/RegimeChart";
 import BridgeHealth from "@/components/BridgeHealth";
 import ControlPanel from "@/components/ControlPanel";
-import EvidenceLog from "@/components/EvidenceLog";
 import TimeWindowBadge from "@/components/TimeWindowBadge";
 import OrderFlow from "@/components/OrderFlow";
 import AlertFeed from "@/components/AlertFeed";
-import GraduationProgress from "@/components/GraduationProgress";
 import PortfolioPanel from "@/components/PortfolioPanel";
 import TradeAnalysisPanel from "@/components/TradeAnalysisPanel";
 import PerformancePanel from "@/components/PerformancePanel";
@@ -28,7 +26,6 @@ import ExecutionModePanel from "@/components/ExecutionModePanel";
 import GSSSignalGraph from "@/components/GSSSignalGraph";
 import PoliticianAlphaPanel from "@/components/PoliticianAlphaPanel";
 import EquityCurve from "@/components/EquityCurve";
-import ComponentRadar from "@/components/ComponentRadar";
 import PnLWaterfall from "@/components/PnLWaterfall";
 import DrawdownChart from "@/components/DrawdownChart";
 import SectorExposure from "@/components/SectorExposure";
@@ -70,19 +67,17 @@ const DEFAULT_ROWS = [
     { id: "order_flow", cols: 5, title: "Order Flow", visible: true },
   ]},
   { id: "row_regime_radar_controls", widgets: [
-    { id: "regime_gauge", cols: 3, title: "Regime Probability", visible: true },
-    { id: "component_radar", cols: 3, title: "Risk Radar", visible: true },
-    { id: "component_bars", cols: 3, title: "Component Scores", visible: true },
-    { id: "system_controls", cols: 3, title: "System Controls", visible: true },
+    { id: "regime_gauge", cols: 4, title: "Regime Probability", visible: true },
+    { id: "component_bars", cols: 4, title: "Component Scores", visible: true },
+    { id: "system_controls", cols: 4, title: "System Controls", visible: true },
   ]},
   { id: "row_gss_regime_timeline", widgets: [
     { id: "gss_signal_graph", cols: 6, title: "GSS Econophysics — Three-Layer Signal Graph", visible: true },
     { id: "regime_timeline", cols: 6, title: "Regime Probability Timeline", visible: true },
   ]},
-  { id: "row_evidence_alpha_alerts", widgets: [
-    { id: "evidence_log", cols: 4, title: "Evidence Signals", visible: true },
-    { id: "politician_alpha", cols: 4, title: "Capitol Whale — Politician Alpha", visible: true },
-    { id: "alert_feed", cols: 4, title: "Alert Feed", visible: true },
+  { id: "row_alpha_alerts", widgets: [
+    { id: "politician_alpha", cols: 6, title: "Capitol Whale — Politician Alpha", visible: true },
+    { id: "alert_feed", cols: 6, title: "Alert Feed", visible: true },
   ]},
   { id: "row_drawdown_consciousness_orders", widgets: [
     { id: "drawdown_chart", cols: 5, title: "Drawdown from Peak", visible: true },
@@ -91,9 +86,6 @@ const DEFAULT_ROWS = [
   ]},
   { id: "row_quantum", widgets: [
     { id: "quantum_comparison", cols: 12, title: "Quantum vs Classical — Optimization Research", visible: true, badge: "BOUNDED SECONDARY SIGNAL" },
-  ]},
-  { id: "row_graduation", widgets: [
-    { id: "graduation", cols: 12, title: "Graduation Progress", visible: true },
   ]},
 ];
 
@@ -143,7 +135,6 @@ export default function Dashboard() {
   const [executionSummary, setExecutionSummary] = useState<ExecutionSummary | null>(null);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusResponse | null>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [graduation, setGraduation] = useState<GraduationReport | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [tradeAnalysis, setTradeAnalysis] = useState<TradeAnalysis | null>(null);
   const [performance, setPerformance] = useState<any>(null);
@@ -159,7 +150,7 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [hb, sc, tl, ctrl, bridgeState, ord, execSummary, al, grad, port, ta, perf, cons, execMode, polAlpha, ly, qd] = await Promise.all([
+      const [hb, sc, tl, ctrl, bridgeState, ord, execSummary, al, port, ta, perf, cons, execMode, polAlpha, ly, qd] = await Promise.all([
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
@@ -168,7 +159,6 @@ export default function Dashboard() {
         api.orders(50).catch(() => []),
         api.executionSummary(100, 100, 24).catch(() => null),
         api.alerts(30).catch(() => []),
-        api.graduation().catch(() => null),
         api.portfolio().catch(() => null),
         api.tradeAnalysis().catch(() => null),
         api.performance().catch(() => null),
@@ -186,7 +176,6 @@ export default function Dashboard() {
       if (Array.isArray(ord)) setOrders(ord);
       if (execSummary) setExecutionSummary(execSummary);
       if (Array.isArray(al)) setAlerts(al);
-      if (grad && !("error" in grad)) setGraduation(grad);
       if (port && !port.error) setPortfolio(port);
       if (ta && !ta.error) setTradeAnalysis(ta);
       if (perf && !perf.error) setPerformance(perf);
@@ -272,8 +261,6 @@ export default function Dashboard() {
         return <OrderFlow orders={orders} />;
       case "regime_gauge":
         return <RegimeGauge regimeP={regimeP} confidence={confidence} />;
-      case "component_radar":
-        return <ComponentRadar scores={scorecard?.component_scores || null} />;
       case "component_bars":
         return scorecard?.component_scores
           ? <ComponentBars scores={scorecard.component_scores} />
@@ -323,8 +310,6 @@ export default function Dashboard() {
             <RegimeChart data={timeline} />
           </>
         );
-      case "evidence_log":
-        return <EvidenceLog evidence={scorecard?.evidence || []} />;
       case "politician_alpha":
         return <PoliticianAlphaPanel data={politicianAlpha} />;
       case "alert_feed":
@@ -339,19 +324,6 @@ export default function Dashboard() {
         return <SectorExposure portfolio={portfolio} />;
       case "quantum_comparison":
         return <QuantumPanel data={quantum} />;
-      case "graduation":
-        return graduation ? (
-          <GraduationProgress
-            stage={graduation.stage}
-            overallPass={graduation.overall_pass}
-            checks={graduation.checks}
-            summary={graduation.summary}
-          />
-        ) : (
-          <div className="text-gray-600 text-xs">
-            No graduation assessment. Run: check_graduation_criteria.py
-          </div>
-        );
       default:
         return <div className="text-gray-600 text-xs">Unknown widget: {w.id}</div>;
     }
