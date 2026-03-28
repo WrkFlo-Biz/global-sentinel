@@ -37,7 +37,7 @@ LOG_DIR = REPO_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 RISK_FREE_RATE = 0.05
-DEFAULT_SYMBOLS = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL"]
+DEFAULT_SYMBOLS = ["SPY", "QQQ", "NVDA", "TSLA", "AMD"]
 
 
 def log(msg):
@@ -71,34 +71,51 @@ def get_momentum_symbols():
 
 
 def fetch_stock_data(symbols):
-    """Fetch current price and 30-day historical vol for each symbol."""
-    live_key = env.get("ALPACA_API_KEY_LIVE", env.get("ALPACA_API_KEY", ""))
-    live_secret = env.get("ALPACA_SECRET_KEY_LIVE", env.get("ALPACA_SECRET_KEY", ""))
-    end = datetime.date.today()
-    start = end - datetime.timedelta(days=45)
+    """Fetch current price and 30-day historical vol for each symbol, with fallback."""
+    try:
+        live_key = env.get("ALPACA_API_KEY_LIVE", env.get("ALPACA_API_KEY", ""))
+        live_secret = env.get("ALPACA_SECRET_KEY_LIVE", env.get("ALPACA_SECRET_KEY", ""))
+        end = datetime.date.today()
+        start = end - datetime.timedelta(days=45)
 
-    sym_str = ",".join(symbols)
-    url = (f"https://data.alpaca.markets/v2/stocks/bars?"
-           f"symbols={sym_str}&timeframe=1Day&start={start}&end={end}&limit=60&sort=asc")
-    req = urllib.request.Request(url)
-    req.add_header("APCA-API-KEY-ID", live_key)
-    req.add_header("APCA-API-SECRET-KEY", live_secret)
+        sym_str = ",".join(symbols)
+        url = (f"https://data.alpaca.markets/v2/stocks/bars?"
+               f"symbols={sym_str}&timeframe=1Day&start={start}&end={end}&limit=60&sort=asc")
+        req = urllib.request.Request(url)
+        req.add_header("APCA-API-KEY-ID", live_key)
+        req.add_header("APCA-API-SECRET-KEY", live_secret)
 
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
 
-    results = {}
-    for sym in symbols:
-        bars = data.get("bars", {}).get(sym, [])
-        if len(bars) < 10:
-            continue
-        closes = [b["c"] for b in bars]
-        current_price = closes[-1]
-        returns = np.array([(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))])
-        vol = float(np.std(returns) * np.sqrt(252))
-        results[sym] = {"price": current_price, "volatility": max(vol, 0.05)}
+        results = {}
+        for sym in symbols:
+            bars = data.get("bars", {}).get(sym, [])
+            if len(bars) < 10:
+                continue
+            closes = [b["c"] for b in bars]
+            current_price = closes[-1]
+            returns = np.array([(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))])
+            vol = float(np.std(returns) * np.sqrt(252))
+            results[sym] = {"price": current_price, "volatility": max(vol, 0.05)}
 
-    return results
+        if results:
+            return results
+        log("No API data, using fallback prices")
+    except Exception as e:
+        log(f"API fetch failed ({e}), using fallback stock data")
+
+    # Fallback: approximate current prices and historical vols
+    fallback = {
+        "SPY": {"price": 550.0, "volatility": 0.15},
+        "QQQ": {"price": 470.0, "volatility": 0.20},
+        "NVDA": {"price": 120.0, "volatility": 0.45},
+        "TSLA": {"price": 270.0, "volatility": 0.55},
+        "AMD": {"price": 175.0, "volatility": 0.40},
+        "AAPL": {"price": 215.0, "volatility": 0.22},
+        "GLD": {"price": 230.0, "volatility": 0.15},
+    }
+    return {sym: fallback.get(sym, {"price": 100.0, "volatility": 0.25}) for sym in symbols}
 
 
 def black_scholes_call(S, K, T, r, sigma):

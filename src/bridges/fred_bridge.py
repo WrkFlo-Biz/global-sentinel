@@ -30,6 +30,13 @@ try:
     import yaml
 except ImportError:
     print("Missing dependency: pyyaml", file=sys.stderr)
+
+# FRED rate limiter
+try:
+    from src.utils.fred_rate_limiter import acquire_fred_token, save_fred_state
+    _HAS_FRED_LIMITER = True
+except ImportError:
+    _HAS_FRED_LIMITER = False
     sys.exit(1)
 
 
@@ -361,6 +368,12 @@ class FREDBridge:
         return f"https://fred.stlouisfed.org/series/{series_id}"
 
     def _fred_api_get(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        # FRED rate limiting: acquire token before each API call
+        if _HAS_FRED_LIMITER:
+            if not acquire_fred_token(timeout=5.0):
+                series_id = params.get("series_id", "unknown")
+                raise RuntimeError(f"FRED rate limit exceeded for {series_id}, skipping")
+            save_fred_state()
         q = dict(params)
         q["file_type"] = "json"
         if self.api_key:

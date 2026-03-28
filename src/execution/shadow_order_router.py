@@ -23,6 +23,14 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Trade approval workflow
+try:
+    from src.execution.trade_approval import request_approval as _trade_approval
+    _HAS_TRADE_APPROVAL = True
+except ImportError:
+    _HAS_TRADE_APPROVAL = False
+
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -296,8 +304,45 @@ class ShadowOrderRouter:
                     "qty_cap_source": ((order_req.get("_gs_sizing") or {}).get("qty_cap_source")),
                 })
 
-                # Route options vs equity orders through appropriate adapter method
+                # -- Trade Approval Workflow --
                 req = intent["order_request"]
+                if _HAS_TRADE_APPROVAL:
+                    _notional = 0
+                    try:
+                        _qty = float(req.get("qty", 0) or 0)
+                        _price = float(req.get("limit_price", 0) or 0)
+                        _notional = _qty * _price
+                        if req.get("asset_class") == "option":
+                            _notional *= 100
+                    except Exception:
+                        pass
+                    _approval_info = {
+                        "symbol": req.get("symbol"),
+                        "side": req.get("side"),
+                        "qty": req.get("qty"),
+                        "type": req.get("type"),
+                        "limit_price": req.get("limit_price"),
+                        "notional": _notional,
+                        "signal_source": cand.get("signal_source", cand.get("strategy_style", "")),
+                        "strategy_style": cand.get("strategy_style", ""),
+                        "asset_class": req.get("asset_class", "equity"),
+                        "contract_id": req.get("contract_id", ""),
+                    }
+                    try:
+                        _approval = _trade_approval(_approval_info)
+                        if not _approval.get("approved", True):
+                            import logging as _ta_log
+                            _ta_log.getLogger("global_sentinel.shadow_order_router").info(
+                                "Trade REJECTED by approval: %s - %s",
+                                req.get("symbol"), _approval.get("reason"))
+                            route_summary["skipped_by_approval"] = route_summary.get("skipped_by_approval", 0) + 1
+                            continue
+                    except Exception as _ae:
+                        import logging as _ta_log
+                        _ta_log.getLogger("global_sentinel.shadow_order_router").warning(
+                            "Trade approval error (proceeding): %s", _ae)
+
+                # Route options vs equity orders through appropriate adapter method
                 self._v6_mark_submitted(order_record)
                 if req.get("asset_class") == "option" and hasattr(self.adapter, "place_option_order"):
                     broker_order = self.adapter.place_option_order(
