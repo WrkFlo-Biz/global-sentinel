@@ -979,6 +979,18 @@ def run_collection_cycle(cycle_num: int) -> None:
         print(f"  [ERR] Quantum feed write failed: {exc}")
         traceback.print_exc()
 
+    # --- Refresh news impact bridge (scores headlines into quantum_feed) ---
+    try:
+        from src.bridges.news_impact_bridge import NewsImpactBridge
+        nib = NewsImpactBridge()
+        nib_result = nib.poll()
+        nib_data = nib_result.get("data", {})
+        print(f"  [NEWS IMPACT] {nib_data.get('headlines_analyzed', 0)} headlines, "
+              f"{nib_data.get('tickers_mentioned', 0)} tickers scored")
+    except Exception as exc:
+        print(f"  [ERR] News impact bridge failed: {exc}")
+        traceback.print_exc()
+
     # --- Log to JSONL ---
     try:
         log_cycle(cycle_num, serp_news, reddit_posts, finnhub_news,
