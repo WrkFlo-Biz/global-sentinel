@@ -44,11 +44,12 @@ CRITICAL_SERVICES = [
     "gs-data-gatherer",
     "gs-paper-trader",
     "gs-synthetic-simulator",
-    # "gs-pnl-tracker",  # runs on timer, not a daemon
     "gs-fred-alerts",
     "gs-stop-loss",
     "gs-broker-router",
     "gs-conditional-orders",
+    "gs-vol-trader",
+    "global-sentinel",
 ]
 
 # 24/7 bridges and their max age in hours
@@ -307,13 +308,24 @@ def compute_health_score(
     telegram: Dict[str, Any],
     alpaca: Dict[str, Any],
 ) -> Tuple[int, str]:
-    """Compute 0-100 health score."""
+    """Compute 0-100 health score.
+
+    Breakdown (max 100):
+      Services:  50 pts (scaled — all running = 50, proportional if some down)
+      CPU:       10 pts (load < 4.0)
+      RAM:       10 pts (usage < 80%)
+      Disk:      10 pts (usage < 85%)
+      Freshness: 10 pts (no stale bridges)
+      Telegram:   5 pts (connected)
+      Alpaca:     5 pts (connected)
+    """
     score = 0
 
-    # Each running critical service: +5 points (max 45 for 9 services)
-    for svc, info in services.items():
-        if info.get("active"):
-            score += 5
+    # Services: 50 points scaled by fraction running
+    total_services = len(services)
+    running = sum(1 for info in services.values() if info.get("active"))
+    if total_services > 0:
+        score += round(50 * running / total_services)
 
     # CPU load < 4: +10
     if resources["cpu_load_1m"] < 4.0:
