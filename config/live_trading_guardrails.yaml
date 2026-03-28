@@ -20,7 +20,7 @@ order_controls:
   max_orders_per_minute: 10           # doubled rate limit for multi-strategy
   price_collar_pct: 0.03             # reject if limit > 3% from last trade
   quote_max_age_seconds: 30          # reject if quotes older than 30s
-  require_human_approval: true       # EVERY order needs manual "Y"
+  require_human_approval: true       # EVERY order needs manual "Y" — OVERRIDES execution_mode.yaml auto setting for live trading
   day_trades_only: true              # day trades only
 
 # --- Loss Controls ---

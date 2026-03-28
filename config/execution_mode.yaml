@@ -75,6 +75,9 @@ strategies:
 # --- Execution Mode ---
 # "auto" = submit orders automatically 24/7 when optimal opportunities arise
 # "manual" = send order summary + upside analysis to Telegram, wait for approval
+# NOTE: These modes apply to PAPER trading accounts only.
+# For LIVE trading, live_trading_guardrails.yaml OVERRIDES these settings
+# and enforces require_human_approval: true regardless of what is set here.
 execution_mode:
   day_trade: "auto"
   medium_long: "auto"

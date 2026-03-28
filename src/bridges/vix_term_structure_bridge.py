@@ -45,6 +45,8 @@ class VixTermStructureBridge:
     # HTTP helpers
     # ------------------------------------------------------------------
 
+    _cboe_403_logged: bool = False
+
     def _fetch_json(self, url: str, timeout: int = 15,
                     headers: Optional[Dict[str, str]] = None) -> Optional[dict]:
         hdrs = {"User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)"}
@@ -55,7 +57,12 @@ class VixTermStructureBridge:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except Exception as e:
-            logger.warning(f"[VixTermStructure] fetch error for {url}: {e}")
+            if "cdn.cboe.com" in url and "403" in str(e):
+                if not self._cboe_403_logged:
+                    logger.info(f"[VixTermStructure] CBOE CDN returns 403 (expected), using Yahoo fallback")
+                    self._cboe_403_logged = True
+            else:
+                logger.warning(f"[VixTermStructure] fetch error for {url}: {e}")
             return None
 
     # ------------------------------------------------------------------

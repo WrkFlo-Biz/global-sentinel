@@ -30,7 +30,11 @@ _VIX_SYMBOLS = {
 }
 
 
+_cboe_403_logged = False
+
+
 def _fetch_json(url: str, timeout: int = 15) -> Optional[dict]:
+    global _cboe_403_logged
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)",
@@ -39,7 +43,12 @@ def _fetch_json(url: str, timeout: int = 15) -> Optional[dict]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except Exception as exc:
-        logger.warning("Fetch failed %s: %s", url, exc)
+        if "cdn.cboe.com" in url and "403" in str(exc):
+            if not _cboe_403_logged:
+                logger.info("CBOE CDN returns 403 (expected), using Yahoo fallback")
+                _cboe_403_logged = True
+        else:
+            logger.warning("Fetch failed %s: %s", url, exc)
         return None
 
 
