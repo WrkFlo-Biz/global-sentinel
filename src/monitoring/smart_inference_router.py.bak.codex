@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""
+Global Sentinel - Smart Inference Router
+
+Cost-optimizing inference router that sends queries to the cheapest capable model
+first, escalating only when needed.
+
+Tier 1 (Free):   Nemotron-120B via OpenRouter
+Tier 2 (Cheap):  gpt-5-mini via Azure OpenAI
+Tier 3 (Premium): gpt-4o / claude-opus via Azure OpenAI / Anthropic
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import requests
+
+logger = logging.getLogger("global_sentinel.smart_inference_router")
+
+REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
+STATS_PATH = Path("/tmp/gs_inference_stats.json")
+ROUTING_LOG_PATH = REPO_ROOT / "logs" / "inference_routing.jsonl"
+
+# ── Cost estimates per 1K tokens (input/output avg) ──
+TIER_COSTS = {
+    "free":    0.0,
+    "cheap":   0.00015,   # gpt-5-mini ~$0.15/1M tokens
+    "premium": 0.005,     # gpt-4o ~$5/1M tokens
+}
+
+# Baseline cost if everything went to premium
+BASELINE_COST_PER_1K = TIER_COSTS["premium"]
+
+# ── Classification keywords ──
+SIMPLE_KEYWORDS = [
+    "summarize", "format", "list", "what is", "define", "explain briefly",
+    "reformat", "bullet", "translate", "count", "convert",
+]
+MODERATE_KEYWORDS = [
+    "market analysis", "signal", "interpret", "data", "analyze",
+    "chart", "trend", "momentum", "volume", "sector", "earnings",
+    "thesis", "catalyst", "valuation", "sentiment",
+]
+COMPLEX_KEYWORDS = [
+    "trade", "execute", "critical", "strategy decision", "code",
+    "multi-step", "plan", "refactor", "implement", "debug",
+    "portfolio rebalance", "risk assessment", "hedge",
+]
+
+
+def _classify(prompt: str) -> str:
+    """Auto-classify prompt complexity."""
+    lower = prompt.lower().strip()
+    length = len(prompt)
+
+    # Complex first (highest priority)
+    for kw in COMPLEX_KEYWORDS:
+        if kw in lower:
+            return "complex"
+
+    # Moderate keywords (check before length-based simple default)
+    for kw in MODERATE_KEYWORDS:
+        if kw in lower:
+            return "moderate"
+
+    # Simple: short queries or simple keywords
+    if length < 200:
+        for kw in SIMPLE_KEYWORDS:
+            if kw in lower:
+                return "simple"
+        # Very short queries default to simple
+        if length < 80:
+            return "simple"
+
+    # Default by length
+    if length < 200:
+        return "simple"
+    elif length < 600:
+        return "moderate"
+    return "complex"
+
+
+class SmartInferenceRouter:
+    """Route LLM queries to cheapest capable tier with fallback."""
+
+    def __init__(self):
+        self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.azure_openai_endpoint = os.getenv(
+            "AZURE_OPENAI_ENDPOINT",
+            "https://moses-8586-resource.openai.azure.com"
+        )
+        self.azure_openai_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+        # Ensure log dir exists
+        ROUTING_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        self._load_stats()
+
+    # ── Stats persistence ──
+
+    def _load_stats(self):
+        if STATS_PATH.exists():
+            try:
+                self.stats = json.loads(STATS_PATH.read_text())
+            except Exception:
+                self.stats = self._empty_stats()
+        else:
+            self.stats = self._empty_stats()
+
+    def _empty_stats(self) -> dict:
+        return {
+            "total_queries": 0,
+            "tier_counts": {"free": 0, "cheap": 0, "premium": 0},
+            "tier_fallbacks": {"free_to_cheap": 0, "free_to_premium": 0, "cheap_to_premium": 0},
+            "estimated_cost": 0.0,
+            "baseline_cost": 0.0,
+            "savings": 0.0,
+            "last_reset": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _save_stats(self):
+        try:
+            STATS_PATH.write_text(json.dumps(self.stats, indent=2))
+        except Exception as e:
+            logger.warning(f"Failed to save inference stats: {e}")
+
+    def _log_routing(self, entry: dict):
+        try:
+            with open(ROUTING_LOG_PATH, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to log routing decision: {e}")
+
+    # ── Tier implementations ──
+
+    def _call_tier_free(self, prompt: str, system: str = "") -> str:
+        """Tier 1: Nemotron-120B via OpenRouter (free)."""
+        if not self.openrouter_key:
+            raise RuntimeError("OPENROUTER_API_KEY not set")
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.openrouter_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://global-sentinel.wrk-flo.com",
+                "X-Title": "Global Sentinel",
+            },
+            json={
+                "model": "nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
+                "messages": messages,
+                "max_tokens": 2048,
+                "temperature": 0.3,
+            },
+            timeout=45,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content:
+            raise RuntimeError(f"Empty response from OpenRouter: {data}")
+        return content
+
+    def _call_tier_cheap(self, prompt: str, system: str = "") -> str:
+        """Tier 2: gpt-5-mini via Azure OpenAI."""
+        return self._call_azure("gpt-5-mini", prompt, system)
+
+    def _call_tier_premium(self, prompt: str, system: str = "") -> str:
+        """Tier 3: gpt-4o via Azure OpenAI (fallback to Anthropic)."""
+        try:
+            return self._call_azure("gpt-4o", prompt, system)
+        except Exception as e:
+            logger.warning(f"gpt-4o failed ({e}), trying Anthropic claude-opus")
+            return self._call_anthropic(prompt, system)
+
+    def _call_azure(self, deployment: str, prompt: str, system: str = "") -> str:
+        if not self.azure_openai_key:
+            raise RuntimeError("AZURE_OPENAI_API_KEY not set")
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        api_version = "2024-12-01-preview"
+        url = f"{self.azure_openai_endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        resp = requests.post(
+            url,
+            headers={
+                "api-key": self.azure_openai_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "messages": messages,
+                "max_tokens": 2048,
+                "temperature": 0.3,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    def _call_anthropic(self, prompt: str, system: str = "") -> str:
+        if not self.anthropic_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": self.anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-opus-4-20250514",
+                "max_tokens": 2048,
+                "system": system or "You are a helpful assistant.",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=90,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("content", [{}])[0].get("text", "")
+
+    # ── Main routing method ──
+
+    def query(
+        self,
+        prompt: str,
+        system: str = "",
+        complexity: str = "auto",
+    ) -> Dict[str, Any]:
+        """
+        Route a query to the cheapest capable model.
+
+        Args:
+            prompt: The user/system prompt.
+            system: Optional system message.
+            complexity: 'simple', 'moderate', 'complex', or 'auto'.
+
+        Returns:
+            dict with keys: response, tier_used, classified_as, fallback_chain, latency_ms
+        """
+        if complexity == "auto":
+            classified = _classify(prompt)
+        else:
+            classified = complexity
+
+        tier_order = {
+            "simple":   ["free", "cheap", "premium"],
+            "moderate": ["cheap", "premium"],
+            "complex":  ["premium"],
+        }.get(classified, ["cheap", "premium"])
+
+        tier_funcs = {
+            "free":    self._call_tier_free,
+            "cheap":   self._call_tier_cheap,
+            "premium": self._call_tier_premium,
+        }
+
+        fallback_chain = []
+        tier_used = None
+        response = None
+        error_msg = None
+        start = time.time()
+
+        for tier in tier_order:
+            try:
+                response = tier_funcs[tier](prompt, system)
+                tier_used = tier
+                fallback_chain.append({"tier": tier, "status": "success"})
+                break
+            except Exception as e:
+                fallback_chain.append({"tier": tier, "status": "failed", "error": str(e)[:200]})
+                error_msg = str(e)
+                logger.warning(f"Tier {tier} failed: {e}")
+
+        latency_ms = round((time.time() - start) * 1000)
+
+        if response is None:
+            response = f"[ALL TIERS FAILED] Last error: {error_msg}"
+            tier_used = "none"
+
+        # Estimate token count (~4 chars per token)
+        est_tokens = (len(prompt) + len(response or "")) / 4
+        est_cost_1k = est_tokens / 1000
+
+        actual_cost = est_cost_1k * TIER_COSTS.get(tier_used, TIER_COSTS["premium"])
+        baseline_cost = est_cost_1k * BASELINE_COST_PER_1K
+
+        # Update stats
+        self.stats["total_queries"] += 1
+        if tier_used in self.stats["tier_counts"]:
+            self.stats["tier_counts"][tier_used] += 1
+        self.stats["estimated_cost"] += actual_cost
+        self.stats["baseline_cost"] += baseline_cost
+        self.stats["savings"] = self.stats["baseline_cost"] - self.stats["estimated_cost"]
+
+        # Track fallbacks
+        if len(fallback_chain) > 1 and tier_used:
+            first_tier = fallback_chain[0]["tier"]
+            key = f"{first_tier}_to_{tier_used}"
+            self.stats["tier_fallbacks"][key] = self.stats["tier_fallbacks"].get(key, 0) + 1
+
+        self._save_stats()
+
+        # Log routing decision
+        log_entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "classified_as": classified,
+            "tier_used": tier_used,
+            "fallback_chain": fallback_chain,
+            "latency_ms": latency_ms,
+            "prompt_len": len(prompt),
+            "response_len": len(response or ""),
+            "est_tokens": round(est_tokens),
+            "actual_cost": round(actual_cost, 6),
+            "baseline_cost": round(baseline_cost, 6),
+        }
+        self._log_routing(log_entry)
+
+        return {
+            "response": response,
+            "tier_used": tier_used,
+            "classified_as": classified,
+            "fallback_chain": fallback_chain,
+            "latency_ms": latency_ms,
+        }
+
+    # ── Daily cost report ──
+
+    def daily_cost_report(self) -> str:
+        """Generate a daily cost report string for audit output."""
+        s = self.stats
+        total = s["total_queries"]
+        if total == 0:
+            return "Inference Router: No queries routed today."
+
+        lines = [
+            "=== SMART INFERENCE ROUTER - DAILY COST REPORT ===",
+            f"Total queries routed: {total}",
+            "",
+            "Queries per tier:",
+            f"  Tier 1 (Free/Nemotron):  {s['tier_counts'].get('free', 0)} ({_pct(s['tier_counts'].get('free', 0), total)})",
+            f"  Tier 2 (Cheap/gpt-5m):   {s['tier_counts'].get('cheap', 0)} ({_pct(s['tier_counts'].get('cheap', 0), total)})",
+            f"  Tier 3 (Premium/gpt-4o): {s['tier_counts'].get('premium', 0)} ({_pct(s['tier_counts'].get('premium', 0), total)})",
+            "",
+            f"Estimated actual cost:   ${s['estimated_cost']:.4f}",
+            f"Baseline cost (all 4o):  ${s['baseline_cost']:.4f}",
+            f"Savings:                 ${s['savings']:.4f} ({_pct(s['savings'], s['baseline_cost']) if s['baseline_cost'] > 0 else '0%'})",
+            "",
+            "Fallbacks:",
+        ]
+        for k, v in s.get("tier_fallbacks", {}).items():
+            if v > 0:
+                lines.append(f"  {k}: {v}")
+        if not any(v > 0 for v in s.get("tier_fallbacks", {}).values()):
+            lines.append("  (none)")
+
+        return "\n".join(lines)
+
+    def reset_daily_stats(self):
+        """Reset stats for a new day."""
+        self.stats = self._empty_stats()
+        self._save_stats()
+
+
+def _pct(part, total) -> str:
+    if total == 0:
+        return "0%"
+    return f"{part / total * 100:.1f}%"
+
+
+# ── Singleton for easy import ──
+_router_instance: Optional[SmartInferenceRouter] = None
+
+def get_router() -> SmartInferenceRouter:
+    global _router_instance
+    if _router_instance is None:
+        _router_instance = SmartInferenceRouter()
+    return _router_instance
+
+
+def query(prompt: str, system: str = "", complexity: str = "auto") -> Dict[str, Any]:
+    """Convenience function: route a query through the singleton router."""
+    return get_router().query(prompt, system=system, complexity=complexity)
+
+
+def daily_cost_report() -> str:
+    """Convenience function: get daily cost report."""
+    return get_router().daily_cost_report()
+
+
+# ── CLI for testing / cron ──
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    parser = argparse.ArgumentParser(description="Smart Inference Router")
+    parser.add_argument("--query", type=str, help="Test query to route")
+    parser.add_argument("--complexity", type=str, default="auto", choices=["simple", "moderate", "complex", "auto"])
+    parser.add_argument("--report", action="store_true", help="Print daily cost report")
+    parser.add_argument("--reset", action="store_true", help="Reset daily stats")
+    args = parser.parse_args()
+
+    # Load .env
+    env_path = REPO_ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+    router = SmartInferenceRouter()
+
+    if args.reset:
+        router.reset_daily_stats()
+        print("Stats reset.")
+    elif args.report:
+        print(router.daily_cost_report())
+    elif args.query:
+        result = router.query(args.query, complexity=args.complexity)
+        print(f"Tier: {result['tier_used']} (classified: {result['classified_as']})")
+        print(f"Latency: {result['latency_ms']}ms")
+        print(f"Fallbacks: {result['fallback_chain']}")
+        print(f"\nResponse:\n{result['response'][:500]}")
+    else:
+        parser.print_help()
