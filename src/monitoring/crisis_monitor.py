@@ -729,6 +729,105 @@ class CrisisMonitor:
         except Exception as e:
             print(f"[{iso_now()}] Oil regime error (non-fatal): {e}", file=sys.stderr)
 
+        # V6.10: Fertilizer Bridge & Ag Spread Signal — corn/soy cascade
+        try:
+            from src.ingestion.fertilizer_bridge import FertilizerBridge
+            from src.alpha.ag_spread_signal import AgSpreadSignal
+            fb = FertilizerBridge()
+            fert_packets = fb.fetch(market_data=bridge_results.get("market_data"))
+            fert_state = fb.get_fertilizer_state()
+            scorecard["v6_fertilizer_state"] = fert_state
+            bridge_results["fertilizer_state"] = fert_state
+
+            ag_signal = AgSpreadSignal()
+            oil_regime = scorecard.get("v6_oil_regime", "NORMAL")
+            hormuz = float((scorecard.get("chokepoint_risk") or {}).get("hormuz", 0.0))
+            commodity_shock = float((scorecard.get("component_scores") or {}).get("commodity_shock", 0.0))
+            oil_price = (scorecard.get("v6_oil_regime_detail") or {}).get("oil_price")
+            ag_result = ag_signal.classify_phase(
+                oil_price=float(oil_price) if oil_price else None,
+                oil_regime=oil_regime,
+                fertilizer_state=fert_state,
+                hormuz_score=hormuz,
+                commodity_shock=commodity_shock,
+            )
+            scorecard["v6_ag_spread_phase"] = ag_result
+            if ag_result.get("phase") != "NEUTRAL" and self.alerter:
+                try:
+                    self.alerter._dispatch(
+                        "AG_SPREAD",
+                        ag_signal.format_telegram(ag_result),
+                        throttle=True,
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[{iso_now()}] Ag spread signal error (non-fatal): {e}", file=sys.stderr)
+
+        # V6.11: Multi-Persona Consensus — disagreement detection
+        try:
+            from src.alpha.multi_persona_consensus import MultiPersonaConsensus
+            mpc = MultiPersonaConsensus()
+            strategy_ideas = scorecard.get("v6_strategy_ideas", [])
+            if strategy_ideas:
+                consensus_results = mpc.evaluate_batch(
+                    trade_ideas=strategy_ideas,
+                    market_data=bridge_results.get("market_data"),
+                    scorecard=scorecard,
+                )
+                scorecard["v6_persona_consensus"] = consensus_results[:10]
+                disagreements = [r for r in consensus_results if r.get("is_disagreement_signal")]
+                if disagreements and self.alerter:
+                    try:
+                        self.alerter._dispatch(
+                            "PERSONA_DISAGREEMENT",
+                            mpc.format_batch_telegram(consensus_results),
+                            throttle=True,
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[{iso_now()}] Multi-persona consensus error (non-fatal): {e}", file=sys.stderr)
+
+        # V6.12: Regime Capital Allocator — dynamic sizing
+        try:
+            from src.alpha.regime_capital_allocator import RegimeCapitalAllocator
+            rca = RegimeCapitalAllocator()
+            oil_regime = scorecard.get("v6_oil_regime", "NORMAL")
+            fert_state = scorecard.get("v6_fertilizer_state") or {}
+            ag_phase = (scorecard.get("v6_ag_spread_phase") or {}).get("phase", "NEUTRAL")
+            vix_price = None
+            md = bridge_results.get("market_data") or {}
+            if isinstance(md.get("VIX"), dict):
+                vix_price = md["VIX"].get("price")
+            regime_state = rca.compute_regime_state_vector(
+                oil_regime=oil_regime,
+                crisis_mode=self.mode if hasattr(self, "mode") else "NORMAL",
+                commodity_shock=float((scorecard.get("component_scores") or {}).get("commodity_shock", 0.0)),
+                vix_level=float(vix_price) if vix_price else None,
+                chokepoint_scores=scorecard.get("chokepoint_risk"),
+                fertilizer_regime=fert_state.get("fertilizer_regime", "UNKNOWN"),
+                ag_spread_phase=ag_phase,
+                geopolitical_tension=float((scorecard.get("component_scores") or {}).get("geopolitical_tension", 0.0)),
+            )
+            scorecard["v6_regime_state_vector"] = regime_state
+
+            # Compute allocations for active strategies
+            strategy_ideas = scorecard.get("v6_strategy_ideas", [])
+            if strategy_ideas:
+                utilities = {}
+                for idea in strategy_ideas:
+                    strat = idea.get("strategy", "unknown")
+                    if strat not in utilities:
+                        alignment = rca.get_strategy_regime_alignment(strat, regime_state)
+                        utilities[strat] = rca.compute_strategy_utility(
+                            strat, idea.get("confidence", 0.5), 0.0, alignment,
+                        )
+                allocations = rca.allocate(utilities, total_equity=600000)
+                scorecard["v6_regime_allocations"] = allocations
+        except Exception as e:
+            print(f"[{iso_now()}] Regime capital allocator error (non-fatal): {e}", file=sys.stderr)
+
         # V6.6: Deescalation Detector — ceasefire/peace signals
         try:
             from src.monitoring.deescalation_detector import DeescalationDetector

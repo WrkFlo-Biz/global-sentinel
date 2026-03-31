@@ -29,7 +29,7 @@ strategies:
       base_pct_of_equity: 8.0     # 8% of equity per trade (~$8K on $100K)
       high_confidence_pct: 12.0   # 12% for high-confidence setups (~$12K)
       max_single_position_pct: 15.0  # Hard cap 15% per position
-      max_gross_exposure_pct: 60.0   # Max 60% of equity deployed at once
+      max_gross_exposure_pct: 60.0   # Desired 60%, hard-capped at 40% by live_trading_guardrails.yaml
       min_notional: 2000          # Minimum $2K per trade
       max_qty_cap: 10000          # High sanity cap; notional/max_single_position_pct remain primary guardrails
       min_size_multiplier: 0.40   # Floor for confidence/time-window downscaling

@@ -815,6 +815,122 @@ class StrategyEngine:
         return idea
 
     # ------------------------------------------------------------------
+    # AG SPREAD CASCADE (Corn/Soybean)
+    # ------------------------------------------------------------------
+
+    def _eval_ag_spread_cascade(
+        self, strat: dict, market_data: dict | None, scorecard: dict | None = None,
+        bridge_results: dict | None = None, **_: Any
+    ) -> list[dict]:
+        """Evaluate corn/soybean spread cascade strategy.
+
+        Phase 1 (ETHANOL_RALLY): Oil elevated + fertilizer normal → long corn/short soy
+        Phase 2 (SPREAD_REVERSAL): Fertilizer crisis → short corn/long soy
+        """
+        from src.alpha.ag_spread_signal import AgSpreadSignal, SpreadPhase
+
+        oil_regime = self._safe_get(scorecard, "v6_oil_regime") or "NORMAL"
+        commodity_shock = self._component_score(scorecard, "commodity_shock")
+        hormuz = self._chokepoint_score(scorecard, "hormuz")
+
+        # Get oil price
+        oil_price = self._safe_get(market_data, "oil", "wti_price")
+        if oil_price is None:
+            oil_price = self._safe_get(market_data, "oil", "price")
+
+        # Get fertilizer state from bridge results
+        fert_state = self._safe_get(bridge_results, "fertilizer_state")
+        if not isinstance(fert_state, dict):
+            fert_state = None
+
+        # Get corn/soy ratio from market data
+        corn_price = self._safe_get(market_data, "CORN", "price")
+        soy_price = self._safe_get(market_data, "SOYB", "price")
+        corn_soy_ratio = None
+        if corn_price and soy_price and soy_price > 0:
+            corn_soy_ratio = float(corn_price) / float(soy_price)
+
+        # Initialize signal classifier (stateless per call — state lives in crisis_monitor)
+        signal = AgSpreadSignal()
+        result = signal.classify_phase(
+            oil_price=float(oil_price) if oil_price else None,
+            oil_regime=oil_regime,
+            fertilizer_state=fert_state,
+            hormuz_score=hormuz,
+            corn_soy_ratio=corn_soy_ratio,
+            commodity_shock=commodity_shock,
+        )
+
+        phase = result.get("phase", SpreadPhase.NEUTRAL)
+        confidence = result.get("confidence", 0.0)
+
+        if phase == SpreadPhase.NEUTRAL or confidence < 0.35:
+            return []
+
+        # Generate ideas based on phase — filter positions by phase tag
+        ideas: list[dict] = []
+        positions = strat.get("positions", [])
+
+        if phase == SpreadPhase.ETHANOL_RALLY:
+            # Phase 1 positions + non-phase-tagged (fertilizer beneficiaries)
+            target_positions = [
+                p for p in positions
+                if p.get("phase") == "ethanol_rally" or "phase" not in p
+            ]
+            signal_desc = " | ".join(result.get("signals", [])[:3])
+            for pos in target_positions:
+                ideas.append(self._build_idea(
+                    strategy_name="ag_spread_cascade",
+                    strat_cfg=strat,
+                    symbol=pos["symbol"],
+                    direction=pos.get("side", "long"),
+                    notional_usd=pos.get("size_usd", 15000),
+                    entry_signal=f"AG_SPREAD Phase 1 (ETHANOL_RALLY): {signal_desc}",
+                    confidence=confidence,
+                    stop_loss_pct=abs(pos["stop_loss_pct"]) if "stop_loss_pct" in pos else None,
+                    take_profit_pct=pos.get("take_profit_pct"),
+                ))
+
+        elif phase == SpreadPhase.FERTILIZER_SQUEEZE:
+            # Transition: only fertilizer beneficiaries, reduce corn exposure
+            target_positions = [p for p in positions if "phase" not in p]
+            signal_desc = " | ".join(result.get("signals", [])[:3])
+            for pos in target_positions:
+                ideas.append(self._build_idea(
+                    strategy_name="ag_spread_cascade",
+                    strat_cfg=strat,
+                    symbol=pos["symbol"],
+                    direction=pos.get("side", "long"),
+                    notional_usd=pos.get("size_usd", 15000),
+                    entry_signal=f"AG_SPREAD Transition (FERT_SQUEEZE): {signal_desc}",
+                    confidence=confidence * 0.85,  # lower confidence in transition
+                    stop_loss_pct=abs(pos["stop_loss_pct"]) if "stop_loss_pct" in pos else None,
+                    take_profit_pct=pos.get("take_profit_pct"),
+                ))
+
+        elif phase == SpreadPhase.SPREAD_REVERSAL:
+            # Phase 2 positions + non-phase-tagged (fertilizer beneficiaries)
+            target_positions = [
+                p for p in positions
+                if p.get("phase") == "spread_reversal" or "phase" not in p
+            ]
+            signal_desc = " | ".join(result.get("signals", [])[:3])
+            for pos in target_positions:
+                ideas.append(self._build_idea(
+                    strategy_name="ag_spread_cascade",
+                    strat_cfg=strat,
+                    symbol=pos["symbol"],
+                    direction=pos.get("side", "long"),
+                    notional_usd=pos.get("size_usd", 15000),
+                    entry_signal=f"AG_SPREAD Phase 2 (REVERSAL): {signal_desc}",
+                    confidence=confidence,
+                    stop_loss_pct=abs(pos["stop_loss_pct"]) if "stop_loss_pct" in pos else None,
+                    take_profit_pct=pos.get("take_profit_pct"),
+                ))
+
+        return ideas
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -845,6 +961,7 @@ class StrategyEngine:
         "europe_pre_open": "_eval_europe_pre_open",
         "us_premarket_gap": "_eval_us_premarket_gap",
         "commodity_currency_divergence": "_eval_commodity_currency_divergence",
+        "ag_spread_cascade": "_eval_ag_spread_cascade",
     }
 
     def evaluate_entries(

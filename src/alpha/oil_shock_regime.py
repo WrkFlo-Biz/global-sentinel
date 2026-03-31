@@ -75,7 +75,7 @@ class OilShockRegime:
                 "oil_momentum_intraday", "defense_accumulation",
                 "oil_gap_persistence", "petro_inflation",
                 "china_oil_import_shock", "europe_pre_open",
-                "us_premarket_gap",
+                "us_premarket_gap", "ag_spread_cascade",
             ],
             "suppress": ["airline_short"],  # wait for confirmation
             "size_multiplier": 1.2,
@@ -97,6 +97,7 @@ class OilShockRegime:
                 "china_oil_import_shock", "asia_energy_cascade",
                 "europe_pre_open", "us_premarket_gap",
                 "commodity_currency_divergence",
+                "ag_spread_cascade",
             ],
             "suppress": [
                 "oil_mean_reversion",  # don't fade $100 oil
@@ -118,6 +119,7 @@ class OilShockRegime:
                 "china_oil_import_shock", "asia_energy_cascade",
                 "europe_pre_open", "us_premarket_gap",
                 "commodity_currency_divergence",
+                "ag_spread_cascade",
             ],
             "suppress": [
                 "oil_mean_reversion",  # don't fade dislocation

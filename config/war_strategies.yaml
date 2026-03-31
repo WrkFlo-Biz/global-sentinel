@@ -733,7 +733,73 @@ strategies:
         side: short
 
   # ═══════════════════════════════════════
-  # STRATEGY 25: COMMODITY CURRENCY DIVERGENCE
+  # STRATEGY 25: AG SPREAD CASCADE (Corn/Soybean)
+  # ═══════════════════════════════════════
+  ag_spread_cascade:
+    account: medium_long
+    target_daily_pnl: 150
+    timeframe: swing
+    hold_period_days: [5, 45]
+    shock_overrides:
+      stop_loss_pct: 4.0
+      take_profit_pct: 8.0
+      size_multiplier: 1.3
+    thesis: >
+      Oil >$90 → ethanol attractive → corn rallies vs soybeans.
+      But Hormuz also chokes nitrogen fertilizer supply ($480→$700+/ton).
+      Corn needs nitrogen; soybeans don't. Farmers rotate to soybeans.
+      Phase 1: Long corn/short soy. Phase 2: Reverse when fertilizer spikes.
+      Agricultural spreads become the most interesting trades in the market.
+    entry_rules:
+      - "Phase 1 (ETHANOL_RALLY): Oil regime ELEVATED+ AND fertilizer < $500/ton"
+      - "Phase 2 (SPREAD_REVERSAL): Fertilizer > $650/ton OR Hormuz > 0.5"
+      - "Confirm with corn/soybean ratio breakout from 20-day baseline"
+    exit_rules:
+      - "Phase 1 exit: Fertilizer crosses $500/ton (transition to Phase 2)"
+      - "Phase 2 exit: Hormuz reopens OR fertilizer drops below $400/ton"
+      - "Both phases: ceasefire confirmed → exit all"
+      - "Stop loss: 4% on spread"
+    positions:
+      # Phase 1: Ethanol rally (corn outperforms)
+      - symbol: CORN
+        size_usd: 20000
+        stop_loss_pct: -3.0
+        take_profit_pct: 6.0
+        side: long
+        phase: ethanol_rally
+      - symbol: SOYB
+        size_usd: 20000
+        stop_loss_pct: -3.0
+        take_profit_pct: 6.0
+        side: short
+        phase: ethanol_rally
+      # Fertilizer beneficiaries (both phases)
+      - symbol: MOS
+        size_usd: 15000
+        stop_loss_pct: -4.0
+        take_profit_pct: 8.0
+        side: long
+      - symbol: CF
+        size_usd: 15000
+        stop_loss_pct: -4.0
+        take_profit_pct: 8.0
+        side: long
+      # Phase 2: Spread reversal (soybeans outperform)
+      - symbol: SOYB
+        size_usd: 20000
+        stop_loss_pct: -3.0
+        take_profit_pct: 6.0
+        side: long
+        phase: spread_reversal
+      - symbol: CORN
+        size_usd: 20000
+        stop_loss_pct: -3.0
+        take_profit_pct: 6.0
+        side: short
+        phase: spread_reversal
+
+  # ═══════════════════════════════════════
+  # STRATEGY 26: COMMODITY CURRENCY DIVERGENCE
   # ═══════════════════════════════════════
   commodity_currency_divergence:
     account: medium_long
@@ -787,3 +853,5 @@ hidden_opportunities:
     watch: [AA, CENX]
   - category: "India/Japan Energy Pain"
     watch_short: [INDA, EWJ]
+  - category: "Ag Spread / Fertilizer Chain"
+    watch: [CORN, SOYB, MOS, CF, NTR, WEAT]
