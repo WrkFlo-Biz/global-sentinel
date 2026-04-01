@@ -1,0 +1,28 @@
+[Unit]
+Description=Global Sentinel — Continuous Strategy Trainer (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u scripts/ops/continuous_strategy_trainer.py --interval 30 --scenarios-per-cycle 10
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits — prevent runaway memory (unlike the quantum learner)
+MemoryMax=512M
+MemoryHigh=384M
+CPUQuota=25%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs /opt/global-sentinel/data
+
+[Install]
+WantedBy=default.target

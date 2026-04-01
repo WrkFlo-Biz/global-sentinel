@@ -8,25 +8,25 @@ mode: "war_session"
 
 # --- Position Sizing (widened for war volatility + multi-strategy) ---
 position_limits:
-  max_position_pct: 0.08              # 8% of equity per position
+  max_position_pct: 0.25              # 25% of equity per position — recalibrated for $858 live capital
   max_gross_exposure_pct: 0.40        # 40% — guarded deployment with human approval
   max_single_name_pct: 0.08           # 8% max single name
   max_sector_pct: 0.50                # 50% — energy/defense will be heavy in war regime
   max_correlation_group_pct: 0.40     # 40% correlated bets limit
-  max_positions: 25                   # 15 strategies may hold concurrent positions
+  max_positions: 5                    # Concentrated book — recalibrated for $858 live capital
 
 # --- Order Controls ---
 order_controls:
   max_orders_per_minute: 10           # doubled rate limit for multi-strategy
   price_collar_pct: 0.03             # reject if limit > 3% from last trade
   quote_max_age_seconds: 30          # reject if quotes older than 30s
-  require_human_approval: true       # EVERY order needs manual "Y" — OVERRIDES execution_mode.yaml auto setting for live trading
+  require_human_approval: true       # EVERY order needs manual "Y"
   day_trades_only: true              # day trades only
 
 # --- Loss Controls ---
 loss_controls:
   max_loss_daily_pct: 0.03           # 3% daily loss = auto-halt
-  max_loss_daily_usd: 3000           # $3K absolute daily loss cap
+  max_loss_daily_usd: 50             # $50 absolute daily loss cap — recalibrated for $858 live capital
   max_loss_weekly_pct: 0.05          # 5% weekly loss = full stop
   trailing_stop_pct: 0.015           # 1.5% trailing stop on all positions
 

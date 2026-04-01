@@ -20,19 +20,24 @@ hysteresis:
   max_flaps_before_lock: 3
 
 # --- Regime Shift Scoring Weights ---
+# INSTITUTIONAL REBUILD: Boosted geopolitical, decomposed commodity_shock
+# Per Citadel quant framework: inventory + supply + demand + storage + curve
 regime_weights:
-  geopolitical_tension: 0.18
-  market_volatility: 0.16
-  currency_stress: 0.08
-  commodity_shock: 0.08
-  policy_uncertainty: 0.07
-  labor_disruption: 0.02
-  credit_spread: 0.04
-  liquidity_stress: 0.03
-  consciousness_coherence: 0.06
-  politician_alpha: 0.09       # congressional whale trades — insiders positioning
-  policy_signals: 0.07         # Fed Board + White House + OFAC + BLS combined
-  yield_curve: 0.12            # yield curve inversion, credit OAS, equity indices from FRED
+  geopolitical_tension: 0.22     # BOOSTED from 0.18 — core differentiator
+  market_volatility: 0.14        # Slightly reduced
+  yield_curve: 0.10              # Slightly reduced
+  commodity_shock: 0.04          # REDUCED — decomposed into sub-signals below
+  commodity_inventory: 0.04      # NEW: EIA weekly draws, storage levels
+  commodity_supply_disruption: 0.04  # NEW: Hormuz AIS, OPEC, sanctions
+  commodity_cascade_phase: 0.03  # NEW: Oil → shipping → refinery → airline lag
+  policy_signals: 0.08           # BOOSTED from 0.07 — Fed/WH/OFAC combined
+  politician_alpha: 0.09         # Unchanged — congressional trades
+  currency_stress: 0.07          # Slightly reduced
+  policy_uncertainty: 0.06       # Slightly reduced
+  consciousness_coherence: 0.03  # REDUCED from 0.06 — experimental
+  credit_spread: 0.03            # Slightly reduced
+  liquidity_stress: 0.02         # Slightly reduced
+  labor_disruption: 0.01         # REDUCED from 0.02 — low priority
 
 # --- Confidence Adjustments ---
 confidence:
@@ -41,7 +46,7 @@ confidence:
   conflicting_signal_penalty: 0.10
   fallback_mode_penalty: 0.20
   single_source_penalty: 0.25
-  min_confidence_for_shadow_draft: 0.35
+  min_confidence_for_shadow_draft: 0.50
 
 # --- Freshness Requirements ---
 freshness:

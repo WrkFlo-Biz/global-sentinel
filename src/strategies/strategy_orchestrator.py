@@ -13,12 +13,20 @@ try:
     from .scalping_engine import run_scalping_engine
     from .kelly_sizer import run_kelly_sizer
     from .ict_smc_engine import run_ict_smc_engine
+    from .chart_markup_engine import run_chart_markup
+    from .power_market_engine import run_power_market
+    from .ranked_asset_allocation import run_ranked_allocation
+    from .systematic_options_selling import run_systematic_options
     NEW_STRATEGIES_AVAILABLE = True
 except ImportError:
     try:
         from scalping_engine import run_scalping_engine
         from kelly_sizer import run_kelly_sizer
         from ict_smc_engine import run_ict_smc_engine
+        from chart_markup_engine import run_chart_markup
+        from power_market_engine import run_power_market
+        from ranked_asset_allocation import run_ranked_allocation
+        from systematic_options_selling import run_systematic_options
         NEW_STRATEGIES_AVAILABLE = True
     except ImportError:
         NEW_STRATEGIES_AVAILABLE = False
@@ -208,6 +216,26 @@ def cross_pollinate(results):
     kelly = next((r for r in results if r.get("strategy") == "kelly_sizer"), {})
     if kelly.get("blocked", 0) > 0:
         insights.append({"type": "risk_warning", "message": f"Kelly Criterion blocked {kelly['blocked']} strategies — negative edge detected, DO NOT TRADE those"})
+    # Chart Markup + ICT/ORB confluence
+    markup = next((r for r in results if r.get("strategy") == "chart_markup"), {})
+    if markup.get("trade_ideas", 0) > 0 and ict.get("signals", 0) > 0:
+        insights.append({"type": "cross_signal", "message": "Chart markup levels align with ICT SMC signals — high conviction structural trade setups"})
+    if markup.get("confluence_zones", 0) >= 5:
+        insights.append({"type": "cross_signal", "message": f"Chart markup found {markup['confluence_zones']} confluence zones — strong structural session ahead"})
+    # Power market + futures cross-pollination
+    power = next((r for r in results if r.get("strategy") == "power_market"), {})
+    if power.get("signals", 0) > 0 and futures.get("direction") == "long_oil":
+        insights.append({"type": "cross_signal", "message": "Power market + oil both bullish — energy sector high conviction long"})
+    # RAAM allocation insights
+    raam = next((r for r in results if r.get("strategy") == "ranked_allocation"), {})
+    if raam.get("cash_pct", 0) >= 60:
+        insights.append({"type": "risk_warning", "message": f"RAAM is {raam['cash_pct']}% cash — momentum weak across asset classes, reduce exposure"})
+    elif raam.get("cash_pct", 0) == 0:
+        insights.append({"type": "cross_signal", "message": "RAAM fully invested (0% cash) — strong momentum across multiple asset classes"})
+    # Systematic options + prediction markets confluence
+    sys_opts = next((r for r in results if r.get("strategy") == "systematic_options"), {})
+    if sys_opts.get("signals", 0) > 0 and pred.get("signal") == "market_complacent":
+        insights.append({"type": "risk_warning", "message": "Options selling signals active but market complacent — tighten stops on short premium positions"})
     return insights
 
 # === MASTER ORCHESTRATOR ===
@@ -278,6 +306,62 @@ def run_all():
         except Exception as e:
             log(f"  ict_smc: ERROR - {e}")
             results.append({"strategy": "ict_smc", "error": str(e)})
+
+        # Chart Markup - structural levels, no fib (reads market data)
+        try:
+            markup_result = run_chart_markup()
+            results.append({
+                "strategy": "chart_markup",
+                "confluence_zones": markup_result.get("total_confluence_zones", 0),
+                "trade_ideas": markup_result.get("total_trade_ideas", 0),
+                "top_ideas": markup_result.get("top_ideas", [])[:3],
+            })
+            log(f"  chart_markup: OK ({markup_result.get('total_confluence_zones', 0)} zones, "
+                f"{markup_result.get('total_trade_ideas', 0)} ideas)")
+        except Exception as e:
+            log(f"  chart_markup: ERROR - {e}")
+            results.append({"strategy": "chart_markup", "error": str(e)})
+
+        # Power Market - basis, directional, DART (Neel Somani / Citadel approach)
+        try:
+            power_result = run_power_market()
+            results.append({
+                "strategy": "power_market",
+                "signals": power_result.get("total_signals", 0),
+                "all_signals": power_result.get("all_signals", [])[:3],
+            })
+            log(f"  power_market: OK ({power_result.get('total_signals', 0)} signals)")
+        except Exception as e:
+            log(f"  power_market: ERROR - {e}")
+            results.append({"strategy": "power_market", "error": str(e)})
+
+        # Ranked Asset Allocation Model (RAAM) - Dow Award 2018 / @macro_quant_rick
+        try:
+            raam_result = run_ranked_allocation()
+            results.append({
+                "strategy": "ranked_allocation",
+                "selected": raam_result.get("selected_assets", []),
+                "cash_pct": raam_result.get("cash_pct", 0),
+                "invested_pct": raam_result.get("invested_pct", 0),
+            })
+            log(f"  ranked_allocation: OK ({len(raam_result.get('selected_assets', []))} assets, "
+                f"{raam_result.get('cash_pct', 0)}% cash)")
+        except Exception as e:
+            log(f"  ranked_allocation: ERROR - {e}")
+            results.append({"strategy": "ranked_allocation", "error": str(e)})
+
+        # Systematic Options Selling - straddles/strangles (@poojawadhwa.official)
+        try:
+            opts_result = run_systematic_options()
+            results.append({
+                "strategy": "systematic_options",
+                "signals": opts_result.get("total_signals", 0),
+                "all_signals": opts_result.get("all_signals", [])[:3],
+            })
+            log(f"  systematic_options: OK ({opts_result.get('total_signals', 0)} signals)")
+        except Exception as e:
+            log(f"  systematic_options: ERROR - {e}")
+            results.append({"strategy": "systematic_options", "error": str(e)})
     else:
         log("  New strategy modules not available (import failed)")
 

@@ -19,18 +19,17 @@ strategies:
     eod_flatten_time: "15:45"  # ET
     max_positions: 8              # Concentrate capital for meaningful moves
     max_orders_per_cycle: 6       # Quality over quantity
-    max_side_bias_pct: 65         # Block additional same-side candidates if >65% are one direction
     max_ideas_per_cycle: 10
     time_in_force: "day"
     extended_hours: true
     # Notional-based position sizing (replaces share-count)
     position_sizing:
       method: "notional_pct"      # Size by % of equity, not share count
-      base_pct_of_equity: 8.0     # 8% of equity per trade (~$8K on $100K)
-      high_confidence_pct: 12.0   # 12% for high-confidence setups (~$12K)
-      max_single_position_pct: 15.0  # Hard cap 15% per position
-      max_gross_exposure_pct: 60.0   # Desired 60%, hard-capped at 40% by live_trading_guardrails.yaml
-      min_notional: 2000          # Minimum $2K per trade
+      base_pct_of_equity: 20.0    # 20% of equity per trade (~$172 on $858)
+      high_confidence_pct: 25.0   # 25% for high-confidence setups (~$215)
+      max_single_position_pct: 30.0  # Hard cap 30% per position
+      max_gross_exposure_pct: 60.0   # Max 60% of equity deployed at once
+      min_notional: 25            # Minimum $25 per trade
       max_qty_cap: 10000          # High sanity cap; notional/max_single_position_pct remain primary guardrails
       min_size_multiplier: 0.40   # Floor for confidence/time-window downscaling
       fail_if_price_missing: true # Block order if no valid decision price can be resolved
@@ -51,10 +50,10 @@ strategies:
     bot: "mo2darkbot"
     bot_username: "@mo2darkbot"
     holding_period: "swing"
-    profit_target_pct: 8.0
+    profit_target_pct: 50.0
     stop_loss_pct: 2.0
-    trailing_stop_activation_pct: 3.0
-    trailing_stop_distance_pct: 1.5
+    trailing_stop_activation_pct: 10.0
+    trailing_stop_distance_pct: 2.0
     eod_flatten: false
     max_positions: 30
     max_orders_per_cycle: 10
@@ -63,11 +62,11 @@ strategies:
     extended_hours: false
     position_sizing:
       method: "notional_pct"
-      base_pct_of_equity: 5.0       # 5% of equity per trade (~$5K on $100K)
-      high_confidence_pct: 8.0      # 8% for high-confidence macro plays (~$8K)
+      base_pct_of_equity: 15.0      # 15% of equity per trade (~$129 on $858)
+      high_confidence_pct: 20.0     # 20% for high-confidence macro plays (~$172)
       max_single_position_pct: 12.0 # Hard cap 12% per position
       max_gross_exposure_pct: 80.0  # Can be more exposed for swing/long
-      min_notional: 1500
+      min_notional: 25
       max_qty_cap: 10000
       min_size_multiplier: 0.25
       fail_if_price_missing: true
@@ -75,9 +74,6 @@ strategies:
 # --- Execution Mode ---
 # "auto" = submit orders automatically 24/7 when optimal opportunities arise
 # "manual" = send order summary + upside analysis to Telegram, wait for approval
-# NOTE: These modes apply to PAPER trading accounts only.
-# For LIVE trading, live_trading_guardrails.yaml OVERRIDES these settings
-# and enforces require_human_approval: true regardless of what is set here.
 execution_mode:
   day_trade: "auto"
   medium_long: "auto"
