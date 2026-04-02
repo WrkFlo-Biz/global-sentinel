@@ -666,9 +666,14 @@ def _execute_alpaca_flatten(symbol: str, account: str = "paper_dt") -> Dict[str,
         return {"error": str(e)[:200]}
 
 
+TASTYTRADE_CASH_ACCOUNT = "5WI54260"
+TASTYTRADE_MARGIN_ACCOUNT = "5WI54194"
+
+
 def _execute_tastytrade(symbol: str, qty: int, side: str, order_type: str,
                         limit_price: Optional[float], asset_class: str = "us_equity",
-                        time_in_force: str = "day") -> Dict[str, Any]:
+                        time_in_force: str = "day",
+                        preferred_account: Optional[str] = None) -> Dict[str, Any]:
     """Execute trade via Tastytrade SDK."""
     try:
         from tastytrade import Session, Account
@@ -682,7 +687,12 @@ def _execute_tastytrade(symbol: str, qty: int, side: str, order_type: str,
         accounts = Account.get_accounts(session)
         if not accounts:
             return {"error": "tastytrade_no_accounts"}
-        acct = accounts[0]
+
+        target = preferred_account or TASTYTRADE_CASH_ACCOUNT
+        acct = next((a for a in accounts if a.account_number == target), None)
+        if not acct:
+            logger.warning("Tastytrade account %s not found, using first", target)
+            acct = accounts[0]
 
         if asset_class == "us_option":
             instrument = Option.get_option(session, symbol)
@@ -847,9 +857,13 @@ def route_and_execute(symbol: str, qty: int, side: str, order_type: str = "marke
             cat = classify_trade(symbol, qty, side, order_type, asset_class,
                                  is_day_trade, expiration)
             ac = "us_option" if "option" in cat else "us_equity"
+            # Route day trades to cash account (unlimited day trades, no PDT)
+            # Route swing/overnight trades to margin account
+            tt_account = TASTYTRADE_CASH_ACCOUNT if is_day_trade else TASTYTRADE_MARGIN_ACCOUNT
             exec_result = _execute_tastytrade(
                 symbol, qty, side, order_type, limit_price,
-                asset_class=ac, time_in_force=time_in_force)
+                asset_class=ac, time_in_force=time_in_force,
+                preferred_account=tt_account)
         elif broker == "ibkr":
             exec_result = _execute_ibkr(
                 symbol, qty, side, order_type, limit_price,
