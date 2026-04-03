@@ -459,7 +459,7 @@ def run_quantum_validation(dry_run=False):
         from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
         log("Connecting to IBM Quantum...")
-        service = QiskitRuntimeService(channel="ibm_quantum", token=IBM_TOKEN)
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=IBM_TOKEN)
 
         backends = service.backends(simulator=False, operational=True)
         if not backends:

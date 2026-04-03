@@ -92,7 +92,8 @@ class RegimeCapitalAllocator:
 
         # Chokepoint risk (max across all chokepoints)
         if chokepoint_scores:
-            state["chokepoint_risk"] = min(max(max(chokepoint_scores.values()), 0.0), 1.0)
+            numeric_vals = [v for v in chokepoint_scores.values() if isinstance(v, (int, float))]
+            state["chokepoint_risk"] = min(max(max(numeric_vals), 0.0), 1.0) if numeric_vals else 0.0
         else:
             state["chokepoint_risk"] = 0.0
 
