@@ -10,8 +10,9 @@ Based on @jadecapofficial 7 ICT lessons. Implements all 7 concepts:
 5. CHANGE OF CHARACTER (CHoCH) — First sign of trend change
 6. PREMIUM/DISCOUNT ZONES — Fibonacci-based buy/sell zones
 7. SMART MONEY TRAIL — Combined institutional order flow model
+8. 4-HOUR CANDLE STRATEGY — @keshavsmc ICT body sweep/CSD re-entry model
 
-Scans intraday 5-min bars on top symbols via Alpaca API for real-time data.
+Scans intraday 5-min bars + 4H bars on top symbols via Alpaca API for real-time data.
 Output: data/quantum_feed/ict_smc_signals.json
 """
 import json, os, datetime, traceback
@@ -53,6 +54,11 @@ STRONG_MOVE_MULTIPLIER = 2.0  # body must be 2x avg body for "strong move"
 FVG_MIN_GAP_PCT = 0.001       # minimum 0.1% gap for FVG
 SWING_LOOKBACK = 5             # bars to look back for swing highs/lows
 LIQUIDITY_SWEEP_TOLERANCE = 0.001  # 0.1% beyond prev high/low counts as sweep
+
+# 4-Hour Candle Strategy (@keshavsmc) thresholds
+FOUR_HOUR_SWEEP_TOLERANCE = 0.0015  # 0.15% beyond candle body counts as liquidity sweep
+FOUR_HOUR_MIN_BODY_PCT = 0.002     # minimum 0.2% body size to qualify as setup candle
+FOUR_HOUR_CSD_REENTRY_PCT = 0.3    # price must re-enter at least 30% of body for CSD confirmation
 
 
 def iso_now():
@@ -162,6 +168,263 @@ def fetch_daily(symbol: str, alpaca_client=None) -> Optional[pd.DataFrame]:
         except Exception:
             pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# 4-Hour Bar Fetching
+# ---------------------------------------------------------------------------
+
+def fetch_4h_bars(symbol: str, alpaca_client=None, days: int = 10) -> Optional[pd.DataFrame]:
+    """Fetch 4-hour bars for the 4H candle strategy. Alpaca first, yfinance fallback."""
+    # Try Alpaca (supports custom timeframes)
+    if alpaca_client is not None and ALPACA_AVAILABLE:
+        try:
+            end = datetime.datetime.now(datetime.timezone.utc)
+            start = end - datetime.timedelta(days=days)
+            tf = TimeFrame(4, TimeFrameUnit.Hour)
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=tf,
+                start=start,
+                end=end,
+            )
+            bars = alpaca_client.get_stock_bars(request)
+            df = bars.df
+            if df is not None and not df.empty:
+                if isinstance(df.index, pd.MultiIndex):
+                    df = df.reset_index(level=0, drop=True)
+                df.columns = [c.lower() for c in df.columns]
+                if len(df) >= 3:
+                    return df
+        except Exception as e:
+            log(f"  Alpaca 4H fetch error {symbol}: {e}")
+
+    # Fallback: yfinance (use 1h bars and resample to 4h)
+    if yf is not None:
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=f"{days}d", interval="1h")
+            if df is not None and not df.empty:
+                df.columns = [c.lower() for c in df.columns]
+                # Resample 1h -> 4h
+                df_4h = df.resample("4h").agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                }).dropna()
+                if len(df_4h) >= 3:
+                    return df_4h
+        except Exception as e:
+            log(f"  yfinance 4H fetch error {symbol}: {e}")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 8. 4-HOUR CANDLE STRATEGY (@keshavsmc ICT/SMC)
+# ---------------------------------------------------------------------------
+
+def detect_4h_candle_setups(df_4h: pd.DataFrame, df_5m: pd.DataFrame,
+                             symbol: str) -> List[Dict]:
+    """
+    4-Hour Candle Strategy (Smart Money Concepts by @keshavsmc):
+    
+    Setup identification:
+    1. Take the most recent COMPLETED 4H candle (not the current one)
+    2. Mark its Open and Close as the candle body boundaries
+    3. The body = fair value zone / institutional range
+    4. Check if current price action on 5-min has:
+       a) Swept liquidity beyond the body (wick below Open for bullish, above Close for bearish)
+       b) Shown CSD (Change in State of Delivery) = reversed back into the body
+       c) Is now re-entering or inside the body = entry zone
+    5. Entry: when price returns into the body after the sweep
+    6. Stop: below the sweep low (bullish) or above the sweep high (bearish)
+    7. Target: opposite side of the 4H candle body
+    """
+    setups = []
+
+    if df_4h is None or len(df_4h) < 3:
+        return setups
+    if df_5m is None or len(df_5m) < 10:
+        return setups
+
+    # Use the last 3 completed 4H candles for setups (skip current incomplete candle)
+    # The last row may be incomplete, so we look at [-3:-1] or [-2:]
+    for candle_offset in [-3, -2]:
+        try:
+            candle = df_4h.iloc[candle_offset]
+        except IndexError:
+            continue
+
+        candle_open = float(candle["open"])
+        candle_close = float(candle["close"])
+        candle_high = float(candle["high"])
+        candle_low = float(candle["low"])
+
+        # Determine candle direction
+        is_bullish = candle_close > candle_open
+        body_top = max(candle_open, candle_close)
+        body_bottom = min(candle_open, candle_close)
+        body_size = body_top - body_bottom
+        body_mid = (body_top + body_bottom) / 2
+
+        # Skip tiny candles (dojis)
+        if body_mid == 0 or body_size / body_mid < FOUR_HOUR_MIN_BODY_PCT:
+            continue
+
+        # Get current price from 5-min data
+        current_price = float(df_5m["close"].iloc[-1])
+        recent_5m_high = float(df_5m["high"].iloc[-20:].max())  # last ~1.5 hours
+        recent_5m_low = float(df_5m["low"].iloc[-20:].min())
+
+        # Also check all 5-min bars since this 4H candle closed
+        candle_ts = df_4h.index[candle_offset]
+        bars_after = df_5m[df_5m.index > candle_ts] if hasattr(candle_ts, 'strftime') else df_5m.iloc[-40:]
+
+        if len(bars_after) < 2:
+            continue
+
+        post_candle_high = float(bars_after["high"].max())
+        post_candle_low = float(bars_after["low"].min())
+
+        # === BULLISH SETUP ===
+        # Price swept below the body bottom (took buy-side liquidity below Open)
+        # then reversed back up into the body (CSD)
+        swept_below = post_candle_low < body_bottom * (1 - FOUR_HOUR_SWEEP_TOLERANCE)
+        price_back_in_body = current_price >= body_bottom and current_price <= body_top
+        price_reentered = current_price > body_bottom  # back above the bottom
+
+        if swept_below and price_reentered:
+            # CSD confirmation: price was below body, now back inside or above
+            reentry_depth = (current_price - body_bottom) / body_size if body_size > 0 else 0
+
+            # Score the setup
+            score = 0
+            if price_back_in_body:
+                score += 3  # In the body = prime entry zone
+            if reentry_depth >= FOUR_HOUR_CSD_REENTRY_PCT:
+                score += 2  # Deep re-entry confirms CSD
+            if is_bullish:
+                score += 1  # Aligned with candle direction
+
+            # Check for lower-TF structure shift (bullish engulfing or higher low on 5m)
+            last_5_bars = bars_after.iloc[-5:] if len(bars_after) >= 5 else bars_after
+            has_ltf_shift = False
+            for j in range(1, len(last_5_bars)):
+                if (float(last_5_bars["close"].iloc[j]) > float(last_5_bars["open"].iloc[j]) and
+                    float(last_5_bars["low"].iloc[j]) > float(last_5_bars["low"].iloc[j-1])):
+                    has_ltf_shift = True
+                    break
+
+            if has_ltf_shift:
+                score += 2
+
+            if score >= 4:  # Minimum threshold
+                stop = post_candle_low * 0.999  # Just below the sweep low
+                target = body_top  # Opposite side of body
+                risk = current_price - stop
+                reward = target - current_price
+                rr_ratio = round(reward / risk, 2) if risk > 0 else 0
+
+                setups.append({
+                    "symbol": symbol,
+                    "type": "4h_candle_setup",
+                    "strategy": "keshavsmc_4h_candle",
+                    "direction": "long",
+                    "setup_candle": {
+                        "open": round(candle_open, 4),
+                        "close": round(candle_close, 4),
+                        "high": round(candle_high, 4),
+                        "low": round(candle_low, 4),
+                        "body_top": round(body_top, 4),
+                        "body_bottom": round(body_bottom, 4),
+                        "is_bullish": is_bullish,
+                        "timestamp": str(candle_ts),
+                    },
+                    "entry": round(current_price, 4),
+                    "stop": round(stop, 4),
+                    "target": round(target, 4),
+                    "risk_reward": rr_ratio,
+                    "sweep_low": round(post_candle_low, 4),
+                    "csd_confirmed": reentry_depth >= FOUR_HOUR_CSD_REENTRY_PCT,
+                    "ltf_structure_shift": has_ltf_shift,
+                    "reentry_depth_pct": round(reentry_depth * 100, 1),
+                    "confluence_score": score,
+                    "max_score": 8,
+                    "confidence": round(score / 8, 2),
+                    "model": "4H Body Sweep → CSD Re-entry → LTF Shift → Target opposite body side",
+                    "source": "@keshavsmc 4H candle ICT/SMC strategy",
+                })
+
+        # === BEARISH SETUP ===
+        # Price swept above the body top (took sell-side liquidity above Close)
+        # then reversed back down into the body (CSD)
+        swept_above = post_candle_high > body_top * (1 + FOUR_HOUR_SWEEP_TOLERANCE)
+        price_below_top = current_price <= body_top
+
+        if swept_above and price_below_top:
+            reentry_depth = (body_top - current_price) / body_size if body_size > 0 else 0
+
+            score = 0
+            if price_back_in_body:
+                score += 3
+            if reentry_depth >= FOUR_HOUR_CSD_REENTRY_PCT:
+                score += 2
+            if not is_bullish:
+                score += 1  # Aligned with bearish candle
+
+            # Check for lower-TF bearish structure shift
+            last_5_bars = bars_after.iloc[-5:] if len(bars_after) >= 5 else bars_after
+            has_ltf_shift = False
+            for j in range(1, len(last_5_bars)):
+                if (float(last_5_bars["close"].iloc[j]) < float(last_5_bars["open"].iloc[j]) and
+                    float(last_5_bars["high"].iloc[j]) < float(last_5_bars["high"].iloc[j-1])):
+                    has_ltf_shift = True
+                    break
+
+            if has_ltf_shift:
+                score += 2
+
+            if score >= 4:
+                stop = post_candle_high * 1.001
+                target = body_bottom
+                risk = stop - current_price
+                reward = current_price - target
+                rr_ratio = round(reward / risk, 2) if risk > 0 else 0
+
+                setups.append({
+                    "symbol": symbol,
+                    "type": "4h_candle_setup",
+                    "strategy": "keshavsmc_4h_candle",
+                    "direction": "short",
+                    "setup_candle": {
+                        "open": round(candle_open, 4),
+                        "close": round(candle_close, 4),
+                        "high": round(candle_high, 4),
+                        "low": round(candle_low, 4),
+                        "body_top": round(body_top, 4),
+                        "body_bottom": round(body_bottom, 4),
+                        "is_bullish": is_bullish,
+                        "timestamp": str(candle_ts),
+                    },
+                    "entry": round(current_price, 4),
+                    "stop": round(stop, 4),
+                    "target": round(target, 4),
+                    "risk_reward": rr_ratio,
+                    "sweep_high": round(post_candle_high, 4),
+                    "csd_confirmed": reentry_depth >= FOUR_HOUR_CSD_REENTRY_PCT,
+                    "ltf_structure_shift": has_ltf_shift,
+                    "reentry_depth_pct": round(reentry_depth * 100, 1),
+                    "confluence_score": score,
+                    "max_score": 8,
+                    "confidence": round(score / 8, 2),
+                    "model": "4H Body Sweep → CSD Re-entry → LTF Shift → Target opposite body side",
+                    "source": "@keshavsmc 4H candle ICT/SMC strategy",
+                })
+
+    return setups
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +1039,7 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
         "all_sweeps": [],
         "all_bos": [],
         "all_choch": [],
+        "all_4h_setups": [],
         "all_premium_discount": [],
         "smart_money_signals": [],
         "errors": [],
@@ -819,6 +1083,23 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
                 sym, obs, fvgs, sweeps, bos_events, choch_events, pd_zone
             )
 
+            # 8. 4-Hour Candle Strategy (@keshavsmc)
+            four_h_setups = []
+            try:
+                df_4h = fetch_4h_bars(sym, alpaca_client)
+                if df_4h is not None and len(df_4h) >= 3:
+                    four_h_setups = detect_4h_candle_setups(df_4h, df, sym)
+                    if four_h_setups:
+                        # Boost SMT signals that align with 4H setups
+                        for setup in four_h_setups:
+                            smt_signals.append({
+                                **setup,
+                                "type": "smart_money_trail",
+                                "sub_type": "4h_candle_setup",
+                            })
+            except Exception as e:
+                log(f"    {sym} 4H candle: {e}")
+
             # Per-symbol summary
             sym_data = {
                 "order_blocks": len(obs),
@@ -828,6 +1109,7 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
                 "liquidity_sweeps": len(sweeps),
                 "bos_events": len(bos_events),
                 "choch_events": len(choch_events),
+                "four_h_setups": len(four_h_setups),
                 "zone": pd_zone.get("zone", "unknown"),
                 "bias": pd_zone.get("bias", "unknown"),
                 "position_in_range": pd_zone.get("position_in_range", 0),
@@ -835,6 +1117,12 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
                 "current_price": pd_zone.get("current_price", 0),
             }
             output["symbols"][sym] = sym_data
+
+            # Aggregate 4H setups
+            if four_h_setups:
+                if "all_4h_setups" not in output:
+                    output["all_4h_setups"] = []
+                output["all_4h_setups"].extend(four_h_setups)
 
             # Aggregate
             output["all_order_blocks"].extend(obs)
@@ -847,8 +1135,8 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
             output["smart_money_signals"].extend(smt_signals)
 
             log(f"    {sym}: OBs={len(obs)} FVGs={len(fvgs)} Sweeps={len(sweeps)} "
-                f"BOS={len(bos_events)} CHoCH={len(choch_events)} Zone={pd_zone.get('zone', '?')} "
-                f"SMT_signals={len(smt_signals)}")
+                f"BOS={len(bos_events)} CHoCH={len(choch_events)} 4H={len(four_h_setups)} "
+                f"Zone={pd_zone.get('zone', '?')} SMT_signals={len(smt_signals)}")
 
         except Exception as e:
             log(f"    {sym}: ERROR - {e}")
@@ -869,6 +1157,7 @@ def run_ict_smc_engine(symbols: List[str] = None) -> Dict:
         "total_sweeps": len(output["all_sweeps"]),
         "total_bos": len(output["all_bos"]),
         "total_choch": len(output["all_choch"]),
+        "total_4h_setups": len(output.get("all_4h_setups", [])),
         "total_smart_money_signals": len(output["smart_money_signals"]),
         "symbols_in_discount": [s for s, d in output["symbols"].items() if d.get("zone") == "discount"],
         "symbols_in_premium": [s for s, d in output["symbols"].items() if d.get("zone") == "premium"],

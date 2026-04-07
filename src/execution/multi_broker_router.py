@@ -234,33 +234,86 @@ def _check_alpaca_paper_health(acct_label: str, key_env: str, secret_env: str) -
 
 
 def _check_tastytrade_health() -> BrokerHealth:
-    """Check Tastytrade balance via SDK Session login."""
+    """Check Tastytrade balance via REST session login."""
     h = BrokerHealth()
     h.last_check = time.time()
     try:
-        from tastytrade import Session, Account
         username = ENV.get("TASTYTRADE_USERNAME", "") or os.getenv("TASTYTRADE_USERNAME", "")
         password = ENV.get("TASTYTRADE_PASSWORD", "") or os.getenv("TASTYTRADE_PASSWORD", "")
-        if not username or not password:
+        remember_token = ENV.get("TASTYTRADE_REMEMBER_TOKEN", "") or os.getenv("TASTYTRADE_REMEMBER_TOKEN", "")
+        if not username or (not password and not remember_token):
             h.error = "no_credentials"
             return h
 
-        session = Session(username, password)
-        accounts = Account.get_accounts(session)
+        auth_attempts: List[tuple[str, Dict[str, Any]]] = []
+        if remember_token:
+            auth_attempts.append(("remember_token", {"login": username, "remember-token": remember_token}))
+        if password:
+            auth_attempts.append(("password", {"login": username, "password": password}))
+
+        session_data: Dict[str, Any] = {}
+        auth_method = ""
+        last_error = ""
+        for auth_method, auth_payload in auth_attempts:
+            body = json.dumps(auth_payload).encode()
+            req = urllib.request.Request(
+                "https://api.tastyworks.com/sessions",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    session_data = json.loads(resp.read())
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode() if e.fp else str(e)
+                last_error = f"http_{e.code}:{detail[:120]}"
+                if auth_method == "remember_token" and password and e.code in (400, 401, 403):
+                    logger.warning("Tastytrade remember-token rejected; retrying password auth")
+                    continue
+                raise
+
+        if not session_data:
+            h.error = last_error or "tastytrade_auth_failed"
+            return h
+
+        token = (session_data.get("data") or {}).get("session-token", "")
+        if not token:
+            h.error = "no_session_token"
+            return h
+
+        acct_req = urllib.request.Request("https://api.tastyworks.com/customers/me/accounts")
+        acct_req.add_header("Authorization", token)
+        with urllib.request.urlopen(acct_req, timeout=15) as resp:
+            account_data = json.loads(resp.read())
+
+        accounts = (account_data.get("data") or {}).get("items", [])
         if not accounts:
             h.error = "no_accounts"
             return h
 
-        acct = accounts[0]
-        balances = acct.get_balances(session)
+        acct = accounts[0].get("account", {})
+        acct_num = acct.get("account-number", "")
+        bal_req = urllib.request.Request(f"https://api.tastyworks.com/accounts/{acct_num}/balances")
+        bal_req.add_header("Authorization", token)
+        with urllib.request.urlopen(bal_req, timeout=15) as resp:
+            balances = json.loads(resp.read())
+
+        bal_data = balances.get("data") or {}
         h.connected = True
-        h.buying_power = float(getattr(balances, "derivative_buying_power", 0) or 0)
-        h.equity = float(getattr(balances, "net_liquidating_value", 0) or 0)
+        h.buying_power = float(bal_data.get("derivative-buying-power", bal_data.get("buying-power", 0)) or 0)
+        h.equity = float(bal_data.get("net-liquidating-value", 0) or 0)
         h.day_trades_remaining = 999
         h.extra = {
-            "account_number": acct.account_number,
-            "cash_balance": str(getattr(balances, "cash_balance", 0)),
-            "maintenance_excess": str(getattr(balances, "maintenance_excess", "N/A")),
+            "account_number": acct_num,
+            "cash_balance": str(bal_data.get("cash-balance", 0)),
+            "maintenance_excess": str(bal_data.get("maintenance-excess", "N/A")),
+            "auth_method": auth_method,
+            # The installed tastytrade SDK login flow is stale on this VM.
+            # Report health, but do not route orders here until execution is updated.
+            "execution_supported": False,
+            "execution_reason": "sdk_login_deprecated",
         }
     except Exception as e:
         h.error = str(e)[:200]
@@ -505,6 +558,8 @@ def select_broker(symbol: str, qty: int, side: str, order_type: str,
             if paper_h and paper_h.connected:
                 h = paper_h  # Use paper account's bp/equity/day trades
         if not h.connected:
+            continue
+        if not h.extra.get("execution_supported", True):
             continue
         if min_buying_power > 0 and h.buying_power < min_buying_power:
             continue
@@ -988,7 +1043,8 @@ def route_conditional_order(order: Dict[str, Any], equity: float) -> bool:
     account = order.get("account", "daytrade")
     notional_pct = order.get("notional_pct", 5.0)
 
-    acct = "paper_dt" if account == "daytrade" else "paper_ml"
+    live_allowed = str(ENV.get("ALPACA_ALLOW_LIVE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    acct = "live" if (account == "daytrade" and live_allowed) else ("paper_dt" if account == "daytrade" else "paper_ml")
 
     if action == "flatten":
         result = _execute_alpaca_flatten(symbol, account=acct)
@@ -998,7 +1054,10 @@ def route_conditional_order(order: Dict[str, Any], equity: float) -> bool:
         return ok
 
     elif action in ("buy", "sell_short"):
-        notional_val = max(round(equity * notional_pct / 100, 2), 1000)
+        raw_notional = round(max(equity, 0) * max(float(notional_pct), 0.0) / 100.0, 2)
+        notional_floor = 25.0
+        notional_cap = round(max(equity * 0.95, notional_floor), 2) if equity > 0 else notional_floor
+        notional_val = round(min(max(raw_notional, notional_floor), notional_cap), 2)
         side = "buy" if action == "buy" else "sell"
 
         result = route_and_execute(

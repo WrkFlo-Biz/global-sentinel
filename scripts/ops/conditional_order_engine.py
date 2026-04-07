@@ -125,6 +125,8 @@ BREAKING_NEWS_KEYWORDS = {
 
 POLL_INTERVAL_SECONDS = 30
 COOLDOWN_SECONDS = 3600  # 1 hour cooldown between triggering same package
+ORB_SIGNAL_MAX_AGE_SECONDS = 180
+ORB_SIGNAL_COOLDOWN_SECONDS = 900
 
 
 class ConditionalOrderEngine:
@@ -134,17 +136,31 @@ class ConditionalOrderEngine:
         self.project_root = PROJECT_ROOT
         self.signal_path = self.project_root / "data" / "quantum_feed" / "latest_signal.json"
         self.polymarket_path = self.project_root / "data" / "quantum_feed" / "polymarket_geopolitical.json"
+        self.orb_path = self.project_root / "data" / "quantum_feed" / "orb_signals.json"
         self.log_path = self.project_root / "data" / "conditional_order_log.jsonl"
         self._last_triggers: Dict[str, float] = {}  # package_name -> last trigger timestamp
         self._last_war_intensity: Optional[float] = None
         self._last_war_intensity_time: Optional[float] = None
 
         # Alpaca config from environment
-        self._daytrade_key = os.environ.get("ALPACA_API_KEY_DAYTRADE") or os.environ.get("ALPACA_API_KEY", "")
-        self._daytrade_secret = os.environ.get("ALPACA_SECRET_KEY_DAYTRADE") or os.environ.get("ALPACA_SECRET_KEY", "")
+        self._live_daytrade = str(os.environ.get("ALPACA_ALLOW_LIVE", "")).strip().lower() in {"1", "true", "yes", "on"}
+        self._daytrade_key = (
+            os.environ.get("ALPACA_API_KEY_LIVE", "")
+            if self._live_daytrade
+            else (os.environ.get("ALPACA_API_KEY_DAYTRADE") or os.environ.get("ALPACA_API_KEY", ""))
+        )
+        self._daytrade_secret = (
+            os.environ.get("ALPACA_SECRET_KEY_LIVE", "")
+            if self._live_daytrade
+            else (os.environ.get("ALPACA_SECRET_KEY_DAYTRADE") or os.environ.get("ALPACA_SECRET_KEY", ""))
+        )
         self._medlong_key = os.environ.get("ALPACA_API_KEY_MEDLONG", "")
         self._medlong_secret = os.environ.get("ALPACA_SECRET_KEY_MEDLONG", "")
-        self._base_url = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        self._base_url = (
+            "https://api.alpaca.markets"
+            if self._live_daytrade
+            else os.environ.get("ALPACA_BASE_URL_DAYTRADE") or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        )
 
     def _read_json(self, path: Path) -> Optional[Dict]:
         try:
@@ -157,6 +173,32 @@ class ConditionalOrderEngine:
     def _is_cooled_down(self, package_name: str) -> bool:
         last = self._last_triggers.get(package_name, 0)
         return (time.time() - last) >= COOLDOWN_SECONDS
+
+    def _is_recent_timestamp(self, ts: Optional[str], max_age_seconds: int) -> bool:
+        if not ts:
+            return False
+        try:
+            age = time.time() - datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return False
+        return 0 <= age <= max_age_seconds
+
+    def _orb_notional_pct(self, signal: Dict[str, Any]) -> float:
+        try:
+            size_pct = float(signal.get("size_pct", 0) or 0)
+        except (TypeError, ValueError):
+            size_pct = 0.0
+        base_pct = 20.0
+        notional_pct = round(base_pct * max(size_pct, 0.0), 2)
+        return max(2.5, min(notional_pct, 30.0))
+
+    def _calculate_notional(self, equity: float, notional_pct: float) -> float:
+        if equity <= 0:
+            return 25.0
+        raw_notional = round(equity * max(notional_pct, 0.0) / 100.0, 2)
+        notional_floor = 25.0 if equity >= 25 else round(max(equity * 0.95, equity), 2)
+        notional_cap = round(max(equity * 0.95, notional_floor), 2)
+        return round(min(max(raw_notional, notional_floor), notional_cap), 2)
 
     def _log_trigger(self, package_name: str, trigger_reason: str, details: Dict):
         entry = {
@@ -193,7 +235,7 @@ class ConditionalOrderEngine:
         creds = self._get_account_info(account)
         try:
             resp = req.get(
-                f"{creds[base_url]}/v2/account",
+                f"{creds['base_url']}/v2/account",
                 headers={
                     "APCA-API-KEY-ID": creds["api_key"],
                     "APCA-API-SECRET-KEY": creds["secret_key"],
@@ -212,7 +254,7 @@ class ConditionalOrderEngine:
         creds = self._get_account_info(account)
         try:
             resp = req.get(
-                f"{creds[base_url]}/v2/positions",
+                f"{creds['base_url']}/v2/positions",
                 headers={
                     "APCA-API-KEY-ID": creds["api_key"],
                     "APCA-API-SECRET-KEY": creds["secret_key"],
@@ -274,8 +316,7 @@ class ConditionalOrderEngine:
             elif action in ("buy", "sell_short"):
                 equity = self._get_account_equity(account)
                 notional_pct = order.get("notional_pct", 5.0)
-                notional = round(equity * notional_pct / 100, 2)
-                notional = max(notional, 1000)  # Minimum $1K
+                notional = self._calculate_notional(equity, float(notional_pct))
 
                 side = "buy" if action == "buy" else "sell"
                 order_data = {
@@ -354,12 +395,12 @@ class ConditionalOrderEngine:
         # Check for rapid velocity changes
         for alert in velocity_alerts:
             if alert.get("direction") == "SURGING" and "peace" in alert.get("event", "").lower():
-                return ("PEACE_DETECTED", f"Peace market surging: {alert[event]} velocity={alert[velocity]}%/hr",
+                return ("PEACE_DETECTED", f"Peace market surging: {alert.get('event')} velocity={alert.get('velocity')}%/hr",
                         alert)
             if alert.get("direction") == "SURGING" and any(
                 kw in alert.get("event", "").lower() for kw in ["war", "escalat", "attack"]
             ):
-                return ("ESCALATION_DETECTED", f"Escalation market surging: {alert[event]} velocity={alert[velocity]}%/hr",
+                return ("ESCALATION_DETECTED", f"Escalation market surging: {alert.get('event')} velocity={alert.get('velocity')}%/hr",
                         alert)
 
         return None
@@ -447,6 +488,140 @@ class ConditionalOrderEngine:
 
         return None
 
+    def _check_orb_triggers(self) -> Optional[str]:
+        """Submit fresh ORB actionable signals through the router."""
+        data = self._read_json(self.orb_path)
+        phase = str((data or {}).get("phase", "")).upper()
+        if not data or phase not in {"MONITORING", "SNAPSHOT"}:
+            return None
+        if not self._is_recent_timestamp(data.get("timestamp"), ORB_SIGNAL_MAX_AGE_SECONDS):
+            return None
+
+        actionable = data.get("actionable", [])
+        if not actionable:
+            return None
+
+        current_positions = {
+            pos.get("symbol", "")
+            for pos in self._get_positions("daytrade")
+            if isinstance(pos, dict)
+        }
+
+        conviction_rank = {"HIGHEST": 0, "HIGH": 1, "MEDIUM": 2}
+        actionable = sorted(
+            actionable,
+            key=lambda sig: conviction_rank.get(sig.get("conviction", "MEDIUM"), 9),
+        )
+
+        for sig in actionable:
+            symbol = sig.get("symbol", "")
+            orb_signal = ((sig.get("orb") or {}).get("signal") or "").upper()
+            aligned_direction = ((sig.get("multi_tf") or {}).get("aligned_direction") or "").upper()
+            if not symbol or symbol in current_positions:
+                continue
+
+            if orb_signal == "BREAKOUT_LONG":
+                action = "buy"
+            elif orb_signal == "BREAKOUT_SHORT":
+                action = "sell_short"
+            elif orb_signal == "FADE_BREAKOUT" and aligned_direction == "BULLISH":
+                action = "buy"
+            elif orb_signal == "FADE_BREAKOUT" and aligned_direction == "BEARISH":
+                action = "sell_short"
+            else:
+                continue
+
+            if action == "sell_short" and self._live_daytrade:
+                # Route ORB shorts as put options via TastyTrade (not Alpaca stock shorts)
+                logger.info("Routing ORB short %s as put option via TastyTrade", symbol)
+                execution = sig.get("execution") or {}
+                entry_price = execution.get("entry", 0)
+                stop_price = execution.get("stop", 0)
+                target_price = execution.get("target", 0)
+
+                # Build option order for the smart router
+                from datetime import date, timedelta
+                # Use weekly expiry (this Friday or next Friday if today is Fri)
+                today = date.today()
+                days_to_friday = (4 - today.weekday()) % 7
+                if days_to_friday == 0:
+                    days_to_friday = 7  # next Friday if today is Friday
+                expiry = today + timedelta(days=days_to_friday)
+
+                option_order = {
+                    "symbol": symbol,
+                    "action": "buy",  # buying puts = bearish
+                    "account": "daytrade",
+                    "asset_class": "us_option",
+                    "option_type": "put",
+                    "expiration": expiry.isoformat(),
+                    "strike_selection": "atm",  # at-the-money
+                    "notional_pct": self._orb_notional_pct(sig),
+                    "reason": f"orb_{orb_signal.lower()}_{aligned_direction.lower()}_put",
+                    "broker_preference": "tastytrade",
+                    "entry_ref": entry_price,
+                    "stop_ref": stop_price,
+                    "target_ref": target_price,
+                    "is_day_trade": True,
+                }
+                # Try smart router for option routing
+                if _SMART_ROUTER:
+                    try:
+                        equity = self._get_account_equity("daytrade")
+                        from src.execution.multi_broker_router import route_and_execute
+                        notional_pct = option_order.get("notional_pct", 5.0)
+                        notional_val = round(max(equity, 0) * max(float(notional_pct), 0.0) / 100.0, 2)
+                        notional_val = max(notional_val, 25.0)
+                        result = route_and_execute(
+                            symbol=symbol, qty=1, side="buy", order_type="market",
+                            asset_class="us_option", is_day_trade=True,
+                            expiration=expiry.isoformat(),
+                        )
+                        ok = result.get("execution", {}).get("status") == "submitted"
+                        if ok:
+                            logger.info("[OPTION-ROUTER] ORB short %s routed as PUT via %s",
+                                       symbol, result.get("broker", "?"))
+                            trigger_key = f"ORB_{symbol}_{orb_signal}_{entry_price}"
+                            self._log_trigger(trigger_key, f"ORB short->put for {symbol}",
+                                            {"option_type": "put", "expiry": expiry.isoformat()})
+                            self._last_triggers[trigger_key] = time.time()
+                            return trigger_key
+                        else:
+                            logger.warning("[OPTION-ROUTER] Put order failed for %s: %s",
+                                         symbol, result.get("execution", {}).get("error", "?"))
+                    except Exception as opt_exc:
+                        logger.warning("[OPTION-ROUTER] Error routing put for %s: %s", symbol, opt_exc)
+                # If option routing fails, log and continue (don't fall through to stock short)
+                continue
+
+            trigger_key = f"ORB_{symbol}_{orb_signal}_{(sig.get('execution') or {}).get('entry')}"
+            last = self._last_triggers.get(trigger_key, 0)
+            if (time.time() - last) < ORB_SIGNAL_COOLDOWN_SECONDS:
+                continue
+
+            order = {
+                "symbol": symbol,
+                "action": action,
+                "account": "daytrade",
+                "notional_pct": self._orb_notional_pct(sig),
+                "reason": f"orb_{orb_signal.lower()}_{aligned_direction.lower()}",
+            }
+            details = {
+                "symbol": symbol,
+                "orb_signal": orb_signal,
+                "conviction": sig.get("conviction"),
+                "size_pct": sig.get("size_pct"),
+                "entry": (sig.get("execution") or {}).get("entry"),
+                "stop": (sig.get("execution") or {}).get("stop"),
+                "target": (sig.get("execution") or {}).get("target"),
+            }
+
+            self._log_trigger(trigger_key, f"ORB actionable signal for {symbol}", details)
+            if self._submit_order(order):
+                self._last_triggers[trigger_key] = time.time()
+                return trigger_key
+        return None
+
     def run_once(self) -> Optional[str]:
         """Run a single check cycle. Returns triggered package name or None."""
         # Check triggers in priority order
@@ -459,6 +634,9 @@ class ConditionalOrderEngine:
                     return package_name
                 else:
                     logger.debug("Package %s triggered but in cooldown", package_name)
+        orb_trigger = self._check_orb_triggers()
+        if orb_trigger:
+            return orb_trigger
         return None
 
     def run_loop(self):
@@ -466,6 +644,7 @@ class ConditionalOrderEngine:
         logger.info("Conditional Order Engine started")
         logger.info("Monitoring: %s", self.signal_path)
         logger.info("Monitoring: %s", self.polymarket_path)
+        logger.info("Monitoring: %s", self.orb_path)
         logger.info("Poll interval: %ds, Cooldown: %ds", POLL_INTERVAL_SECONDS, COOLDOWN_SECONDS)
         logger.info("Packages: %s", list(ORDER_PACKAGES.keys()))
 

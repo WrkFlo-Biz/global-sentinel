@@ -316,6 +316,62 @@ class OpeningRangeTracker:
                 self._avg_volumes[sym] = 1_000_000
         log(f"Average volumes loaded for {len(self._avg_volumes)} symbols")
 
+    def rebuild_opening_ranges_from_history(self):
+        """
+        Rebuild missing opening ranges from today's 5-minute history.
+        This lets the daemon recover if it is restarted after 9:45 ET.
+        """
+        rebuilt = 0
+        today_et = et_now().date()
+        for sym in self.symbols:
+            if sym in self.opening_ranges:
+                continue
+            try:
+                t = yf.Ticker(sym)
+                df = t.history(period="1d", interval="5m")
+                if df.empty:
+                    continue
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize(ET)
+                else:
+                    df.index = df.index.tz_convert(ET)
+                session_df = df[df.index.date == today_et]
+                if session_df.empty:
+                    continue
+                or_bars = session_df[
+                    (session_df.index.time >= datetime.time(9, 30))
+                    & (session_df.index.time < datetime.time(9, 45))
+                ]
+                if or_bars.empty:
+                    continue
+
+                or_high = float(or_bars["High"].max())
+                or_low = float(or_bars["Low"].min())
+                or_range = or_high - or_low
+                or_mid = (or_high + or_low) / 2
+                or_volume = int(or_bars["Volume"].sum())
+
+                self.opening_ranges[sym] = {
+                    "or_high": round(or_high, 4),
+                    "or_low": round(or_low, 4),
+                    "or_range": round(or_range, 4),
+                    "or_midpoint": round(or_mid, 4),
+                    "or_volume": or_volume,
+                    "bar_count": len(or_bars),
+                }
+                self.breakout_state.setdefault(
+                    sym,
+                    {"direction": None, "hold_count": 0, "triggered": False, "signal": "RANGE_BOUND"},
+                )
+                rebuilt += 1
+            except Exception as e:
+                log(f"Historical OR rebuild error {sym}: {e}")
+
+        if rebuilt:
+            self.or_locked = True
+            log(f"Opening Range rebuilt from intraday history for {rebuilt} symbols")
+        return rebuilt
+
     def accumulate_or_bar(self, symbol, high, low, close, volume, bar_time):
         """Add a bar to the Opening Range accumulation (called during 9:30-9:45)."""
         self.or_bars[symbol].append({
@@ -349,7 +405,11 @@ class OpeningRangeTracker:
                 "direction": None, "hold_count": 0,
                 "triggered": False, "signal": "RANGE_BOUND"
             }
-        self.or_locked = True
+        if len(self.opening_ranges) < len(self.symbols):
+            now_et = et_now()
+            if now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 45):
+                self.rebuild_opening_ranges_from_history()
+        self.or_locked = bool(self.opening_ranges)
         log(f"Opening Range LOCKED for {len(self.opening_ranges)} symbols")
         for sym, orng in self.opening_ranges.items():
             log(f"  {sym}: H={orng['or_high']:.2f} L={orng['or_low']:.2f} R={orng['or_range']:.2f}")
@@ -602,10 +662,16 @@ class CombinedSignalEngine:
 
             # AMD phase context
             sym_phase = amd_by_sym.get(sym, {})
+            direction = "long"
+            if orb_type == "BREAKOUT_SHORT":
+                direction = "short"
+            elif orb_type == "FADE_BREAKOUT" and aligned_dir == "BEARISH":
+                direction = "short"
 
             combined = {
                 "symbol": sym,
                 "timestamp": iso_now(),
+                "direction": direction,
                 "orb": orb_sig,
                 "multi_tf": {
                     "weekly": mtf.get("weekly", "NEUTRAL"),
@@ -656,11 +722,14 @@ class CombinedSignalEngine:
             return "NONE", "NO_TRADE"
 
         if orb_type in ("BREAKOUT_LONG", "BREAKOUT_SHORT", "FADE_BREAKOUT"):
-            # Day trade -> 0DTE options on Tastytrade or IBKR
+            live_allowed = os.getenv("ALPACA_ALLOW_LIVE", "").strip().lower() in {"1", "true", "yes", "on"}
+            # Day trade -> prefer a currently-usable execution route.
             if alignment >= 4:
                 return "tastytrade_cash", "0DTE_options"
+            elif live_allowed:
+                return "alpaca_live", "shares"
             elif alignment >= 3:
-                return "ibkr_cash", "0DTE_options"
+                return "alpaca_paper", "shares"
             else:
                 return "alpaca_paper", "shares"
         else:
@@ -865,6 +934,11 @@ class ORBDaemon:
             sym = g.get("symbol", "")
             overnight_gaps[sym] = g
 
+        if not self.orb.opening_ranges:
+            now_et = et_now()
+            if now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 45):
+                self.orb.rebuild_opening_ranges_from_history()
+
         # Fetch current bars and evaluate breakouts
         bars = self.orb.fetch_current_bars()
         orb_signals = {}
@@ -966,32 +1040,9 @@ def run_orb_mtf_snapshot():
         log("Using existing Opening Range from today")
 
     # If no OR yet but market is open past 9:45, try to compute from intraday bars
-    if not has_or and now_et.hour >= 9 and now_et.minute >= 45:
+    if not has_or and (now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 45)):
         log("Computing Opening Range from intraday bars...")
-        for sym in SYMBOLS:
-            try:
-                t = yf.Ticker(sym)
-                df = t.history(period="1d", interval="5m")
-                if df.empty:
-                    continue
-                # Filter bars from 9:30-9:45 ET
-                df.index = df.index.tz_convert(ET)
-                or_start = df.index[0].replace(hour=9, minute=30, second=0)
-                or_end_ts = df.index[0].replace(hour=9, minute=45, second=0)
-                or_bars = df[(df.index >= or_start) & (df.index < or_end_ts)]
-                if or_bars.empty:
-                    continue
-                orb.opening_ranges[sym] = {
-                    "or_high": round(float(or_bars["High"].max()), 4),
-                    "or_low": round(float(or_bars["Low"].min()), 4),
-                    "or_range": round(float(or_bars["High"].max() - or_bars["Low"].min()), 4),
-                    "or_midpoint": round(float((or_bars["High"].max() + or_bars["Low"].min()) / 2), 4),
-                    "or_volume": int(or_bars["Volume"].sum()),
-                    "bar_count": len(or_bars),
-                }
-                orb.or_locked = True
-            except Exception as e:
-                log(f"OR compute error {sym}: {e}")
+        orb.rebuild_opening_ranges_from_history()
         orb.fetch_avg_volume()
 
     # Evaluate current breakout state if OR is locked
