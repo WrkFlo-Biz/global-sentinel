@@ -22,13 +22,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import ssl
 import sys
 import time
 import traceback
 import urllib.request
 import urllib.error
-import urllib.parse
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,45 +68,6 @@ def _load_env() -> Dict[str, str]:
 
 
 ENV = _load_env()
-IBKR_CP_BASE_URL = os.getenv("IBKR_CP_BASE_URL", "https://127.0.0.1:5000/v1/api")
-IBKR_ACCOUNT = ENV.get("IBKR_ACCOUNT_1", "") or os.getenv("IBKR_ACCOUNT_1", "")
-_IBKR_SSL_CONTEXT = ssl.create_default_context()
-_IBKR_SSL_CONTEXT.check_hostname = False
-_IBKR_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
-
-
-def _ibkr_cp_request(path: str, method: str = "GET",
-                     payload: Optional[Dict[str, Any]] = None,
-                     timeout: int = 10) -> Any:
-    url = f"{IBKR_CP_BASE_URL}{path}"
-    data = None
-    req = urllib.request.Request(url, method=method)
-    if payload is not None:
-        data = json.dumps(payload).encode()
-        req.data = data
-        req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout, context=_IBKR_SSL_CONTEXT) as resp:
-        body = resp.read()
-        if not body:
-            return {}
-        return json.loads(body.decode())
-
-
-def _ibkr_resolve_stock_conid(symbol: str) -> int:
-    """Resolve an IBKR stock symbol to conid via Client Portal search."""
-    query = urllib.parse.urlencode({"symbol": symbol, "name": "true"})
-    data = _ibkr_cp_request(f"/iserver/secdef/search?{query}", timeout=12)
-    if not isinstance(data, list) or not data:
-        raise RuntimeError(f"no secdef results for {symbol}")
-
-    sym_upper = symbol.upper()
-    for item in data:
-        if str(item.get("symbol", "")).upper() == sym_upper and item.get("conid"):
-            return int(item["conid"])
-    for item in data:
-        if item.get("conid"):
-            return int(item["conid"])
-    raise RuntimeError(f"no conid found for {symbol}")
 
 # ---------------------------------------------------------------------------
 # Broker configuration
@@ -362,41 +321,37 @@ def _check_tastytrade_health() -> BrokerHealth:
 
 
 def _check_ibkr_health() -> BrokerHealth:
-    """Check IBKR Client Portal gateway health via localhost:5000."""
+    """Check IBKR balance via ib_async connection to localhost:4001."""
     h = BrokerHealth()
     h.last_check = time.time()
     try:
-        auth = _ibkr_cp_request("/iserver/auth/status", timeout=8)
-        authenticated = bool(auth.get("authenticated", False))
-        if not authenticated:
-            h.error = "client_portal_not_authenticated"
-            h.extra = {
-                "api_mode": "client_portal",
-                "base_url": IBKR_CP_BASE_URL,
-                "execution_supported": False,
-                "execution_reason": "not_authenticated",
-            }
-            return h
+        import asyncio
+        from ib_async import IB
+
+        async def _probe():
+            ib = IB()
+            await ib.connectAsync("127.0.0.1", 4001, clientId=99, timeout=8)
+            summary = ib.accountSummary()
+            data = {}
+            for item in summary:
+                data[item.tag] = item.value
+            ib.disconnect()
+            return data
+
+        loop = asyncio.new_event_loop()
+        try:
+            data = loop.run_until_complete(_probe())
+        finally:
+            loop.close()
 
         h.connected = True
+        h.buying_power = float(data.get("BuyingPower", 0))
+        h.equity = float(data.get("NetLiquidation", 0))
         h.day_trades_remaining = 999
         h.extra = {
-            "api_mode": "client_portal",
-            "base_url": IBKR_CP_BASE_URL,
-            "account": IBKR_ACCOUNT,
-            "execution_supported": bool(IBKR_ACCOUNT),
+            "available_funds": data.get("AvailableFunds", "0"),
+            "total_cash": data.get("TotalCashValue", "0"),
         }
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            h.error = "client_portal_not_authenticated"
-            h.extra = {
-                "api_mode": "client_portal",
-                "base_url": IBKR_CP_BASE_URL,
-                "execution_supported": False,
-                "execution_reason": "not_authenticated",
-            }
-        else:
-            h.error = f"ibkr_http_{e.code}"
     except Exception as e:
         h.error = str(e)[:200]
     return h
@@ -837,67 +792,48 @@ def _execute_tastytrade(symbol: str, qty: int, side: str, order_type: str,
 def _execute_ibkr(symbol: str, qty: int, side: str, order_type: str,
                   limit_price: Optional[float], asset_class: str = "us_equity",
                   exchange: str = "SMART") -> Dict[str, Any]:
-    """Execute trade via IBKR Client Portal REST on localhost:5000."""
+    """Execute trade via IBKR ib_async."""
     try:
-        if not IBKR_ACCOUNT:
-            return {"error": "ibkr_account_missing"}
-        if asset_class not in ("auto", "us_equity", "stock", "international"):
-            return {"error": f"ibkr_client_portal_unsupported_asset_class:{asset_class}"}
+        import asyncio
+        from ib_async import IB, Stock, Forex, MarketOrder, LimitOrder
 
-        auth = _ibkr_cp_request("/iserver/auth/status", timeout=8)
-        if not auth.get("authenticated", False):
-            return {"error": "ibkr_client_portal_not_authenticated"}
+        async def _place():
+            ib = IB()
+            await ib.connectAsync("127.0.0.1", 4001, clientId=100, timeout=10)
 
-        conid = _ibkr_resolve_stock_conid(symbol)
-        order_payload: Dict[str, Any] = {
-            "acctId": IBKR_ACCOUNT,
-            "conid": conid,
-            "orderType": "LMT" if order_type == "limit" and limit_price else "MKT",
-            "side": "BUY" if side == "buy" else "SELL",
-            "quantity": abs(int(qty)),
-            "tif": "DAY",
-            "outsideRTH": False,
-        }
-        if order_payload["orderType"] == "LMT":
-            order_payload["price"] = float(limit_price)
+            if asset_class == "forex":
+                contract = Forex(symbol)
+            else:
+                contract = Stock(symbol, exchange, "USD")
 
-        response = _ibkr_cp_request(
-            f"/iserver/account/{IBKR_ACCOUNT}/orders",
-            method="POST",
-            payload={"orders": [order_payload]},
-            timeout=15,
-        )
+            ib.qualifyContracts(contract)
 
-        while isinstance(response, list) and response and response[0].get("id"):
-            response = _ibkr_cp_request(
-                f"/iserver/reply/{response[0]['id']}",
-                method="POST",
-                payload={"confirmed": True},
-                timeout=15,
-            )
+            action_str = "BUY" if side == "buy" else "SELL"
+            if order_type == "limit" and limit_price:
+                order = LimitOrder(action_str, abs(qty), limit_price)
+            else:
+                order = MarketOrder(action_str, abs(qty))
 
-        order_info: Dict[str, Any]
-        if isinstance(response, list) and response:
-            order_info = response[0]
-        elif isinstance(response, dict):
-            order_info = response
-        else:
-            order_info = {"raw_response": str(response)}
+            trade = ib.placeOrder(contract, order)
+            await asyncio.sleep(2)
+            ib.disconnect()
+            return {
+                "status": "submitted",
+                "broker": "ibkr",
+                "order_id": str(trade.order.orderId),
+                "symbol": symbol,
+                "side": side,
+                "qty": str(qty),
+            }
 
-        return {
-            "status": "submitted",
-            "broker": "ibkr",
-            "order_id": str(order_info.get("order_id", order_info.get("id", ""))),
-            "order_status": order_info.get("order_status", order_info.get("status", "submitted")),
-            "symbol": symbol,
-            "side": side,
-            "qty": str(qty),
-            "conid": str(conid),
-        }
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return {"error": "ibkr_client_portal_not_authenticated"}
-        return {"error": f"ibkr_http_{e.code}"}
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_place())
+        finally:
+            loop.close()
+
+    except ImportError:
+        return {"error": "ib_async_not_installed"}
     except Exception as e:
         return {"error": f"ibkr: {str(e)[:300]}"}
 
