@@ -93,6 +93,27 @@ def test_group_best_effort_always_compliant(enforcer):
     assert result.confidence_penalty > 0  # penalized for stale feature
 
 
+def test_summary_separates_critical_and_advisory_groups(enforcer):
+    now = datetime.now(timezone.utc)
+    timestamps = {
+        "liquidity_score": now,
+        "volatility_penalty": now,
+        "put_call_ratio": now - timedelta(minutes=40),  # stale; advisory only
+        "implied_volatility": now,
+        "gamma_squeeze_risk": now,
+    }
+
+    summary = enforcer.summary(timestamps, now)
+    groups = summary["groups"]
+
+    assert groups["market_microstructure"]["operational_critical"] is True
+    assert groups["options_greeks"]["operational_critical"] is False
+    assert summary["critical_degraded_groups"] == 0
+    assert summary["advisory_degraded_groups"] >= 1
+    assert summary["max_confidence_penalty"] == 0.0
+    assert summary["overall_max_confidence_penalty"] > 0.0
+
+
 def test_group_quorum(enforcer):
     now = datetime.now(timezone.utc)
     timestamps = {

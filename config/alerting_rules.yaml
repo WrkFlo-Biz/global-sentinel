@@ -6,13 +6,13 @@ rules:
     condition: "tier_1 bridge stale 2+ cycles"
     level: WARN
     channels: [telegram, dashboard]
-    dedup_minutes: 15
+    dedup_minutes: 60
 
   bridge_stale_multiple:
     condition: "3+ bridges stale simultaneously"
     level: CRITICAL
     channels: [telegram, dashboard]
-    dedup_minutes: 5
+    dedup_minutes: 60
 
   daily_loss_warn:
     condition: "daily_loss_usd > 1000"
@@ -71,19 +71,19 @@ rules:
   cascade_pending:
     condition: "edge_detector cascade pending"
     level: INFO
-    channels: [telegram, dashboard]
+    channels: [log]
     dedup_minutes: 60
 
   divergence_detected:
     condition: "sector correlation break"
     level: INFO
-    channels: [telegram, dashboard]
+    channels: [log]
     dedup_minutes: 30
 
   scanner_discovery:
     condition: "new hidden opportunity found"
     level: INFO
-    channels: [telegram, dashboard]
+    channels: [log]
     dedup_minutes: 60
 
 escalation:

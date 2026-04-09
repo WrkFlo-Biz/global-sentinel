@@ -14,6 +14,7 @@ groups:
       - anomaly_score
     freshness_policy: all_fresh
     min_features_required: 3
+    operational_critical: true
     consumers:
       - qfinance_feature_encoder
       - online_weighted_feature_encoder
@@ -25,6 +26,7 @@ groups:
       - volatility_penalty
     freshness_policy: all_fresh
     min_features_required: 2
+    operational_critical: true
     consumers:
       - microstructure_regime_classifier
       - market_data_sanity_check
@@ -37,6 +39,7 @@ groups:
       - gpr_index
     freshness_policy: best_effort
     min_features_required: 1
+    operational_critical: false
     consumers:
       - regime_conditioned_optimizer
       - quantum_decomposition_policy
@@ -49,6 +52,7 @@ groups:
       - gamma_squeeze_risk
     freshness_policy: best_effort
     min_features_required: 1
+    operational_critical: false
     consumers:
       - options_chain_normalizer
       - options_liquidity_filter
@@ -62,6 +66,7 @@ groups:
       - maritime_congestion
     freshness_policy: quorum
     min_features_required: 2
+    operational_critical: false
     consumers:
       - source_quorum_engine
       - crisis_monitor
@@ -74,6 +79,7 @@ groups:
       - regime_alignment
     freshness_policy: all_fresh
     min_features_required: 3
+    operational_critical: true
     consumers:
       - classical_strong_baseline
       - quantum_decomposition_policy

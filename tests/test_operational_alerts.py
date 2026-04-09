@@ -105,6 +105,45 @@ def test_degraded_mode_alert(tmp_path):
     assert any(a["alert_type"] == "degraded_mode" for a in alerts)
 
 
+def test_degraded_mode_ignores_advisory_only_freshness(tmp_path):
+    sc = _base_scorecard(
+        degraded_mode=False,
+        freshness_penalty=0.0,
+        feature_freshness={
+            "max_confidence_penalty": 0.5,
+            "critical_max_confidence_penalty": 0.0,
+            "critical_degraded_groups": 0,
+            "advisory_degraded_groups": 3,
+        },
+    )
+    oa = OperationalAlerts(tmp_path)
+    alerts = oa.check_and_alert(sc)
+    assert not any(a["alert_type"] == "degraded_mode" for a in alerts)
+    assert not any(a["alert_type"] == "freshness_degradation" for a in alerts)
+
+
+def test_operational_alerts_cooldown_suppresses_repeats(tmp_path):
+    sc = _base_scorecard(
+        degraded_mode=True,
+        freshness_penalty=0.5,
+        feature_freshness={
+            "max_confidence_penalty": 0.5,
+            "critical_max_confidence_penalty": 0.5,
+            "critical_degraded_groups": 1,
+            "advisory_degraded_groups": 0,
+        },
+        confidence=0.4,
+        original_confidence=0.8,
+    )
+    oa = OperationalAlerts(tmp_path)
+    first = oa.check_and_alert(sc)
+    second = oa.check_and_alert(sc)
+
+    assert any(a["alert_type"] == "degraded_mode" for a in first)
+    assert any(a["alert_type"] == "freshness_degradation" for a in first)
+    assert second == []
+
+
 def test_blob_fallback_alert(tmp_path):
     oa = OperationalAlerts(tmp_path)
     alert = oa.check_blob_fallback("local_fallback", reason="connection_timeout")

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,7 +28,18 @@ class OperationalAlerts:
     def __init__(self, repo_root: Path, alerter: Optional[Any] = None):
         self.repo_root = repo_root
         self.alerter = alerter
-        self._last_config_fingerprint: str = ""
+        self._state_path = self.repo_root / "logs" / "alert_state" / "operational_alerts_state.json"
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state = self._load_state()
+        self._last_config_fingerprint = str(self._state.get("config_fingerprint", ""))
+        self._cooldowns = {
+            "blocked_escalation": 15,
+            "quorum_blocked_escalation": 30,
+            "freshness_degradation": 60,
+            "degraded_mode": 60,
+            "blocked_promotion": 60,
+            "blob_fallback": 60,
+        }
 
     def check_and_alert(self, scorecard: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Check scorecard for alertable conditions. Returns list of emitted alerts."""
@@ -54,10 +65,18 @@ class OperationalAlerts:
         if a:
             alerts.append(a)
 
+        emitted_alerts: List[Dict[str, Any]] = []
         for alert in alerts:
-            self._emit(alert)
+            if self._should_emit(alert):
+                self._emit(alert)
+                self._mark_emitted(alert)
+                emitted_alerts.append(alert)
+            else:
+                logger.debug(
+                    "Suppressed alert %s due to cooldown", alert.get("alert_type", "unknown")
+                )
 
-        return alerts
+        return emitted_alerts
 
     def check_blob_fallback(self, persistence_mode: str, reason: str = "") -> Optional[Dict[str, Any]]:
         """Alert when Blob persistence falls back to local."""
@@ -70,13 +89,16 @@ class OperationalAlerts:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "details": {"persistence_mode": persistence_mode, "reason": reason},
             }
-            self._emit(alert)
-            return alert
+            if self._should_emit(alert):
+                self._emit(alert)
+                self._mark_emitted(alert)
+                return alert
+            return None
         return None
 
     def check_blocked_promotion(
         self, signal_type: str, reason: str, decision: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Alert when a promotion is blocked."""
         alert = {
             "alert_type": "blocked_promotion",
@@ -90,8 +112,11 @@ class OperationalAlerts:
                 "decision": decision,
             },
         }
-        self._emit(alert)
-        return alert
+        if self._should_emit(alert):
+            self._emit(alert)
+            self._mark_emitted(alert)
+            return alert
+        return None
 
     def _check_blocked_escalation(self, scorecard: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         mdt = scorecard.get("mode_decision_trace", {})
@@ -117,7 +142,10 @@ class OperationalAlerts:
         }
 
     def _check_freshness_degradation(self, scorecard: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        penalty = scorecard.get("freshness_penalty", 0)
+        ff = scorecard.get("feature_freshness") or {}
+        penalty = ff.get("critical_max_confidence_penalty")
+        if penalty is None:
+            penalty = scorecard.get("freshness_penalty", 0)
         if not penalty or float(penalty) < 0.2:
             return None
         return {
@@ -165,11 +193,15 @@ class OperationalAlerts:
             return None
         if not self._last_config_fingerprint:
             self._last_config_fingerprint = cfp
+            self._state["config_fingerprint"] = cfp
+            self._save_state()
             return None
         if cfp == self._last_config_fingerprint:
             return None
         old_fp = self._last_config_fingerprint
         self._last_config_fingerprint = cfp
+        self._state["config_fingerprint"] = cfp
+        self._save_state()
         return {
             "alert_type": "config_fingerprint_drift",
             "severity": "warning",
@@ -187,11 +219,21 @@ class OperationalAlerts:
         }
 
     def _check_degraded_mode(self, scorecard: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not scorecard.get("degraded_mode"):
+        ff = scorecard.get("feature_freshness") or {}
+        critical_degraded = ff.get("critical_degraded_groups")
+        if critical_degraded is None:
+            critical_degraded = ff.get("active_degraded_groups")
+
+        if critical_degraded is not None:
+            if int(critical_degraded) <= 0:
+                return None
+        elif not scorecard.get("degraded_mode"):
             return None
         # Only alert when penalty is meaningful (>= 0.2), not for minor best_effort gaps
-        ff = scorecard.get("feature_freshness") or {}
-        if ff.get("max_confidence_penalty", 0) < 0.2:
+        penalty = ff.get("critical_max_confidence_penalty")
+        if penalty is None:
+            penalty = ff.get("max_confidence_penalty", 0)
+        if float(penalty or 0.0) < 0.2:
             return None
         return {
             "alert_type": "degraded_mode",
@@ -232,3 +274,52 @@ class OperationalAlerts:
             )
         except Exception as e:
             logger.debug("Failed to persist alert: %s", e)
+
+    def _load_state(self) -> Dict[str, Any]:
+        try:
+            if not self._state_path.exists():
+                return {"last_emitted": {}, "config_fingerprint": ""}
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                last_emitted = raw.get("last_emitted", {})
+                if not isinstance(last_emitted, dict):
+                    last_emitted = {}
+                return {
+                    "last_emitted": {str(k): str(v) for k, v in last_emitted.items()},
+                    "config_fingerprint": str(raw.get("config_fingerprint", "")),
+                }
+        except Exception as e:
+            logger.debug("Failed to load operational alert state: %s", e)
+        return {"last_emitted": {}, "config_fingerprint": ""}
+
+    def _save_state(self) -> None:
+        try:
+            self._state_path.write_text(json.dumps(self._state, indent=2, default=str), encoding="utf-8")
+        except Exception as e:
+            logger.debug("Failed to persist operational alert state: %s", e)
+
+    def _cooldown_minutes(self, alert_type: str) -> int:
+        return int(self._cooldowns.get(alert_type, 30))
+
+    def _should_emit(self, alert: Dict[str, Any]) -> bool:
+        alert_type = str(alert.get("alert_type") or "").strip()
+        if not alert_type:
+            return True
+        cooldown_minutes = self._cooldown_minutes(alert_type)
+        if cooldown_minutes <= 0:
+            return True
+        last_emitted = self._state.get("last_emitted", {}).get(alert_type)
+        if not last_emitted:
+            return True
+        try:
+            last_dt = datetime.fromisoformat(str(last_emitted))
+        except Exception:
+            return True
+        return (datetime.now(timezone.utc) - last_dt) >= timedelta(minutes=cooldown_minutes)
+
+    def _mark_emitted(self, alert: Dict[str, Any]) -> None:
+        alert_type = str(alert.get("alert_type") or "").strip()
+        if not alert_type:
+            return
+        self._state.setdefault("last_emitted", {})[alert_type] = datetime.now(timezone.utc).isoformat()
+        self._save_state()

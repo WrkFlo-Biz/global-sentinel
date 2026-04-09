@@ -47,7 +47,8 @@ class GroupFreshnessResult:
     confidence_penalty: float
     stale_reasons: List[str]
     feature_results: List[FeatureFreshnessResult]
-    degraded: bool
+    operational_critical: bool = True
+    degraded: bool = False
 
 
 class FeatureFreshnessEnforcer:
@@ -201,12 +202,14 @@ class FeatureFreshnessEnforcer:
                 confidence_penalty=1.0,
                 stale_reasons=[f"group '{group_name}' not in registry"],
                 feature_results=[],
+                operational_critical=True,
                 degraded=True,
             )
 
         policy = group_config.get("freshness_policy", "all_fresh")
         group_features = group_config.get("features", [])
         min_required = group_config.get("min_features_required", len(group_features))
+        operational_critical = bool(group_config.get("operational_critical", True))
 
         # Check each feature in the group
         results: List[FeatureFreshnessResult] = []
@@ -259,6 +262,7 @@ class FeatureFreshnessEnforcer:
             confidence_penalty=round(penalty, 3),
             stale_reasons=stale_reasons,
             feature_results=results,
+            operational_critical=operational_critical,
             degraded=degraded,
         )
 
@@ -280,23 +284,61 @@ class FeatureFreshnessEnforcer:
     ) -> Dict[str, Any]:
         """Produce a summary suitable for logging or dashboard consumption."""
         group_results = self.check_all_groups(feature_timestamps, now)
+        active_feature_names = set(feature_timestamps.keys())
+        active_groups = 0
+        active_degraded_groups = 0
+        active_critical_groups = 0
+        active_critical_degraded_groups = 0
+        active_advisory_degraded_groups = 0
+        active_penalties = []
+        active_critical_penalties = []
+
+        enriched_groups: Dict[str, Dict[str, Any]] = {}
+        for name, result in group_results.items():
+            group_config = self._groups.get(name, {})
+            group_features = group_config.get("features", [])
+            min_required = int(group_config.get("min_features_required", len(group_features)) or 0)
+            present_feature_count = sum(
+                1 for feature_name in group_features if feature_name in active_feature_names
+            )
+            is_active = present_feature_count >= max(1, min_required)
+            if is_active:
+                active_groups += 1
+                active_penalties.append(result.confidence_penalty)
+                if result.operational_critical:
+                    active_critical_groups += 1
+                    active_critical_penalties.append(result.confidence_penalty)
+                    if result.degraded:
+                        active_critical_degraded_groups += 1
+                        active_degraded_groups += 1
+                elif result.degraded:
+                    active_advisory_degraded_groups += 1
+
+            enriched_groups[name] = {
+                "policy": result.policy,
+                "compliant": result.compliant,
+                "degraded": result.degraded,
+                "operational_critical": result.operational_critical,
+                "active": is_active,
+                "fresh": result.fresh_count,
+                "stale": result.stale_count,
+                "missing": result.missing_count,
+                "confidence_penalty": result.confidence_penalty,
+            }
+
         return {
             "total_groups": len(group_results),
             "compliant_groups": sum(1 for r in group_results.values() if r.compliant),
             "degraded_groups": sum(1 for r in group_results.values() if r.degraded),
-            "max_confidence_penalty": max(
-                (r.confidence_penalty for r in group_results.values()), default=0.0
-            ),
-            "groups": {
-                name: {
-                    "policy": r.policy,
-                    "compliant": r.compliant,
-                    "degraded": r.degraded,
-                    "fresh": r.fresh_count,
-                    "stale": r.stale_count,
-                    "missing": r.missing_count,
-                    "confidence_penalty": r.confidence_penalty,
-                }
-                for name, r in group_results.items()
-            },
+            "critical_groups": sum(1 for r in group_results.values() if r.operational_critical),
+            "critical_degraded_groups": active_critical_degraded_groups,
+            "advisory_degraded_groups": active_advisory_degraded_groups,
+            "active_groups": active_groups,
+            "active_critical_groups": active_critical_groups,
+            "active_critical_degraded_groups": active_critical_degraded_groups,
+            "active_degraded_groups": active_degraded_groups,
+            "critical_max_confidence_penalty": max(active_critical_penalties, default=0.0),
+            "overall_max_confidence_penalty": max(active_penalties, default=0.0),
+            "max_confidence_penalty": max(active_critical_penalties, default=0.0),
+            "groups": enriched_groups,
         }

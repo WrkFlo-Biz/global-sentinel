@@ -76,8 +76,11 @@ class AlertManager:
         self._rules: dict[str, dict] = raw.get("rules", {})
         self._escalation: dict[str, Any] = raw.get("escalation", {})
 
-        # Dedup cache: {rule_name: last_alert_utc}
+        # Persistent dedup cache: {rule_name: last_alert_utc}
+        self._state_path = self._repo_root / "logs" / "alert_state" / "alert_manager_state.json"
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._dedup_cache: dict[str, datetime] = {}
+        self._load_state()
 
         # Escalation tracker: {rule_name: [timestamps]}
         self._escalation_tracker: dict[str, list[datetime]] = {}
@@ -162,6 +165,7 @@ class AlertManager:
 
         # Record
         self._dedup_cache[rule_name] = now
+        self._save_state()
         record = {
             "rule_name": rule_name,
             "level": resolved_level.name,
@@ -174,6 +178,33 @@ class AlertManager:
         self._history.append(record)
 
         return {"sent": True, "level": resolved_level.name, "channels": sent_channels, "deduped": False}
+
+    def _load_state(self) -> None:
+        try:
+            if not self._state_path.exists():
+                return
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            dedup_cache = raw.get("dedup_cache", {})
+            if isinstance(dedup_cache, dict):
+                for rule_name, ts_text in dedup_cache.items():
+                    try:
+                        self._dedup_cache[str(rule_name)] = datetime.fromisoformat(str(ts_text))
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug("Failed to load alert manager state: %s", e)
+
+    def _save_state(self) -> None:
+        try:
+            payload = {
+                "dedup_cache": {rule: ts.isoformat() for rule, ts in self._dedup_cache.items()},
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug("Failed to persist alert manager state: %s", e)
 
     def check_conditions(self, system_state: dict) -> list[dict]:
         """Evaluate every rule against *system_state* and return alerts to fire.
