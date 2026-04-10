@@ -462,6 +462,15 @@ class PositionManager:
         positions = resp.json()
         if not isinstance(positions, list):
             return []
+
+        acct = "paper" if "paper-api" in self.base_url else "live"
+        label = f"Alpaca {acct.upper()}"
+        for p in positions:
+            if isinstance(p, dict):
+                p["_broker"] = "alpaca"
+                p["_account"] = acct
+                p["_account_label"] = label
+
         return positions
 
     def _load_strategy_config(self) -> Dict[str, Any]:

@@ -133,3 +133,12 @@ class ApeWisdomBridge:
         logger.info(f"[ApeWisdomBridge] {len(all_stocks)} stocks tracked, {len(hot_tickers)} hot, {len(surging_tickers)} surging")
 
         return result
+def main():
+    logging.basicConfig(level=logging.INFO)
+    bridge = ApeWisdomBridge()
+    result = bridge.poll()
+    print(json.dumps({"hot_count": len(result.get("data", {}).get("hot_tickers", []))}, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

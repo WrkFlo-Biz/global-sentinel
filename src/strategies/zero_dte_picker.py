@@ -367,6 +367,9 @@ def run_picker():
             log(f"{symbol}: No snapshots in chain")
             continue
 
+        if all((s.get("greeks") in (None, {}) for s in snapshots.values())):
+            log(f"{symbol}: Options snapshots missing greeks/OI/IV (indicative feed). Suppressing picks.")
+            continue
         scored = score_strikes(snapshots, underlying_price, direction)
         if not scored:
             log(f"{symbol}: No scoreable strikes")

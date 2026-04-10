@@ -39,8 +39,11 @@ ALPACA_SECRET = os.environ.get("ALPACA_SECRET_KEY", "")
 ALPACA_BASE = "https://paper-api.alpaca.markets"
 ALPACA_HEADERS = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
 
-POLL_INTERVAL = 60       # seconds
-ALERT_THRESHOLD = 50.0   # dollars
+ACCOUNT_LABEL = os.environ.get("GS_PNL_ACCOUNT_LABEL", "Alpaca PAPER")
+POLL_INTERVAL = int(os.environ.get("GS_PNL_POLL_INTERVAL", "60"))       # seconds
+ALERT_THRESHOLD = float(os.environ.get("GS_PNL_ALERT_THRESHOLD", "150.0"))   # dollars
+MOVE_ALERT_COOLDOWN_SECONDS = int(os.environ.get("GS_PNL_MOVE_ALERT_COOLDOWN_SEC", "900"))
+ENABLE_MOVE_ALERTS = os.environ.get("GS_PNL_ENABLE_MOVE_ALERTS", "1") == "1"
 BATCH_WINDOW = 30        # seconds
 
 running = True
@@ -163,6 +166,7 @@ def check_positions(state):
             side = data["side"].upper()
             queue_alert(
                 f"<b>🆕 New Position</b>\n"
+                f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
                 f"<b>{sym}</b> {side}  {data['qty']:.0f} shares\n"
                 f"Entry: ${data['avg_entry']:.2f}  Value: ${data['market_value']:,.2f}"
             )
@@ -172,6 +176,7 @@ def check_positions(state):
         if sym not in current:
             queue_alert(
                 f"<b>✅ Position Closed</b>\n"
+                f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
                 f"<b>{sym}</b> — was {data.get('qty', 0):.0f} shares\n"
                 f"Last P&L: ${data.get('unrealized_pl', 0):+,.2f}"
             )
@@ -184,13 +189,16 @@ def check_positions(state):
             prev_pl = prev[sym].get("unrealized_pl", 0)
             curr_pl = data["unrealized_pl"]
             move = curr_pl - prev_pl
-            # Only alert if move > threshold AND we haven't alerted this symbol in last 5 min
+            # Only alert if move > threshold AND we haven't alerted this symbol in recently
+            if not ENABLE_MOVE_ALERTS:
+                continue
             if abs(move) >= ALERT_THRESHOLD:
                 last_t = last_alerts.get(sym, 0)
-                if now - last_t > 300:
+                if now - last_t > MOVE_ALERT_COOLDOWN_SECONDS:
                     arrow = "📈" if move > 0 else "📉"
                     queue_alert(
                         f"<b>{arrow} P&L Move: {sym}</b>\n"
+                        f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
                         f"Change: ${move:+,.2f}  Total P&L: ${curr_pl:+,.2f}\n"
                         f"Price: ${data['current_price']:.2f}  ({data['unrealized_plpc']*100:+.2f}%)"
                     )

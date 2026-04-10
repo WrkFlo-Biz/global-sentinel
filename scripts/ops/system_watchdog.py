@@ -42,7 +42,7 @@ BRIDGE_TTLS_MARKET = {
     "price_forecasts.json": 8 * 3600,
     "economic_surprise.json": 24 * 3600,
     "short_interest.json": 48 * 3600,
-    "stress_test.json": 48 * 3600,
+    "stress_test_results.json": 48 * 3600,
     "factor_exposure.json": 48 * 3600,
     "technical_analysis.json": 8 * 3600,
     "fundamental_scores.json": 24 * 3600,
@@ -55,18 +55,31 @@ BRIDGE_TTLS_MARKET = {
 
 
 def is_market_hours():
-    """Check if we're in extended US market hours (8 AM - 6 PM ET, weekdays)."""
-    from datetime import timedelta
-    et = datetime.now(timezone.utc) - timedelta(hours=4)
+    """Check if we are in extended US market hours (8 AM - 6 PM ET, weekdays)."""
+    try:
+        from zoneinfo import ZoneInfo
+        et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # Conservative fallback: treat as market hours.
+        return True
+
     if et.weekday() >= 5:  # Saturday/Sunday
         return False
     return 8 <= et.hour < 18
 
-# Bridge re-run commands (only for 24/7 sources)
+# Bridge re-run commands (best-effort; some require credentials)
 BRIDGE_RERUN = {
     "polymarket_geopolitical.json": "python3 src/bridges/polymarket_bridge.py",
     "reddit_trending.json": "python3 src/bridges/apewisdom_bridge.py",
     "hmm_regime.json": "python3 src/research/hmm_regime_detector.py",
+
+    # Market bridges
+    "short_interest.json": "python3 src/bridges/finra_short_interest_bridge.py",
+    "technical_analysis.json": "python3 src/bridges/technical_analysis_bridge.py",
+    "insider_clusters.json": "python3 src/bridges/openinsider_bridge.py",
+    "social_trending.json": "python3 src/bridges/social_trending_bridge.py",
+    "factor_exposure.json": "python3 src/research/factor_decomposition.py",
+    "stress_test_results.json": "python3 src/research/stress_tester.py",
 }
 
 # Services that should always be running
@@ -168,7 +181,7 @@ def check_services():
 
 
 def check_bridges():
-    """Check bridge signal freshness and re-run stale ones."""
+    """Check bridge signal freshness and re-run stale/missing ones (best effort)."""
     now = time.time()
     stale = []
     rerun_ok = []
@@ -181,37 +194,111 @@ def check_bridges():
 
     for filename, ttl in ttls.items():
         filepath = QF / filename
+        before_exists = filepath.exists()
+        before_mtime = filepath.stat().st_mtime if before_exists else None
+
+        status = None
+        if not before_exists:
+            status = "missing"
+        else:
+            age = now - (before_mtime or now)
+            if age > ttl:
+                status = f"{age / 3600:.1f}h old"
+
+        if not status:
+            continue
+
+        # Try to re-run if we have a command
+        if filename in BRIDGE_RERUN:
+            cmd = BRIDGE_RERUN[filename]
+            log(f"Re-running bridge: {filename} ({status}) -> {cmd}")
+            try:
+                result = subprocess.run(
+                    cmd.split(),
+                    capture_output=True, text=True, timeout=240,
+                    cwd=str(REPO),
+                    env={**os.environ, "PYTHONPATH": str(REPO)},
+                )
+                after_exists = filepath.exists()
+                after_mtime = filepath.stat().st_mtime if after_exists else None
+                wrote_file = after_exists and (
+                    (not before_exists) or (before_mtime is not None and after_mtime is not None and after_mtime > before_mtime)
+                )
+
+                if result.returncode == 0 and wrote_file:
+                    rerun_ok.append(filename)
+                    log(f"Bridge {filename} re-run OK (file updated)")
+                else:
+                    rerun_fail.append(filename)
+                    err_tail = (result.stderr or "")[-300:].strip().replace("\n", " | ")
+                    out_tail = (result.stdout or "")[-300:].strip().replace("\n", " | ")
+                    log(
+                        f"Bridge {filename} re-run FAILED (code={result.returncode}, wrote_file={wrote_file}) "
+                        f"stderr_tail={err_tail} stdout_tail={out_tail}"
+                    )
+            except Exception as e:
+                rerun_fail.append(filename)
+                log(f"Bridge {filename} re-run error: {e}")
+
+        # Re-evaluate after best-effort rerun.
         if not filepath.exists():
             stale.append((filename, "missing"))
             continue
-        mtime = filepath.stat().st_mtime
-        age = now - mtime
-        if age > ttl:
-            age_hours = age / 3600
-            stale.append((filename, f"{age_hours:.1f}h old"))
 
-            # Try to re-run if we have a command
-            if filename in BRIDGE_RERUN:
-                cmd = BRIDGE_RERUN[filename]
-                log(f"Re-running stale bridge: {filename} ({age_hours:.1f}h old)")
-                try:
-                    result = subprocess.run(
-                        cmd.split(),
-                        capture_output=True, text=True, timeout=120,
-                        cwd=str(REPO),
-                        env={**os.environ, "PYTHONPATH": str(REPO)},
-                    )
-                    if result.returncode == 0:
-                        rerun_ok.append(filename)
-                        log(f"Bridge {filename} re-run OK")
-                    else:
-                        rerun_fail.append(filename)
-                        log(f"Bridge {filename} re-run FAILED: {result.stderr[-200:]}")
-                except Exception as e:
-                    rerun_fail.append(filename)
-                    log(f"Bridge {filename} re-run error: {e}")
+        final_age = time.time() - filepath.stat().st_mtime
+        if final_age > ttl:
+            stale.append((filename, f"{final_age / 3600:.1f}h old"))
 
     return stale, rerun_ok, rerun_fail
+
+
+WATCHDOG_STATE_FILE = REPO / "logs" / "watchdog_state.json"
+ALERT_REPEAT_SUPPRESSION_SECONDS = 6 * 3600
+
+
+def _load_watchdog_state():
+    try:
+        if WATCHDOG_STATE_FILE.exists():
+            raw = WATCHDOG_STATE_FILE.read_text(encoding="utf-8").strip()
+            if raw:
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    return obj
+    except Exception:
+        pass
+    return {}
+
+
+def _save_watchdog_state(state):
+    try:
+        WATCHDOG_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WATCHDOG_STATE_FILE.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _alert_signature(failed_svcs, stale_bridges):
+    stale_names = sorted([n for (n, _age) in stale_bridges])
+    failed_names = sorted(list(failed_svcs))
+    return json.dumps({"failed": failed_names, "stale": stale_names}, sort_keys=True)
+
+
+def _should_send_alert(failed_svcs, stale_bridges):
+    state = _load_watchdog_state()
+    sig = _alert_signature(failed_svcs, stale_bridges)
+
+    last_sig = str(state.get("last_alert_sig", ""))
+    last_ts = float(state.get("last_alert_ts_epoch", 0.0) or 0.0)
+    now_epoch = time.time()
+
+    if sig == last_sig and (now_epoch - last_ts) < ALERT_REPEAT_SUPPRESSION_SECONDS:
+        return False
+
+    state["last_alert_sig"] = sig
+    state["last_alert_ts_epoch"] = now_epoch
+    _save_watchdog_state(state)
+    return True
+
 
 
 def main():
@@ -239,8 +326,11 @@ def main():
             alert_lines.append(f"  - {name}: {age}")
 
     if alert_lines:
-        msg = "🚨 <b>GS Watchdog Alert</b>\n" + "\n".join(alert_lines)
-        send_telegram_alert(msg)
+        if _should_send_alert(failed_svcs, stale_bridges):
+            msg = "🚨 <b>GS Watchdog Alert</b>\n" + "\n".join(alert_lines)
+            send_telegram_alert(msg)
+        else:
+            log("Suppressing duplicate alert (same signature within cooldown).")
 
     log("=== Watchdog check complete ===")
 

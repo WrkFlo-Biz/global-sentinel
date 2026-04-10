@@ -222,3 +222,15 @@ class FINRAShortInterestBridge:
         logger.info(f"[FINRAShortInterest] Wrote {len(symbols_data)} symbols, {len(squeeze_candidates)} squeeze candidates")
 
         return result
+def main():
+    logging.basicConfig(level=logging.INFO)
+    bridge = FINRAShortInterestBridge()
+    result = bridge.poll()
+    print(json.dumps({
+        "symbols_with_data": result.get("symbols_with_data"),
+        "squeeze_candidates_count": result.get("squeeze_candidates_count"),
+    }, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

@@ -246,3 +246,15 @@ class OpenInsiderBridge:
         logger.info(f"[OpenInsiderBridge] {len(trades)} buys, {len(clusters)} clusters detected")
 
         return result
+def main():
+    logging.basicConfig(level=logging.INFO)
+    bridge = OpenInsiderBridge()
+    result = bridge.poll()
+    print(json.dumps({
+        "cluster_count": result.get("data", {}).get("cluster_count"),
+        "total_buys_7d": result.get("data", {}).get("total_buys_7d"),
+    }, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()
