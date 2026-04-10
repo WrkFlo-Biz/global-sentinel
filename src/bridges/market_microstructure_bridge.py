@@ -20,6 +20,7 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,8 @@ class MarketMicrostructureBridge:
         self.repo_root = repo_root
         self.watchlist = load_yaml(repo_root / "config" / "assets_watchlist.yaml")
         self.symbols = self._extract_symbols()
+        self.max_symbols = int(os.getenv("GS_MICROSTRUCTURE_MAX_SYMBOLS", "40") or 40)
+        self.cache_ttl_sec = int(os.getenv("GS_MICROSTRUCTURE_CACHE_TTL_SEC", "300") or 300)
         self.finnhub_key = os.getenv("FINNHUB_KEY")
         self.cache_dir = repo_root / "logs" / "bridge_cache" / "market_microstructure"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -104,13 +107,75 @@ class MarketMicrostructureBridge:
             if isinstance(section_data, dict):
                 for s in section_data.get("symbols", []):
                     syms.add(str(s))
+        if syms:
+            return sorted(syms)
+
+        # Fallback: expanded_watchlist.yaml (schema: {categories: {name: {symbols: [...]}}})
+        try:
+            expanded = load_yaml(self.repo_root / "config" / "expanded_watchlist.yaml")
+        except Exception:
+            expanded = {}
+        if isinstance(expanded, dict):
+            categories = expanded.get("categories") or {}
+            if isinstance(categories, dict):
+                for cat in categories.values():
+                    if isinstance(cat, dict):
+                        for s in (cat.get("symbols") or []):
+                            if s:
+                                syms.add(str(s))
+
+        # Last-resort fallback: keep the bridge alive with a tiny universe.
+        if not syms:
+            syms.update({"SPY", "QQQ", "IWM"})
+
         return sorted(syms)
+
+    def _latest_cache_file(self) -> Optional[Path]:
+        try:
+            candidates = sorted(self.cache_dir.glob("microstructure_*.json"))
+            return candidates[-1] if candidates else None
+        except Exception:
+            return None
+
+    def _load_cached_results(
+        self, max_age_sec: Optional[int] = None
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        cache_file = self._latest_cache_file()
+        if cache_file is None or not cache_file.exists():
+            return None
+        if max_age_sec is not None:
+            try:
+                age_sec = time.time() - cache_file.stat().st_mtime
+                if age_sec > max_age_sec:
+                    return None
+            except Exception:
+                return None
+        try:
+            raw = json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        parsed: Dict[str, Dict[str, Any]] = {}
+        for k, v in raw.items():
+            if isinstance(k, str) and isinstance(v, dict):
+                parsed[k] = v
+        return parsed or None
 
     def poll(self, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
         """
         Returns: {symbol: {adv_shares, sigma_daily_pct, last_price, source, fresh}}
         """
         target_symbols = symbols or self.symbols
+
+        # Best-effort caching (prevents heavy Yahoo polling every cycle).
+        if symbols is None and self.cache_ttl_sec > 0:
+            cached = self._load_cached_results(max_age_sec=self.cache_ttl_sec)
+            if cached:
+                return cached
+
+        if symbols is None and self.max_symbols > 0 and len(target_symbols) > self.max_symbols:
+            target_symbols = list(target_symbols)[: self.max_symbols]
         result: Dict[str, Dict[str, Any]] = {}
 
         for symbol in target_symbols:
@@ -122,8 +187,13 @@ class MarketMicrostructureBridge:
                 if data:
                     result[symbol] = data
 
-        # Cache results
-        self._cache_results(result)
+        # Cache results (skip empty so we don't poison fallback caching).
+        if result:
+            self._cache_results(result)
+        else:
+            cached_any_age = self._load_cached_results(max_age_sec=None)
+            if cached_any_age:
+                return cached_any_age
         return result
 
     def build_snapshot_section(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -233,6 +303,8 @@ class MarketMicrostructureBridge:
 
     # --- Cache ---
     def _cache_results(self, result: Dict[str, Any]):
+        if not result:
+            return
         tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         cache_file = self.cache_dir / f"microstructure_{tag}.json"
         cache_file.write_text(json.dumps(result, indent=2), encoding="utf-8")

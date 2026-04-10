@@ -59,8 +59,10 @@ def _emit_canary_alerts(repo_root: Path, report: Dict[str, Any]) -> List[Dict[st
                 "report_schema_version": report.get("schema_version"),
             },
         }
-        alerter._emit(alert)
-        alerts.append(alert)
+        if alerter._should_emit(alert):
+            alerter._emit(alert)
+            alerter._mark_emitted(alert)
+            alerts.append(alert)
 
     if int(divergence.get("regression_count", 0)) > 0:
         alert = {
@@ -74,8 +76,10 @@ def _emit_canary_alerts(repo_root: Path, report: Dict[str, Any]) -> List[Dict[st
             "timestamp": _utc_now_iso(),
             "details": divergence,
         }
-        alerter._emit(alert)
-        alerts.append(alert)
+        if alerter._should_emit(alert):
+            alerter._emit(alert)
+            alerter._mark_emitted(alert)
+            alerts.append(alert)
 
     if not bool(fingerprint_state.get("consistent", True)):
         alert = {
@@ -86,8 +90,10 @@ def _emit_canary_alerts(repo_root: Path, report: Dict[str, Any]) -> List[Dict[st
             "timestamp": _utc_now_iso(),
             "details": fingerprint_state,
         }
-        alerter._emit(alert)
-        alerts.append(alert)
+        if alerter._should_emit(alert):
+            alerter._emit(alert)
+            alerter._mark_emitted(alert)
+            alerts.append(alert)
 
     return alerts
 

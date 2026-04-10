@@ -377,6 +377,28 @@ class TelegramNotifier:
         if not all_positions:
             return
 
+        # Optional: suppress paper vs live position updates (prevents paper positions from
+        # looking like live holdings).
+        allow_paper = os.getenv("GS_NOTIFY_PAPER_POSITIONS", "1") != "0"
+        allow_live = os.getenv("GS_NOTIFY_LIVE_POSITIONS", "1") != "0"
+        filtered_positions = []
+        for pos in all_positions:
+            if not isinstance(pos, dict):
+                filtered_positions.append(pos)
+                continue
+            acct = str(pos.get("_account") or "").strip().lower()
+            if acct == "paper" and not allow_paper:
+                continue
+            if acct == "live" and not allow_live:
+                continue
+            filtered_positions.append(pos)
+
+        if not filtered_positions:
+            self._log("position_updates_suppressed", {"positions": len(all_positions)})
+            return
+
+        all_positions = filtered_positions
+
         # Load order history to classify positions by strategy
         order_history = self._load_order_history()
 

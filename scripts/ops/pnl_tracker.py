@@ -44,6 +44,8 @@ POLL_INTERVAL = int(os.environ.get("GS_PNL_POLL_INTERVAL", "60"))       # second
 ALERT_THRESHOLD = float(os.environ.get("GS_PNL_ALERT_THRESHOLD", "150.0"))   # dollars
 MOVE_ALERT_COOLDOWN_SECONDS = int(os.environ.get("GS_PNL_MOVE_ALERT_COOLDOWN_SEC", "900"))
 ENABLE_MOVE_ALERTS = os.environ.get("GS_PNL_ENABLE_MOVE_ALERTS", "1") == "1"
+ENABLE_POSITION_ALERTS = os.environ.get("GS_PNL_ENABLE_POSITION_ALERTS", "1") == "1"
+ENABLE_DAILY_CLOSE_SUMMARY = os.environ.get("GS_PNL_ENABLE_DAILY_CLOSE_SUMMARY", "1") == "1"
 BATCH_WINDOW = 30        # seconds
 
 running = True
@@ -160,27 +162,28 @@ def check_positions(state):
 
     prev = state.get("positions", {})
 
-    # Detect new positions
-    for sym, data in current.items():
-        if sym not in prev:
-            side = data["side"].upper()
-            queue_alert(
-                f"<b>🆕 New Position</b>\n"
-                f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
-                f"<b>{sym}</b> {side}  {data['qty']:.0f} shares\n"
-                f"Entry: ${data['avg_entry']:.2f}  Value: ${data['market_value']:,.2f}"
-            )
-
-    # Detect closed positions
-    for sym, data in prev.items():
-        if sym not in current:
-            queue_alert(
-                f"<b>✅ Position Closed</b>\n"
-                f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
-                f"<b>{sym}</b> — was {data.get('qty', 0):.0f} shares\n"
-                f"Last P&L: ${data.get('unrealized_pl', 0):+,.2f}"
-            )
-
+    if ENABLE_POSITION_ALERTS:
+        # Detect new positions
+        for sym, data in current.items():
+            if sym not in prev:
+                side = data["side"].upper()
+                queue_alert(
+                    f"<b>🆕 New Position</b>\n"
+                    f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
+                    f"<b>{sym}</b> {side}  {data['qty']:.0f} shares\n"
+                    f"Entry: ${data['avg_entry']:.2f}  Value: ${data['market_value']:,.2f}"
+                )
+    
+        # Detect closed positions
+        for sym, data in prev.items():
+            if sym not in current:
+                queue_alert(
+                    f"<b>✅ Position Closed</b>\n"
+                    f"<b>Broker:</b> {ACCOUNT_LABEL}\n"
+                    f"<b>{sym}</b> — was {data.get('qty', 0):.0f} shares\n"
+                    f"Last P&L: ${data.get('unrealized_pl', 0):+,.2f}"
+                )
+    
     # Detect significant P&L moves
     last_alerts = state.get("last_alert_time", {})
     now = time.time()
