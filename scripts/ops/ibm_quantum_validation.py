@@ -454,7 +454,8 @@ def run_quantum_validation(dry_run=False):
 
     # Step 5: Connect to IBM Quantum and run on real hardware
     try:
-        from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2, Options
+        from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2
+        from qiskit_ibm_runtime.options import SamplerOptions
         from qiskit_ibm_runtime import Batch
         from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
@@ -498,16 +499,20 @@ def run_quantum_validation(dry_run=False):
         log(f"Transpiled warm-start: depth={transpiled_warm.depth()}, gates={transpiled_warm.size()}")
         log(f"Transpiled cold-start: depth={transpiled_cold.depth()}, gates={transpiled_cold.size()}")
 
-        # Step 6: Batch mode with error mitigation (resilience_level=2: ZNE + M3)
+        # Step 6: Batch mode with error mitigation (twirling + dynamical decoupling)
         quantum_start = time.time()
-        log(f"Submitting Batch job with {SHOTS} shots, resilience_level=2 (ZNE + M3)...")
+        log(f"Submitting Batch job with {SHOTS} shots, twirling + DD mitigation...")
         job_id = None
 
         for attempt in range(MAX_RETRIES):
             try:
                 with Batch(backend=backend) as batch:
-                    options = Options()
-                    options.resilience_level = 2  # ZNE + M3 readout mitigation
+                    options = SamplerOptions()
+                    # Error mitigation: twirling + dynamical decoupling (resilience_level removed in qiskit-ibm-runtime>=0.39)
+                    options.twirling.enable_gates = True
+                    options.twirling.enable_measure = True
+                    options.dynamical_decoupling.enable = True
+                    options.dynamical_decoupling.sequence_type = "XpXm"
                     sampler = SamplerV2(mode=batch, options=options)
                     # Submit both circuits in one batch for efficient QPU use
                     job = sampler.run(
@@ -583,7 +588,7 @@ def run_quantum_validation(dry_run=False):
             "shots": SHOTS,
             "qaoa_depth": QAOA_DEPTH,
             "cvar_alpha": CVAR_ALPHA,
-            "resilience_level": 2,
+            "error_mitigation": "twirling + dynamical_decoupling (XpXm)",
             "transpilation_level": 3,
             "batch_mode": True,
             "warm_start_initial_point": [round(float(v), 4) for v in warm_params],
