@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Global Sentinel Analog Library Rebuild
+
+[Timer]
+OnCalendar=*-*-* 06:40:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
