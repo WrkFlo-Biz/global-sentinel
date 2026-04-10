@@ -3,7 +3,7 @@
 Global Sentinel — Portfolio Stop-Loss + EOD Monitor
 
 - Checks every 30s during market hours
-- Exits ALL positions if position market value <= $110
+- Exits ALL positions if equity drops 30%+ from session high-water mark
 - Exits ALL positions at 3:55 PM ET regardless of price
 - Cancels open orders before closing positions
 - Pauses trading until operator approves resume
@@ -40,7 +40,8 @@ ALP_SECRET = env.get("ALPACA_SECRET_KEY_LIVE", "")
 h = {"APCA-API-KEY-ID": ALP_KEY, "APCA-API-SECRET-KEY": ALP_SECRET, "Content-Type": "application/json"}
 BASE = "https://api.alpaca.markets"
 
-STOP_LOSS_THRESHOLD = 110.00
+STOP_LOSS_DRAWDOWN_PCT = 0.30  # exit if equity drops 30% from session high-water mark
+STOP_LOSS_EQUITY_FLOOR = 100.00  # absolute minimum equity before forced exit
 CHECK_INTERVAL_S    = 30
 ctx = ssl.create_default_context()
 
@@ -120,12 +121,13 @@ def fetch_positions():
 
 print("=" * 55)
 print("  STOP-LOSS + EOD MONITOR STARTED")
-print(f"  Stop-loss: ${STOP_LOSS_THRESHOLD:.2f} | EOD exit: 3:55 PM ET")
+print(f"  Stop-loss: {STOP_LOSS_DRAWDOWN_PCT*100:.0f}% drawdown or equity<${STOP_LOSS_EQUITY_FLOOR:.0f} | EOD exit: 3:55 PM ET")
 print("=" * 55)
 
 exit_executed = False
 eod_executed  = False
 paused_since  = None
+equity_hwm    = None  # session high-water mark, set on first read
 
 while True:
     try:
@@ -175,9 +177,13 @@ while True:
         if hour == 15 and minute >= 55 and not eod_executed:
             trigger_reason = "eod"
 
-        # Stop-loss trigger
-        elif long_mv > 0 and long_mv <= STOP_LOSS_THRESHOLD:
-            trigger_reason = "stop_loss"
+        # Stop-loss trigger: equity drawdown from session high-water mark
+        elif equity > 0:
+            if equity_hwm is None or equity > equity_hwm:
+                equity_hwm = equity
+            drawdown = (equity_hwm - equity) / equity_hwm if equity_hwm > 0 else 0
+            if long_mv > 0 and (drawdown >= STOP_LOSS_DRAWDOWN_PCT or equity <= STOP_LOSS_EQUITY_FLOOR):
+                trigger_reason = "stop_loss"
 
         if trigger_reason:
             positions = fetch_positions()
@@ -188,8 +194,8 @@ while True:
                              f"Positions: {len(positions)} | Equity: ${equity:.2f}\nExiting now...")
                 else:
                     alert = (f"\ud83d\udea8 <b>STOP-LOSS TRIGGERED</b>\n\n"
-                             f"Position value ${long_mv:.2f} \u2264 ${STOP_LOSS_THRESHOLD:.2f}\n"
-                             f"Equity: ${equity:.2f} | Cash: ${cash:.2f}\nExiting now...")
+                             f"Equity: ${equity:.2f} (HWM: ${equity_hwm:.2f}, drawdown: {drawdown*100:.1f}%)\n"
+                             f"Positions: ${long_mv:.2f} | Cash: ${cash:.2f}\nExiting now...")
                 send_telegram(alert)
                 print(f"  [{trigger_reason.upper()}] Executing exit...")
 

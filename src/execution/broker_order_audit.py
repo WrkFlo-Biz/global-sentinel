@@ -404,12 +404,19 @@ class BrokerOrderAudit:
 
         # 6. Open order with no position match but < stale threshold
         if not position or position_qty == 0:
-            # New entry order or orphaned — flag for review if it's a buy with no position
-            if side == "buy":
+            # New entry order — only flag as stale if it's old (> 2 hours)
+            # Fresh buy orders are normal (entry orders placed via CLI)
+            if side == "buy" and age_hours is not None and age_hours > 2.0:
                 row["bucket"] = BUCKET_STALE_OPEN
                 row["action"] = ACTIONS[BUCKET_STALE_OPEN]
-                age_str = f"{age_hours:.0f}h ago" if age_hours else "unknown age"
-                row["detail"] = f"buy {qty:.0f} @ {order_type} ({age_str}), no position"
+                age_str = f"{age_hours:.0f}h ago"
+                row["detail"] = f"buy {qty:.0f} @ {order_type} ({age_str}), no position — likely orphaned"
+                return row
+            elif side == "buy":
+                row["bucket"] = "new_entry"
+                row["action"] = "hold"
+                age_str = f"{age_hours:.0f}h ago" if age_hours else "just placed"
+                row["detail"] = f"buy {qty:.0f} @ {order_type} ({age_str}), awaiting fill"
                 return row
 
         # Default
