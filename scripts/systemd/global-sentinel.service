@@ -2,6 +2,8 @@
 Description=Global Sentinel V5 Crisis Monitor
 After=network-online.target docker.service
 Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -11,8 +13,9 @@ WorkingDirectory=/opt/global-sentinel
 EnvironmentFile=-/opt/global-sentinel/.env
 Environment=PYTHONPATH=/opt/global-sentinel
 ExecStart=/usr/bin/python3 -u src/monitoring/crisis_monitor.py --repo-root /opt/global-sentinel
-Restart=on-failure
+Restart=always
 RestartSec=30
+TimeoutStopSec=25
 
 # Logging
 StandardOutput=journal
@@ -26,6 +29,8 @@ ReadWritePaths=/opt/global-sentinel/logs
 ReadWritePaths=/opt/global-sentinel/reports
 ReadWritePaths=/opt/global-sentinel/control
 ReadWritePaths=/tmp
+ReadWritePaths=/opt/global-sentinel/telemetry
+ReadWritePaths=/opt/global-sentinel/data
 
 [Install]
 WantedBy=multi-user.target
