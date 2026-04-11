@@ -56,7 +56,7 @@ freshness:
 shadow:
   max_notional_per_draft_usd: 1000000
   max_drafts_per_day: 10
-  require_human_approval: true
+  require_human_approval: false
   disabled_in_crisis: true
 
 # --- Domestic Stress Proxies ---

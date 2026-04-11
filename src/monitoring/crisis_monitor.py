@@ -75,6 +75,7 @@ class CrisisMonitor:
         self.repo_root = repo_root
         self.running = True
         self.cycle_count = 0
+        self._shutdown_started = False
 
         # Load config
         self.thresholds = load_yaml_safe(repo_root / "config" / "thresholds.yaml")
@@ -143,36 +144,38 @@ class CrisisMonitor:
             except Exception:
                 pass
 
-        while self.running:
-            try:
-                self._run_cycle()
-            except KeyboardInterrupt:
-                self.running = False
-                break
-            except BaseException as e:
-                self._log_event("cycle_error", {"error": str(e), "cycle": self.cycle_count})
-                print(f"[{iso_now()}] Cycle error: {e}", file=sys.stderr)
-
-            # Determine poll interval
-            if interval_override is not None:
-                sleep_sec = interval_override
-            else:
-                sleep_sec = MODE_POLL_INTERVALS.get(self.current_mode, 900)
-
-            if sleep_sec <= 0:
-                # MANUAL_REVIEW mode — wait for external trigger
-                print(f"[{iso_now()}] MANUAL_REVIEW mode — paused. Send SIGUSR1 to trigger cycle.")
-                signal.signal(signal.SIGUSR1, lambda s, f: None)
-                signal.pause()
-                continue
-
-            # Sleep with interruptibility
-            for _ in range(sleep_sec):
-                if not self.running:
+        try:
+            while self.running:
+                try:
+                    self._run_cycle()
+                except KeyboardInterrupt:
+                    self.running = False
                     break
-                time.sleep(1)
+                except BaseException as e:
+                    self._log_event("cycle_error", {"error": str(e), "cycle": self.cycle_count})
+                    print(f"[{iso_now()}] Cycle error: {e}", file=sys.stderr)
 
-        print(f"[{iso_now()}] Crisis Monitor shutting down after {self.cycle_count} cycles")
+                # Determine poll interval
+                if interval_override is not None:
+                    sleep_sec = interval_override
+                else:
+                    sleep_sec = MODE_POLL_INTERVALS.get(self.current_mode, 900)
+
+                if sleep_sec <= 0:
+                    # MANUAL_REVIEW mode — wait for external trigger
+                    print(f"[{iso_now()}] MANUAL_REVIEW mode — paused. Send SIGUSR1 to trigger cycle.")
+                    signal.signal(signal.SIGUSR1, lambda s, f: None)
+                    signal.pause()
+                    continue
+
+                # Sleep with interruptibility
+                for _ in range(sleep_sec):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+        finally:
+            self._shutdown_background_workers()
+            print(f"[{iso_now()}] Crisis Monitor shutting down after {self.cycle_count} cycles")
 
     def _run_cycle(self):
         """Execute one monitoring cycle."""
@@ -2484,9 +2487,10 @@ class CrisisMonitor:
         except Exception as exc:
             print(f"[{iso_now()}] heartbeat update failed: {exc}", file=sys.stderr)
 
-    def _handle_shutdown(self, signum, frame):
-        print(f"\n[{iso_now()}] Received signal {signum}, shutting down gracefully...")
-        self.running = False
+    def _shutdown_background_workers(self):
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
         if self.notifier:
             try:
                 self.notifier.stop_hourly_updates()
@@ -2497,6 +2501,12 @@ class CrisisMonitor:
                 self.bot_manager.stop()
             except Exception:
                 pass
+
+    def _handle_shutdown(self, signum, frame):
+        print(f"\n[{iso_now()}] Received signal {signum}, shutting down gracefully...")
+        self.running = False
+        self._shutdown_background_workers()
+        raise KeyboardInterrupt
 
 
 # --- CLI ---
