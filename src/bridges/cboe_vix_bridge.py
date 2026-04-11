@@ -11,13 +11,14 @@ Tier 2, trust 0.8, TTL 30 min
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("global_sentinel.cboe_vix_bridge")
 
@@ -36,10 +37,13 @@ _cboe_403_logged = False
 def _fetch_json(url: str, timeout: int = 15) -> Optional[dict]:
     global _cboe_403_logged
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)",
-            "Accept": "application/json",
-        })
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)",
+                "Accept": "application/json",
+            },
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except Exception as exc:
@@ -75,14 +79,14 @@ class CBOEVixBridge:
 
     def _get_term_structure(self) -> Dict[str, Optional[float]]:
         """Fetch all VIX term structure points."""
-        result = {}
+        result: Dict[str, Optional[float]] = {}
         for name, symbol in _VIX_SYMBOLS.items():
             result[name] = self._get_yahoo_vix(symbol)
         return result
 
     def _compute_contango_ratios(self, ts: Dict[str, Optional[float]]) -> Dict[str, Any]:
         """Compute contango/backwardation ratios between term structure points."""
-        ratios = {}
+        ratios: Dict[str, Any] = {}
         pairs = [
             ("VIX9D_to_VIX", "VIX9D", "VIX"),
             ("VIX_to_VIX3M", "VIX", "VIX3M"),
@@ -102,7 +106,12 @@ class CBOEVixBridge:
                     "far": far_val,
                 }
             else:
-                ratios[label] = {"ratio": None, "state": "unknown", "near": near_val, "far": far_val}
+                ratios[label] = {
+                    "ratio": None,
+                    "state": "unknown",
+                    "near": near_val,
+                    "far": far_val,
+                }
         return ratios
 
     def _detect_regime(self, ts: Dict[str, Optional[float]], ratios: Dict[str, Any]) -> Dict[str, Any]:
@@ -111,29 +120,35 @@ class CBOEVixBridge:
         if vix is None:
             return {"regime": "unknown", "description": "VIX data unavailable"}
 
-        backwardation_count = sum(1 for v in ratios.values()
-                                  if isinstance(v, dict) and v.get("state") == "backwardation")
-        total_pairs = sum(1 for v in ratios.values()
-                         if isinstance(v, dict) and v.get("ratio") is not None)
+        backwardation_count = sum(
+            1
+            for v in ratios.values()
+            if isinstance(v, dict) and v.get("state") == "backwardation"
+        )
+        total_pairs = sum(
+            1
+            for v in ratios.values()
+            if isinstance(v, dict) and v.get("ratio") is not None
+        )
 
         if vix > 35 and backwardation_count >= 2:
             regime = "panic"
-            desc = f"VIX at {vix:.1f} with term structure inversion — extreme fear"
+            desc = f"VIX at {vix:.1f} with term structure inversion - extreme fear"
         elif vix > 25 and backwardation_count >= 1:
             regime = "elevated_stress"
-            desc = f"VIX at {vix:.1f} with partial backwardation — elevated stress"
+            desc = f"VIX at {vix:.1f} with partial backwardation - elevated stress"
         elif vix > 20:
             regime = "cautious"
-            desc = f"VIX at {vix:.1f} — above average volatility"
+            desc = f"VIX at {vix:.1f} - above average volatility"
         elif vix < 13 and backwardation_count == 0:
             regime = "complacency"
-            desc = f"VIX at {vix:.1f} with steep contango — extreme complacency"
+            desc = f"VIX at {vix:.1f} with steep contango - extreme complacency"
         elif vix < 16 and backwardation_count == 0:
             regime = "low_vol"
-            desc = f"VIX at {vix:.1f} in contango — low volatility regime"
+            desc = f"VIX at {vix:.1f} in contango - low volatility regime"
         else:
             regime = "normal"
-            desc = f"VIX at {vix:.1f} — normal regime"
+            desc = f"VIX at {vix:.1f} - normal regime"
 
         return {
             "regime": regime,
@@ -145,9 +160,8 @@ class CBOEVixBridge:
 
     def _get_put_call_ratio(self) -> Dict[str, Any]:
         """Fetch CBOE put/call ratio."""
-        pcr_data = {}
+        pcr_data: Dict[str, Any] = {}
 
-        # Try Yahoo Finance for CBOE put/call indices
         for name, symbol in [("total_pcr", "^PCALL"), ("equity_pcr", "^EPCALL")]:
             val = self._get_yahoo_vix(symbol)
             if val is not None:
@@ -156,7 +170,6 @@ class CBOEVixBridge:
                     "signal": "bearish" if val > 1.2 else "bullish" if val < 0.7 else "neutral",
                 }
 
-        # Fallback: CBOE delayed quotes
         if not pcr_data:
             url = "https://cdn.cboe.com/api/global/delayed_quotes/options/_pcr.json"
             data = _fetch_json(url)
@@ -165,14 +178,16 @@ class CBOEVixBridge:
                     total = data.get("data", {}).get("total_put_call_ratio")
                     equity = data.get("data", {}).get("equity_put_call_ratio")
                     if total:
+                        total_val = float(total)
                         pcr_data["total_pcr"] = {
-                            "value": float(total),
-                            "signal": "bearish" if float(total) > 1.2 else "bullish" if float(total) < 0.7 else "neutral",
+                            "value": total_val,
+                            "signal": "bearish" if total_val > 1.2 else "bullish" if total_val < 0.7 else "neutral",
                         }
                     if equity:
+                        equity_val = float(equity)
                         pcr_data["equity_pcr"] = {
-                            "value": float(equity),
-                            "signal": "bearish" if float(equity) > 1.2 else "bullish" if float(equity) < 0.7 else "neutral",
+                            "value": equity_val,
+                            "signal": "bearish" if equity_val > 1.2 else "bullish" if equity_val < 0.7 else "neutral",
                         }
                 except (ValueError, TypeError):
                     pass
@@ -198,7 +213,34 @@ class CBOEVixBridge:
         }
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.output_path.write_text(json.dumps(result, indent=2))
-        logger.info(f"[CBOEVixBridge] Regime: {regime.get('regime')}, VIX: {ts.get('VIX')}")
+        self.output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        logger.info("[CBOEVixBridge] Regime: %s, VIX: %s", regime.get("regime"), ts.get("VIX"))
 
         return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh the CBOE VIX bridge output.")
+    parser.add_argument(
+        "--repo-root",
+        default=os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"),
+        help="Global Sentinel repository root",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("GS_LOG_LEVEL", "INFO"),
+        help="Python logging level",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    result = CBOEVixBridge(repo_root=args.repo_root).poll()
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

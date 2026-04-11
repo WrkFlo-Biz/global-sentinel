@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Global Sentinel - Service Health Dashboard + Automatic Recovery
+Global Sentinel — Service Health Dashboard + Automatic Recovery
 Runs every 5 minutes via gs-health-dashboard.timer.
 
 Features:
@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +38,7 @@ HEALTH_FILE = QF / "system_health.json"
 RECOVERY_LOG = LOGS / "auto_recovery.jsonl"
 HEALTH_HISTORY_FILE = LOGS / "health_history.jsonl"
 
+# Critical always-on services
 CRITICAL_SERVICES = [
     "gs-quantum-learner",
     "gs-data-gatherer",
@@ -51,10 +52,11 @@ CRITICAL_SERVICES = [
     "global-sentinel",
 ]
 
+# 24/7 bridges and their max age in hours
 BRIDGES_24_7 = {
     "social_trending.json": 24,
-    "defi_data.json": 2,
-    "cboe_vix_data.json": 1,
+    "defi_data.json": 24,
+    "cboe_vix_data.json": 24,
     "treasury_fiscal.json": 24,
     "hmm_regime.json": 24,
     "polymarket_geopolitical.json": 6,
@@ -63,6 +65,7 @@ BRIDGES_24_7 = {
     "news_impact.json": 12,
 }
 
+# Market-hours-only bridges
 BRIDGES_MARKET = {
     "technical_analysis.json": 6,
     "short_interest.json": 48,
@@ -72,15 +75,11 @@ BRIDGES_MARKET = {
     "economic_surprise.json": 24,
 }
 
-BRIDGE_REFRESH_CMDS = {
-    "defi_data.json": "python3 src/bridges/defi_llama_bridge.py",
-    "cboe_vix_data.json": "python3 src/bridges/cboe_vix_bridge.py",
-}
-
-_env: Dict[str, str] = {}
+# Load .env
+_env = {}
 _env_path = REPO / ".env"
 if _env_path.exists():
-    for _line in _env_path.read_text(encoding="utf-8").splitlines():
+    for _line in _env_path.read_text().splitlines():
         if "=" in _line and not _line.strip().startswith("#"):
             _k, _v = _line.strip().split("=", 1)
             _env[_k.strip()] = _v.strip().strip('"').strip("'")
@@ -92,14 +91,14 @@ def iso_now() -> str:
 
 def run(cmd: str, timeout: int = 30) -> Tuple[str, int]:
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return result.stdout.strip(), result.returncode
-    except Exception as exc:
-        return str(exc), 1
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip(), r.returncode
+    except Exception as e:
+        return str(e), 1
 
 
 def log_recovery(action: str, details: str, success: bool):
-    """Append to auto_recovery.jsonl."""
+    """Append to auto_recovery.jsonl"""
     RECOVERY_LOG.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "timestamp": iso_now(),
@@ -107,8 +106,8 @@ def log_recovery(action: str, details: str, success: bool):
         "details": details,
         "success": success,
     }
-    with open(RECOVERY_LOG, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry) + "\n")
+    with open(RECOVERY_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def send_telegram(msg: str):
@@ -118,20 +117,18 @@ def send_telegram(msg: str):
             return
         except Exception:
             pass
+    # Fallback direct send
     try:
         import urllib.request
-
         token = _env.get("TELEGRAM_BOT_TOKEN", "")
         if not token:
             return
-        payload = json.dumps(
-            {
-                "chat_id": "-1003898688720",
-                "text": msg[:4000],
-                "parse_mode": "HTML",
-                "message_thread_id": 2200,
-            }
-        ).encode()
+        payload = json.dumps({
+            "chat_id": "-1003898688720",
+            "text": msg[:4000],
+            "parse_mode": "HTML",
+            "message_thread_id": 2200,
+        }).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=payload,
@@ -142,16 +139,21 @@ def send_telegram(msg: str):
         pass
 
 
+# ============================================================
+# Health Checks
+# ============================================================
+
 def check_services() -> Dict[str, Any]:
     """Check all critical services, return status map."""
-    results: Dict[str, Any] = {}
+    results = {}
     for svc in CRITICAL_SERVICES:
-        out, _rc = run(f"systemctl is-active {svc}")
+        out, rc = run(f"systemctl is-active {svc}")
         status = out.strip()
         results[svc] = {
             "status": status,
             "active": status == "active",
         }
+        # Get uptime info
         if status == "active":
             uptime_out, _ = run(
                 f"systemctl show {svc} --property=ActiveEnterTimestamp --value"
@@ -162,23 +164,27 @@ def check_services() -> Dict[str, Any]:
 
 def check_resources() -> Dict[str, Any]:
     """Check CPU, RAM, swap, disk."""
+    # CPU load
     load_out, _ = run("cat /proc/loadavg")
     load_1m = float(load_out.split()[0]) if load_out else 0.0
     cores_out, _ = run("nproc")
     cores = int(cores_out) if cores_out.isdigit() else 4
 
+    # RAM
     mem_out, _ = run("free -m | grep Mem")
     mem_parts = mem_out.split()
     ram_total = int(mem_parts[1]) if len(mem_parts) > 1 else 1
     ram_used = int(mem_parts[2]) if len(mem_parts) > 2 else 0
     ram_pct = round(ram_used / ram_total * 100, 1) if ram_total > 0 else 0
 
+    # Swap
     swap_out, _ = run("free -m | grep Swap")
     swap_parts = swap_out.split()
     swap_total = int(swap_parts[1]) if len(swap_parts) > 1 else 0
     swap_used = int(swap_parts[2]) if len(swap_parts) > 2 else 0
     swap_pct = round(swap_used / swap_total * 100, 1) if swap_total > 0 else 0
 
+    # Disk
     disk_out, _ = run("df -h / | tail -1")
     disk_parts = disk_out.split()
     disk_pct = int(disk_parts[4].replace("%", "")) if len(disk_parts) > 4 else 0
@@ -235,87 +241,11 @@ def check_data_freshness() -> Dict[str, Any]:
     }
 
 
-def _bridge_refresh_candidates(freshness: Dict[str, Any]) -> List[str]:
-    candidates: List[str] = []
-    for bridge in freshness.get("stale_bridges", []) or []:
-        fname = bridge.get("file")
-        if fname:
-            candidates.append(str(fname))
-    for fname in freshness.get("missing_bridges", []) or []:
-        candidates.append(str(fname))
-
-    ordered = []
-    seen = set()
-    for fname in candidates:
-        if fname in seen:
-            continue
-        seen.add(fname)
-        ordered.append(fname)
-    return ordered
-
-
-def refresh_stale_bridges(freshness: Dict[str, Any]) -> List[str]:
-    """Best-effort refresh for known stale/missing bridges."""
-    alerts: List[str] = []
-
-    for fname in _bridge_refresh_candidates(freshness):
-        cmd = BRIDGE_REFRESH_CMDS.get(fname)
-        if not cmd:
-            continue
-
-        fpath = QF / fname
-        before_exists = fpath.exists()
-        before_mtime = fpath.stat().st_mtime if before_exists else None
-
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=240,
-                cwd=str(REPO),
-                env={**os.environ, "PYTHONPATH": str(REPO)},
-            )
-        except Exception as exc:
-            detail = f"{fname}: refresh error {exc}"
-            log_recovery("bridge_refresh", detail, False)
-            alerts.append(f"FAILED bridge refresh {fname}")
-            continue
-
-        after_exists = fpath.exists()
-        after_mtime = fpath.stat().st_mtime if after_exists else None
-        wrote_file = after_exists and (
-            (not before_exists)
-            or (
-                before_mtime is not None
-                and after_mtime is not None
-                and after_mtime > before_mtime
-            )
-        )
-
-        if result.returncode == 0 and wrote_file:
-            detail = f"{fname}: refreshed via {cmd}"
-            log_recovery("bridge_refresh", detail, True)
-            alerts.append(f"Refreshed stale bridge {fname}")
-            continue
-
-        stderr_tail = (result.stderr or "")[-240:].strip().replace("\n", " | ")
-        stdout_tail = (result.stdout or "")[-240:].strip().replace("\n", " | ")
-        detail = (
-            f"{fname}: rc={result.returncode}, wrote_file={wrote_file}, "
-            f"stderr_tail={stderr_tail}, stdout_tail={stdout_tail}"
-        )
-        log_recovery("bridge_refresh", detail, False)
-        alerts.append(f"FAILED bridge refresh {fname}")
-
-    return alerts
-
-
 def check_last_trade() -> Dict[str, Any]:
     """Check when the last paper trade was placed."""
     trade_log = LOGS / "paper_trades.jsonl"
     if not trade_log.exists():
+        # Try alternate locations
         for alt in [QF / "paper_trades.json", LOGS / "paper_trade_mirror.log"]:
             if alt.exists():
                 age_h = (time.time() - alt.stat().st_mtime) / 3600
@@ -326,10 +256,9 @@ def check_last_trade() -> Dict[str, Any]:
     return {"last_trade_age_hours": round(age_h, 1), "source": "paper_trades.jsonl"}
 
 
-def check_telegram() -> Dict[str, Any]:
+def check_telegram() -> Dict[str, bool]:
     """Verify Telegram bot token is valid."""
     import urllib.request
-
     token = _env.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         return {"connected": False, "reason": "no_token"}
@@ -338,18 +267,14 @@ def check_telegram() -> Dict[str, Any]:
         req = urllib.request.Request(url, headers={"User-Agent": "GS-HealthCheck/1.0"})
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read())
-        return {
-            "connected": data.get("ok", False),
-            "bot_username": data.get("result", {}).get("username", ""),
-        }
-    except Exception as exc:
-        return {"connected": False, "reason": str(exc)[:100]}
+        return {"connected": data.get("ok", False), "bot_username": data.get("result", {}).get("username", "")}
+    except Exception as e:
+        return {"connected": False, "reason": str(e)[:100]}
 
 
-def check_alpaca() -> Dict[str, Any]:
+def check_alpaca() -> Dict[str, bool]:
     """Quick Alpaca account ping."""
     import urllib.request
-
     api_key = _env.get("ALPACA_API_KEY", "")
     secret = _env.get("ALPACA_SECRET_KEY", "")
     base = _env.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -357,13 +282,10 @@ def check_alpaca() -> Dict[str, Any]:
         return {"connected": False, "reason": "no_credentials"}
     try:
         url = f"{base}/v2/account"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "APCA-API-KEY-ID": api_key,
-                "APCA-API-SECRET-KEY": secret,
-            },
-        )
+        req = urllib.request.Request(url, headers={
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret,
+        })
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read())
         return {
@@ -371,9 +293,13 @@ def check_alpaca() -> Dict[str, Any]:
             "account_status": data.get("status", "unknown"),
             "equity": data.get("equity", "0"),
         }
-    except Exception as exc:
-        return {"connected": False, "reason": str(exc)[:100]}
+    except Exception as e:
+        return {"connected": False, "reason": str(e)[:100]}
 
+
+# ============================================================
+# Health Score Calculation
+# ============================================================
 
 def compute_health_score(
     services: Dict[str, Any],
@@ -382,27 +308,50 @@ def compute_health_score(
     telegram: Dict[str, Any],
     alpaca: Dict[str, Any],
 ) -> Tuple[int, str]:
-    """Compute 0-100 health score."""
+    """Compute 0-100 health score.
+
+    Breakdown (max 100):
+      Services:  50 pts (scaled — all running = 50, proportional if some down)
+      CPU:       10 pts (load < 4.0)
+      RAM:       10 pts (usage < 80%)
+      Disk:      10 pts (usage < 85%)
+      Freshness: 10 pts (no stale bridges)
+      Telegram:   5 pts (connected)
+      Alpaca:     5 pts (connected)
+    """
     score = 0
 
+    # Services: 50 points scaled by fraction running
     total_services = len(services)
     running = sum(1 for info in services.values() if info.get("active"))
     if total_services > 0:
         score += round(50 * running / total_services)
 
+    # CPU load < 4: +10
     if resources["cpu_load_1m"] < 4.0:
         score += 10
+
+    # RAM < 80%: +10
     if resources["ram_pct"] < 80:
         score += 10
+
+    # Disk < 85%: +10
     if resources["disk_pct"] < 85:
         score += 10
+
+    # No stale bridges: +10
     if freshness["stale_count"] == 0:
         score += 10
+
+    # Telegram working: +5
     if telegram.get("connected"):
         score += 5
+
+    # Alpaca working: +5
     if alpaca.get("connected"):
         score += 5
 
+    # Determine status
     if score >= 80:
         status = "healthy"
     elif score >= 50:
@@ -413,6 +362,10 @@ def compute_health_score(
     return score, status
 
 
+# ============================================================
+# Trend Tracking
+# ============================================================
+
 def get_historical_score(hours_ago: float) -> Optional[int]:
     """Get health score from N hours ago."""
     if not HEALTH_HISTORY_FILE.exists():
@@ -421,8 +374,8 @@ def get_historical_score(hours_ago: float) -> Optional[int]:
     best_entry = None
     best_diff = float("inf")
     try:
-        with open(HEALTH_HISTORY_FILE, encoding="utf-8") as handle:
-            for line in handle:
+        with open(HEALTH_HISTORY_FILE) as f:
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -438,7 +391,7 @@ def get_historical_score(hours_ago: float) -> Optional[int]:
     except Exception:
         return None
 
-    if best_entry and best_diff < 7200:
+    if best_entry and best_diff < 7200:  # Within 2 hours tolerance
         return best_entry.get("health_score")
     return None
 
@@ -447,16 +400,21 @@ def save_health_history(score: int):
     """Append current score to history. Keep last 48 hours."""
     HEALTH_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     entry = {"timestamp": iso_now(), "health_score": score}
-    with open(HEALTH_HISTORY_FILE, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry) + "\n")
+    with open(HEALTH_HISTORY_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
+    # Trim to last 48 hours (576 entries at 5-min intervals)
     try:
-        lines = HEALTH_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+        lines = HEALTH_HISTORY_FILE.read_text().strip().splitlines()
         if len(lines) > 600:
-            HEALTH_HISTORY_FILE.write_text("\n".join(lines[-576:]) + "\n", encoding="utf-8")
+            HEALTH_HISTORY_FILE.write_text("\n".join(lines[-576:]) + "\n")
     except Exception:
         pass
 
+
+# ============================================================
+# Automatic Recovery (Feature #2)
+# ============================================================
 
 def get_restart_count(svc: str, window_seconds: int = 3600) -> int:
     """Count how many times a service was restarted in the last window."""
@@ -465,8 +423,8 @@ def get_restart_count(svc: str, window_seconds: int = 3600) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
     count = 0
     try:
-        with open(RECOVERY_LOG, encoding="utf-8") as handle:
-            for line in handle:
+        with open(RECOVERY_LOG) as f:
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -490,19 +448,19 @@ def auto_recover_services(services: Dict[str, Any]) -> List[str]:
         if info.get("active"):
             continue
 
+        # Check restart count in last hour
         restart_count = get_restart_count(svc)
         if restart_count >= 3:
-            msg = (
-                f"Service {svc} has restarted {restart_count} times in 1 hour - "
-                "disabling to prevent loop"
-            )
+            # Restart loop detected — disable and alert
+            msg = f"Service {svc} has restarted {restart_count} times in 1 hour — disabling to prevent loop"
             alerts.append(msg)
             log_recovery("service_disabled", msg, True)
             run(f"sudo systemctl stop {svc}", timeout=15)
+            # Don't actually disable (just stop) so daily audit can re-enable
             continue
 
+        # Restart the dead service
         out, rc = run(f"sudo systemctl restart {svc}", timeout=30)
-        _ = out
         time.sleep(2)
         check_out, _ = run(f"systemctl is-active {svc}")
         success = check_out.strip() == "active"
@@ -511,6 +469,7 @@ def auto_recover_services(services: Dict[str, Any]) -> List[str]:
 
         if success:
             alerts.append(f"Auto-restarted {svc} (OK)")
+            # Update the services dict
             info["active"] = True
             info["status"] = "active"
         else:
@@ -530,21 +489,20 @@ def emergency_disk_cleanup(disk_pct: int) -> List[str]:
     log_recovery("emergency_disk_cleanup", msg, True)
 
     cleanups = [
-        (
-            f'find {LOGS}/ -name "*.log" -size +50M -exec truncate -s 5M {{}} \\;',
-            "truncate logs >50MB",
-        ),
-        (
-            f"find {LOGS}/ -name \"*.jsonl\" -size +50M -exec sh -c 'tail -2000 \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"' _ {{}} \\;",
-            "trim jsonl >50MB",
-        ),
+        # Truncate ALL logs > 50MB
+        (f'find {LOGS}/ -name "*.log" -size +50M -exec truncate -s 5M {{}} \\;', "truncate logs >50MB"),
+        (f'find {LOGS}/ -name "*.jsonl" -size +50M -exec sh -c \'tail -2000 "$1" > "$1.tmp" && mv "$1.tmp" "$1"\' _ {{}} \\;', "trim jsonl >50MB"),
+        # Delete reports > 7 days
         (f"find {REPO}/reports/ -mtime +7 -type f -delete 2>/dev/null", "delete reports >7d"),
+        # Delete dead letter > 1 day
         (f"find {LOGS}/dead_letter/ -mtime +1 -delete 2>/dev/null", "delete dead_letter >1d"),
+        # Delete bridge cache > 3 days
         (f"find {LOGS}/bridge_cache/ -mtime +3 -delete 2>/dev/null", "delete bridge_cache >3d"),
+        # Vacuum journal
         ("sudo journalctl --vacuum-size=200M 2>/dev/null", "vacuum journal to 200M"),
     ]
 
-    for cmd, _label in cleanups:
+    for cmd, label in cleanups:
         run(cmd, timeout=60)
 
     disk_out, _ = run("df -h / | tail -1")
@@ -565,32 +523,26 @@ def emergency_swap_cleanup(resources: Dict[str, Any]) -> List[str]:
     alerts.append(msg)
     log_recovery("emergency_swap_cleanup", msg, True)
 
+    # Find top memory consumer that isn't critical
     out, _ = run("ps aux --sort=-%mem | head -15")
     critical_patterns = [
-        "quantum_continuous_learner",
-        "openclaw-gateway",
-        "broker_state",
-        "paper_trade",
-        "data_gatherer",
-        "stop_loss",
-        "sshd",
-        "systemd",
-        "conditional_order",
-        "broker_router",
-        "fred_macro",
+        "quantum_continuous_learner", "openclaw-gateway", "broker_state",
+        "paper_trade", "data_gatherer", "stop_loss", "sshd", "systemd",
+        "conditional_order", "broker_router", "fred_macro",
     ]
 
     for line in out.splitlines()[1:]:
         cols = line.split()
         if len(cols) > 10:
             pid, mem_pct, cmd = cols[1], float(cols[3]), " ".join(cols[10:])
-            if mem_pct > 10 and not any(pattern in cmd for pattern in critical_patterns):
+            if mem_pct > 10 and not any(c in cmd for c in critical_patterns):
                 kill_msg = f"Killing PID {pid} ({mem_pct}% mem): {cmd[:80]}"
                 alerts.append(kill_msg)
                 run(f"kill {pid}")
                 log_recovery("swap_kill_process", kill_msg, True)
                 break
 
+    # If RAM available > 4GB, try swap reset
     if resources.get("ram_available_mb", 0) > 4096:
         run("sudo swapoff -a && sudo swapon -a", timeout=60)
         alerts.append("Cleared stale swap (RAM available > 4GB)")
@@ -599,9 +551,14 @@ def emergency_swap_cleanup(resources: Dict[str, Any]) -> List[str]:
     return alerts
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main():
     print(f"[{iso_now()}] Health Dashboard starting...")
 
+    # Run all checks
     services = check_services()
     resources = check_resources()
     freshness = check_data_freshness()
@@ -609,26 +566,33 @@ def main():
     telegram = check_telegram()
     alpaca = check_alpaca()
 
+    # Compute score
+    score, status = compute_health_score(services, resources, freshness, telegram, alpaca)
+
+    # Get trends
     score_1h = get_historical_score(1.0)
     score_24h = get_historical_score(24.0)
 
-    recovery_alerts: List[str] = []
-
-    bridge_refresh_alerts = refresh_stale_bridges(freshness)
-    if bridge_refresh_alerts:
-        recovery_alerts.extend(bridge_refresh_alerts)
-        freshness = check_data_freshness()
-
-    dead_services = [svc for svc, info in services.items() if not info.get("active")]
-    if dead_services:
-        recovery_alerts.extend(auto_recover_services(services))
-
-    recovery_alerts.extend(emergency_disk_cleanup(resources["disk_pct"]))
-    recovery_alerts.extend(emergency_swap_cleanup(resources))
-
-    score, status = compute_health_score(services, resources, freshness, telegram, alpaca)
+    # Save to history
     save_health_history(score)
 
+    # ---- Automatic Recovery ----
+    recovery_alerts: List[str] = []
+
+    # 1. Restart dead services
+    dead_services = [s for s, i in services.items() if not i.get("active")]
+    if dead_services:
+        recovery_alerts.extend(auto_recover_services(services))
+        # Recompute score after recovery
+        score, status = compute_health_score(services, resources, freshness, telegram, alpaca)
+
+    # 2. Emergency disk cleanup
+    recovery_alerts.extend(emergency_disk_cleanup(resources["disk_pct"]))
+
+    # 3. Emergency swap cleanup
+    recovery_alerts.extend(emergency_swap_cleanup(resources))
+
+    # Build output JSON
     health_data = {
         "timestamp": iso_now(),
         "health_score": score,
@@ -646,11 +610,14 @@ def main():
         "recovery_actions": recovery_alerts,
     }
 
+    # Write health file
     QF.mkdir(parents=True, exist_ok=True)
-    HEALTH_FILE.write_text(json.dumps(health_data, indent=2, default=str), encoding="utf-8")
+    HEALTH_FILE.write_text(json.dumps(health_data, indent=2, default=str))
     print(f"[{iso_now()}] Health score: {score}/100 ({status})")
     print(f"[{iso_now()}] Written to {HEALTH_FILE}")
 
+    # ---- Telegram alerting ----
+    # Only alert if score < 70, a critical service died, or recovery actions taken
     should_alert = False
     alert_reasons = []
 
@@ -667,7 +634,7 @@ def main():
         alert_reasons.append(f"{len(recovery_alerts)} recovery actions taken")
 
     if should_alert:
-        msg = "<b>System Health Alert</b>\n\n"
+        msg = f"<b>System Health Alert</b>\n\n"
         msg += f"Score: <b>{score}/100</b> ({status})\n"
         if score_1h is not None:
             msg += f"1h ago: {score_1h}/100\n"
@@ -683,6 +650,7 @@ def main():
             for action in recovery_alerts[:8]:
                 msg += f"  - {action}\n"
 
+        # Service status summary
         msg += "\n<b>Services:</b>\n"
         for svc, info in services.items():
             icon = "OK" if info.get("active") else "DOWN"

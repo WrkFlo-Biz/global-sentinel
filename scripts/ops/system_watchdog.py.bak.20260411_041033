@@ -8,13 +8,13 @@ Runs every 15 minutes via gs-watchdog.timer.
 """
 import json
 import os
-import shlex
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# --- Telegram topic routing ---
 sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
 try:
     from src.monitoring.telegram_router import send as _send_topic
@@ -26,6 +26,7 @@ QF = REPO / "data" / "quantum_feed"
 LOG_FILE = REPO / "logs" / "watchdog.log"
 ENV_FILE = REPO / ".env"
 
+# 24/7 bridges (always checked)
 BRIDGE_TTLS_24_7 = {
     "polymarket_geopolitical.json": 4 * 3600,
     "reddit_trending.json": 4 * 3600,
@@ -34,10 +35,9 @@ BRIDGE_TTLS_24_7 = {
     "quantum_mc_results.json": 6 * 3600,
     "self_improver_state.json": 48 * 3600,
     "quantum_regime_prediction.json": 72 * 3600,
-    "defi_data.json": 2 * 3600,
-    "cboe_vix_data.json": 1 * 3600,
 }
 
+# Market-hours-only bridges (skip checking outside 9:30 AM - 5 PM ET, weekdays)
 BRIDGE_TTLS_MARKET = {
     "price_forecasts.json": 8 * 3600,
     "economic_surprise.json": 24 * 3600,
@@ -58,30 +58,31 @@ def is_market_hours():
     """Check if we are in extended US market hours (8 AM - 6 PM ET, weekdays)."""
     try:
         from zoneinfo import ZoneInfo
-
         et = datetime.now(ZoneInfo("America/New_York"))
     except Exception:
+        # Conservative fallback: treat as market hours.
         return True
 
-    if et.weekday() >= 5:
+    if et.weekday() >= 5:  # Saturday/Sunday
         return False
     return 8 <= et.hour < 18
 
-
+# Bridge re-run commands (best-effort; some require credentials)
 BRIDGE_RERUN = {
     "polymarket_geopolitical.json": "python3 src/bridges/polymarket_bridge.py",
     "reddit_trending.json": "python3 src/bridges/apewisdom_bridge.py",
     "hmm_regime.json": "python3 src/research/hmm_regime_detector.py",
+
+    # Market bridges
     "short_interest.json": "python3 src/bridges/finra_short_interest_bridge.py",
     "technical_analysis.json": "python3 src/bridges/technical_analysis_bridge.py",
     "insider_clusters.json": "python3 src/bridges/openinsider_bridge.py",
     "social_trending.json": "python3 src/bridges/social_trending_bridge.py",
     "factor_exposure.json": "python3 src/research/factor_decomposition.py",
     "stress_test_results.json": "python3 src/research/stress_tester.py",
-    "defi_data.json": "python3 src/bridges/defi_llama_bridge.py",
-    "cboe_vix_data.json": "python3 src/bridges/cboe_vix_bridge.py",
 }
 
+# Services that should always be running
 ALWAYS_RUNNING = [
     "gs-data-gatherer.service",
     "gs-synthetic-simulator.service",
@@ -100,8 +101,8 @@ def log(msg):
     line = f"[{ts}] WATCHDOG: {msg}"
     print(line, flush=True)
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
     except Exception:
         pass
 
@@ -110,11 +111,11 @@ def load_env():
     """Load .env file for Telegram credentials."""
     env = {}
     if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        for line in ENV_FILE.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                env[key.strip()] = value.strip().strip('"').strip("'")
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip().strip('"').strip("'")
     return env
 
 
@@ -122,10 +123,7 @@ def send_telegram_alert(message):
     """Send alert via Telegram."""
     if _send_topic:
         try:
-            _send_topic(
-                message[:4000] if isinstance(message, str) else str(message)[:4000],
-                topic="system",
-            )
+            _send_topic(message[:4000] if isinstance(message, str) else str(message)[:4000], topic="system")
             return
         except Exception:
             pass
@@ -136,23 +134,19 @@ def send_telegram_alert(message):
         log("No Telegram credentials found, skipping alert")
         return
     try:
-        import urllib.parse
         import urllib.request
-
+        import urllib.parse
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        data = urllib.parse.urlencode(
-            {
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-                "message_thread_id": 74,
-            }
-        ).encode()
+        data = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML", "message_thread_id": 74,
+        }).encode()
         req = urllib.request.Request(url, data=data)
         urllib.request.urlopen(req, timeout=10)
         log("Telegram alert sent")
-    except Exception as exc:
-        log(f"Telegram alert failed: {exc}")
+    except Exception as e:
+        log(f"Telegram alert failed: {e}")
 
 
 def check_services():
@@ -164,9 +158,7 @@ def check_services():
         try:
             result = subprocess.run(
                 ["systemctl", "is-active", svc],
-                capture_output=True,
-                text=True,
-                timeout=10,
+                capture_output=True, text=True, timeout=10
             )
             status = result.stdout.strip()
             if status != "active":
@@ -174,17 +166,15 @@ def check_services():
                 failed.append(svc)
                 restart = subprocess.run(
                     ["sudo", "systemctl", "restart", svc],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
+                    capture_output=True, text=True, timeout=30
                 )
                 if restart.returncode == 0:
                     restarted.append(svc)
                     log(f"Service {svc} restarted successfully")
                 else:
                     log(f"Service {svc} restart FAILED: {restart.stderr}")
-        except Exception as exc:
-            log(f"Error checking {svc}: {exc}")
+        except Exception as e:
+            log(f"Error checking {svc}: {e}")
             failed.append(svc)
 
     return failed, restarted
@@ -197,6 +187,7 @@ def check_bridges():
     rerun_ok = []
     rerun_fail = []
 
+    # Always check 24/7 bridges; only check market bridges during market hours
     ttls = dict(BRIDGE_TTLS_24_7)
     if is_market_hours():
         ttls.update(BRIDGE_TTLS_MARKET)
@@ -217,27 +208,21 @@ def check_bridges():
         if not status:
             continue
 
+        # Try to re-run if we have a command
         if filename in BRIDGE_RERUN:
             cmd = BRIDGE_RERUN[filename]
             log(f"Re-running bridge: {filename} ({status}) -> {cmd}")
             try:
                 result = subprocess.run(
-                    shlex.split(cmd),
-                    capture_output=True,
-                    text=True,
-                    timeout=240,
+                    cmd.split(),
+                    capture_output=True, text=True, timeout=240,
                     cwd=str(REPO),
                     env={**os.environ, "PYTHONPATH": str(REPO)},
                 )
                 after_exists = filepath.exists()
                 after_mtime = filepath.stat().st_mtime if after_exists else None
                 wrote_file = after_exists and (
-                    (not before_exists)
-                    or (
-                        before_mtime is not None
-                        and after_mtime is not None
-                        and after_mtime > before_mtime
-                    )
+                    (not before_exists) or (before_mtime is not None and after_mtime is not None and after_mtime > before_mtime)
                 )
 
                 if result.returncode == 0 and wrote_file:
@@ -251,10 +236,11 @@ def check_bridges():
                         f"Bridge {filename} re-run FAILED (code={result.returncode}, wrote_file={wrote_file}) "
                         f"stderr_tail={err_tail} stdout_tail={out_tail}"
                     )
-            except Exception as exc:
+            except Exception as e:
                 rerun_fail.append(filename)
-                log(f"Bridge {filename} re-run error: {exc}")
+                log(f"Bridge {filename} re-run error: {e}")
 
+        # Re-evaluate after best-effort rerun.
         if not filepath.exists():
             stale.append((filename, "missing"))
             continue
@@ -286,16 +272,13 @@ def _load_watchdog_state():
 def _save_watchdog_state(state):
     try:
         WATCHDOG_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        WATCHDOG_STATE_FILE.write_text(
-            json.dumps(state, indent=2, default=str),
-            encoding="utf-8",
-        )
+        WATCHDOG_STATE_FILE.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
     except Exception:
         pass
 
 
 def _alert_signature(failed_svcs, stale_bridges):
-    stale_names = sorted([name for (name, _age) in stale_bridges])
+    stale_names = sorted([n for (n, _age) in stale_bridges])
     failed_names = sorted(list(failed_svcs))
     return json.dumps({"failed": failed_names, "stale": stale_names}, sort_keys=True)
 
@@ -317,17 +300,19 @@ def _should_send_alert(failed_svcs, stale_bridges):
     return True
 
 
+
 def main():
     log("=== Watchdog check started ===")
 
+    # Check services
     failed_svcs, restarted_svcs = check_services()
     log(f"Services: {len(failed_svcs)} failed, {len(restarted_svcs)} restarted")
 
+    # Check bridges
     stale_bridges, rerun_ok, rerun_fail = check_bridges()
-    log(
-        f"Bridges: {len(stale_bridges)} stale, {len(rerun_ok)} re-run OK, {len(rerun_fail)} re-run failed"
-    )
+    log(f"Bridges: {len(stale_bridges)} stale, {len(rerun_ok)} re-run OK, {len(rerun_fail)} re-run failed")
 
+    # Alert if too many failures
     alert_lines = []
     if len(failed_svcs) >= 3:
         alert_lines.append(f"<b>SERVICES DOWN ({len(failed_svcs)}):</b>")

@@ -12,23 +12,27 @@ Tier 3, trust 0.5, TTL 60 min
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
+import os
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import urllib.request
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("global_sentinel.defi_llama_bridge")
 
 
 def _fetch_json(url: str, timeout: int = 20) -> Optional[Any]:
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)",
-            "Accept": "application/json",
-        })
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (GlobalSentinel/1.0)",
+                "Accept": "application/json",
+            },
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except Exception as exc:
@@ -81,22 +85,24 @@ class DeFiLlamaBridge:
         total_mcap = 0.0
         top_stables = []
 
-        for s in stables[:10]:
-            name = s.get("name", "Unknown")
-            symbol = s.get("symbol", "")
-            chains = s.get("chainCirculating", {})
+        for stable in stables[:10]:
+            name = stable.get("name", "Unknown")
+            symbol = stable.get("symbol", "")
+            chains = stable.get("chainCirculating", {})
             total_circ = 0.0
             for chain_data in chains.values():
                 if isinstance(chain_data, dict):
                     total_circ += chain_data.get("current", {}).get("peggedUSD", 0)
 
             total_mcap += total_circ
-            top_stables.append({
-                "name": name,
-                "symbol": symbol,
-                "circulating_usd": round(total_circ, 0),
-                "circulating_billions": round(total_circ / 1e9, 2),
-            })
+            top_stables.append(
+                {
+                    "name": name,
+                    "symbol": symbol,
+                    "circulating_usd": round(total_circ, 0),
+                    "circulating_billions": round(total_circ / 1e9, 2),
+                }
+            )
 
         return {
             "total_stablecoin_mcap_billions": round(total_mcap / 1e9, 2),
@@ -112,27 +118,35 @@ class DeFiLlamaBridge:
 
         pools = data["data"]
         significant_pools = [
-            p for p in pools
-            if p.get("tvlUsd", 0) > 10_000_000
-            and p.get("apy", 0) > 0
-            and p.get("apy", 0) < 1000
+            pool
+            for pool in pools
+            if pool.get("tvlUsd", 0) > 10_000_000
+            and pool.get("apy", 0) > 0
+            and pool.get("apy", 0) < 1000
         ]
 
         if not significant_pools:
             return {"error": "no_significant_pools"}
 
-        apys = [p["apy"] for p in significant_pools]
+        apys = [pool["apy"] for pool in significant_pools]
         avg_apy = round(sum(apys) / len(apys), 2)
         median_apy = round(sorted(apys)[len(apys) // 2], 2)
 
-        top_yield = sorted(significant_pools, key=lambda x: x.get("tvlUsd", 0), reverse=True)[:10]
-        top_protocols = [{
-            "project": p.get("project", ""),
-            "chain": p.get("chain", ""),
-            "symbol": p.get("symbol", ""),
-            "apy": round(p.get("apy", 0), 2),
-            "tvl_millions": round(p.get("tvlUsd", 0) / 1e6, 1),
-        } for p in top_yield]
+        top_yield = sorted(
+            significant_pools,
+            key=lambda pool: pool.get("tvlUsd", 0),
+            reverse=True,
+        )[:10]
+        top_protocols = [
+            {
+                "project": pool.get("project", ""),
+                "chain": pool.get("chain", ""),
+                "symbol": pool.get("symbol", ""),
+                "apy": round(pool.get("apy", 0), 2),
+                "tvl_millions": round(pool.get("tvlUsd", 0) / 1e6, 1),
+            }
+            for pool in top_yield
+        ]
 
         yield_regime = "compressed" if median_apy < 3 else "elevated" if median_apy > 10 else "normal"
 
@@ -145,7 +159,7 @@ class DeFiLlamaBridge:
             "signal": "risk_on" if median_apy > 8 else "risk_off" if median_apy < 2 else "neutral",
         }
 
-    def _composite_signal(self, tvl: Dict, stables: Dict, yields: Dict) -> Dict[str, Any]:
+    def _composite_signal(self, tvl: Dict[str, Any], stables: Dict[str, Any], yields: Dict[str, Any]) -> Dict[str, Any]:
         """Derive composite risk signal from DeFi data."""
         signals = []
         if tvl.get("signal") == "risk_on":
@@ -197,7 +211,38 @@ class DeFiLlamaBridge:
         }
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.output_path.write_text(json.dumps(result, indent=2))
-        logger.info(f"[DeFiLlamaBridge] TVL: ${tvl.get('current_tvl_billions', '?')}B, Yield regime: {yields.get('yield_regime', '?')}")
+        self.output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        logger.info(
+            "[DeFiLlamaBridge] TVL: $%sB, Yield regime: %s",
+            tvl.get("current_tvl_billions", "?"),
+            yields.get("yield_regime", "?"),
+        )
 
         return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh the DeFi Llama bridge output.")
+    parser.add_argument(
+        "--repo-root",
+        default=os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"),
+        help="Global Sentinel repository root",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("GS_LOG_LEVEL", "INFO"),
+        help="Python logging level",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    result = DeFiLlamaBridge(repo_root=args.repo_root).poll()
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
