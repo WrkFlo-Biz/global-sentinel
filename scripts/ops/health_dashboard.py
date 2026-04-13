@@ -75,6 +75,7 @@ BRIDGES_MARKET = {
 BRIDGE_REFRESH_CMDS = {
     "defi_data.json": "python3 src/bridges/defi_llama_bridge.py",
     "cboe_vix_data.json": "python3 src/bridges/cboe_vix_bridge.py",
+    "treasury_fiscal.json": "python3 src/bridges/treasury_bridge.py",
 }
 
 _env: Dict[str, str] = {}

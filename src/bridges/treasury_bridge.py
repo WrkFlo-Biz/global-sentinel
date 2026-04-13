@@ -12,13 +12,14 @@ Tier 1, trust 1.0, TTL 1440 min
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("global_sentinel.treasury_bridge")
 
@@ -235,3 +236,30 @@ class TreasuryFiscalBridge:
             "score": round(avg_score, 2),
             "components": signals,
         }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh the Treasury fiscal bridge output.")
+    parser.add_argument(
+        "--repo-root",
+        default=os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"),
+        help="Global Sentinel repository root",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("GS_LOG_LEVEL", "INFO"),
+        help="Python logging level",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    result = TreasuryFiscalBridge(repo_root=args.repo_root).poll()
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

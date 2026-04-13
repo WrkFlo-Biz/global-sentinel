@@ -36,6 +36,7 @@ BRIDGE_TTLS_24_7 = {
     "quantum_regime_prediction.json": 72 * 3600,
     "defi_data.json": 2 * 3600,
     "cboe_vix_data.json": 1 * 3600,
+    "treasury_fiscal.json": 24 * 3600,
 }
 
 BRIDGE_TTLS_MARKET = {
@@ -80,6 +81,7 @@ BRIDGE_RERUN = {
     "stress_test_results.json": "python3 src/research/stress_tester.py",
     "defi_data.json": "python3 src/bridges/defi_llama_bridge.py",
     "cboe_vix_data.json": "python3 src/bridges/cboe_vix_bridge.py",
+    "treasury_fiscal.json": "python3 src/bridges/treasury_bridge.py",
 }
 
 ALWAYS_RUNNING = [
