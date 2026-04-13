@@ -6,7 +6,8 @@ from src.execution.alpaca_paper_adapter import AlpacaPaperAdapter, BrokerAdapter
 
 
 @pytest.fixture
-def adapter() -> AlpacaPaperAdapter:
+def adapter(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperAdapter:
+    monkeypatch.setattr("src.utils.rate_limiter.get_limiter", lambda *args, **kwargs: None)
     return AlpacaPaperAdapter(api_key="test-key", api_secret="test-secret")
 
 

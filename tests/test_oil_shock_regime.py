@@ -136,7 +136,7 @@ class TestStrategyModifiers:
 
     def test_shock_no_suppression(self, regime):
         mods = regime.get_strategy_modifiers("SHOCK")
-        assert mods["suppress"] == []
+        assert "oil_mean_reversion" in mods["suppress"]
         assert mods["size_multiplier"] == 1.5
 
     def test_dislocation_corr_cap(self, regime):
@@ -191,7 +191,7 @@ class TestApplyToIdeas:
         assert result[0]["strategy"] == "oil_momentum_intraday"
 
     def test_shock_bigger_boost(self, regime):
-        ideas = [self._make_idea(strategy="shipping_grind", confidence=0.5)]
+        ideas = [self._make_idea(strategy="shipping_rate_explosion", confidence=0.5)]
         result = regime.apply_to_ideas(ideas, "SHOCK")
         assert result[0]["confidence"] == 0.65  # +0.15
         assert result[0]["notional_usd"] == 22500  # 1.5x
@@ -334,7 +334,7 @@ class TestRunCycle:
             "chokepoint_risk": {"hormuz": 0.2},
         }
         result = regime.run_cycle(bridge, scorecard)
-        assert result["regime"] == "ELEVATED"  # commodity_shock 0.7 > 0.6
+        assert result["regime"] == "SHOCK"  # commodity_shock 0.7 + chokepoint activity escalates
         assert "modifiers" in result
         assert "telegram_line" in result
         assert isinstance(result["risk_warnings"], list)

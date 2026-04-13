@@ -66,6 +66,8 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -73,7 +75,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Check for threshold changes
         run: |
-          git diff origin/main -- config/thresholds.yaml > /tmp/threshold_diff.txt
+          BASE_REF="${{ github.base_ref }}"
+          git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}" --depth=1
+          git diff "origin/${BASE_REF}" -- config/thresholds.yaml > /tmp/threshold_diff.txt
           if [ -s /tmp/threshold_diff.txt ]; then
             echo "::warning::Threshold changes detected — replay validation recommended"
             cat /tmp/threshold_diff.txt
