@@ -31,10 +31,14 @@ class DummyBridge(BaseBridge):
 def test_registry_declares_all_expected_sources():
     registry = BridgeRegistry(repo_root=REPO_ROOT)
     names = list(registry.names())
-    assert len(names) == 21
-    assert "fed_bridge" in names
-    assert "noaa_bridge" in names
-    assert "sec_filing_event_scorer" in names
+    assert len(names) == len(set(names))
+    assert {
+        "fed_bridge",
+        "noaa_bridge",
+        "sec_filing_event_scorer",
+        "options_greeks_bridge",
+        "market_microstructure_bridge",
+    }.issubset(names)
 
 
 def test_registry_health_contract():

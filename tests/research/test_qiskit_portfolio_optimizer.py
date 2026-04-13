@@ -6,8 +6,12 @@ import json
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 from src.research.backends import qiskit_portfolio_optimizer as qpo
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 SAMPLE_REQUEST = {
@@ -128,7 +132,7 @@ def test_qiskit_module_main_gracefully_degrades_when_dependency_missing():
 
     proc = subprocess.run(
         [sys.executable, "-c", code],
-        cwd="/Users/mosestut/global-sentinel",
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,

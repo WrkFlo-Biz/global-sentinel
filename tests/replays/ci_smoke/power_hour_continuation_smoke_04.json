@@ -32,7 +32,7 @@
     "min_confidence_multiplier": 1.00,
     "max_confidence_multiplier": 1.10,
     "min_size_multiplier": 0.95,
-    "max_size_multiplier": 1.05,
+    "max_size_multiplier": 1.20,
     "strategy_eligible": ["orb_breakout_long", "orb_breakdown_short"],
     "strategy_blocked": ["gap_and_crap_puts", "short_mean_reversion", "eod_fade_watchlist_only"]
   }

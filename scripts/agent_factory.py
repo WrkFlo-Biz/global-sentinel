@@ -952,7 +952,7 @@ def run_strategy_executor(task: Task) -> AgentResult:
                     orders_submitted.append({
                         "strategy_type": strategy_type,
                         "orders_submitted": submitted,
-                        "symbols": [o.get("symbol") for o in route_result.get("submitted_orders", [])],
+                        "symbols": [o.get("symbol") for o in route_result.get("bound_order_attempts", [])],
                     })
 
             except Exception as e:
