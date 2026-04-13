@@ -46,10 +46,10 @@ jobs:
         run: python3 scripts/cleanup/standardize_terms.py
 
       - name: Broker conformance tests (mock)
-        run: pytest tests/broker_conformance/test_broker_adapter_contract.py -q
+        run: python -m pytest tests/broker_conformance/test_broker_adapter_contract.py -q
 
       - name: Fault semantic conformance tests (mock)
-        run: pytest tests/broker_conformance/test_fault_semantic_conformance.py -q
+        run: python -m pytest tests/broker_conformance/test_fault_semantic_conformance.py -q
 
       - name: "Run fault-injection smoke: ${{ matrix.scenario }}"
         run: |
