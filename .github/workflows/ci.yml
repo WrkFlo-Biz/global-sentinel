@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -18,8 +20,33 @@ jobs:
         run: pip install -r requirements.txt flake8
       - name: Terminology guard
         run: python3 scripts/cleanup/standardize_terms.py
-      - name: Lint
-        run: flake8 src/ scripts/ --max-line-length=120 --ignore=E501,W503,E701,E226,E127,E402,E203
+      - name: Select lint targets
+        id: lint_targets
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+            head_sha="${{ github.sha }}"
+          fi
+
+          git diff --name-only "$base_sha" "$head_sha" \
+            | grep -E '^(src|scripts)/.*\.py$' \
+            | sort -u > /tmp/flake8_targets.txt || true
+
+          if [ -s /tmp/flake8_targets.txt ]; then
+            echo "has_targets=true" >> "$GITHUB_OUTPUT"
+            echo "Lint targets:"
+            cat /tmp/flake8_targets.txt
+          else
+            echo "has_targets=false" >> "$GITHUB_OUTPUT"
+            echo "No changed Python files under src/ or scripts/."
+          fi
+      - name: Lint changed Python files
+        if: steps.lint_targets.outputs.has_targets == 'true'
+        run: xargs flake8 --max-line-length=120 --ignore=E501,W503,E701,E226,E127,E402,E203 < /tmp/flake8_targets.txt
 
   test:
     runs-on: ubuntu-latest

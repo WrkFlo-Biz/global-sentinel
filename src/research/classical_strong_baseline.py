@@ -52,8 +52,6 @@ class ClassicalStrongBaseline:
         risks = np.array([float(c.get("volatility_penalty", 0.3)) for c in candidates])
 
         try:
-            from scipy.optimize import minimize
-
             # Build covariance matrix (diagonal + small correlation)
             cov = np.diag(risks ** 2) + 0.01 * np.outer(risks, risks)
 
