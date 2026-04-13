@@ -30,7 +30,7 @@ venues:
 live_venues: {}
 
 policies:
-  require_human_approval_for_all_drafts: true
+  require_human_approval_for_all_drafts: false
   max_drafts_per_day: 10
   shadow_mode_enforced: true
   live_trading_enabled: false

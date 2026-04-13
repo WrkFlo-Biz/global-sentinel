@@ -70,6 +70,7 @@ class AdaptiveFeedbackLoop:
             "last_analysis_time": None,
             "cumulative_pnl": 0.0,
             "daily_pnl_history": [],
+            "strategy_confidence_adjustments": {},
             "strategy_adjustments": {
                 "day_trade": {"stop_loss_tightness": 1.0, "profit_target_mult": 1.0},
                 "medium_long": {"stop_loss_tightness": 1.0, "profit_target_mult": 1.0},
@@ -145,6 +146,10 @@ class AdaptiveFeedbackLoop:
     def get_strategy_adjustments(self, strategy: str) -> Dict[str, float]:
         """Return strategy-specific learned adjustments."""
         return self.state.get("strategy_adjustments", {}).get(strategy, {})
+
+    def get_strategy_confidence_adjustments(self) -> Dict[str, float]:
+        """Return learned confidence nudges for exact strategies and families."""
+        return self.state.get("strategy_confidence_adjustments", {})
 
     def _read_recent_trades(self, lookback_days: int = 14) -> List[Dict[str, Any]]:
         """Read closed trades from performance history."""
