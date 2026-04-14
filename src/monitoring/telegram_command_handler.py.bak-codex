@@ -235,8 +235,7 @@ class TelegramCommandHandler:
                     if not message:
                         continue
 
-                    chat = message.get("chat", {}) or {}
-                    chat_id = str(chat.get("id", ""))
+                    chat_id = str(message.get("chat", {}).get("id", ""))
                     text = (message.get("text") or "").strip()
 
                     if not text or not chat_id:
@@ -244,7 +243,6 @@ class TelegramCommandHandler:
 
                     # Security: only respond to allowed chat IDs
                     if chat_id not in self.allowed_chat_ids:
-                        self._log_unauthorized_chat(message)
                         continue
 
                     # Rate limiting
@@ -283,11 +281,6 @@ class TelegramCommandHandler:
         parts = text.split(None, 1)
         cmd = parts[0].lower() if parts else ""
         args = parts[1] if len(parts) > 1 else ""
-
-        if cmd.startswith("gs_"):
-            cmd = cmd[3:]
-        if "@" in cmd:
-            cmd = cmd.split("@", 1)[0]
 
         handler = self._commands.get(cmd)
         if handler:
@@ -716,30 +709,6 @@ class TelegramCommandHandler:
             **payload,
         }
         log_path = self.log_dir / "telegram_commands.jsonl"
-        try:
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-
-    def _log_unauthorized_chat(self, message: Dict[str, Any]):
-        """Record unauthorized inbound chats so DM allowlists can be updated safely."""
-        chat = message.get("chat", {}) or {}
-        sender = message.get("from", {}) or {}
-        row = {
-            "timestamp_utc": iso_now(),
-            "event_type": "unauthorized_chat_attempt",
-            "strategy": self.strategy,
-            "chat_id": str(chat.get("id", "")),
-            "chat_type": chat.get("type", ""),
-            "chat_title": chat.get("title", ""),
-            "message_thread_id": message.get("message_thread_id"),
-            "from_user_id": sender.get("id"),
-            "from_username": sender.get("username", ""),
-            "from_first_name": sender.get("first_name", ""),
-            "text_preview": (message.get("text") or "")[:200],
-        }
-        log_path = self.log_dir / "telegram_unauthorized.jsonl"
         try:
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")

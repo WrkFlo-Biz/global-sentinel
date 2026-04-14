@@ -1,0 +1,37 @@
+{
+  "alerts": [
+    {
+      "account": "live",
+      "bot_name": "mo2darkbot",
+      "enabled": true,
+      "id": "qbts_live_apr17_16p5_call",
+      "option_levels": [
+        {
+          "direction": "up",
+          "name": "entry_reclaim",
+          "price": 0.95
+        },
+        {
+          "direction": "up",
+          "name": "breakeven_trigger",
+          "price": 1.15
+        }
+      ],
+      "symbol": "QBTS260417C00016500",
+      "underlying_levels": [
+        {
+          "direction": "down",
+          "name": "stop_loss",
+          "price": 16.4
+        },
+        {
+          "direction": "up",
+          "name": "target_1",
+          "price": 17.2
+        }
+      ],
+      "underlying_symbol": "QBTS"
+    }
+  ],
+  "poll_seconds": 15
+}

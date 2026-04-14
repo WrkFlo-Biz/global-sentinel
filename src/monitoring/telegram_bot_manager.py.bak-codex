@@ -23,17 +23,6 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _add_chat_ids(target: Set[str], *raw_values: str) -> None:
-    """Parse one or more env var values into a normalized chat-id set."""
-    for raw in raw_values:
-        if not raw:
-            continue
-        for token in raw.replace(",", " ").split():
-            token = token.strip()
-            if token:
-                target.add(token)
-
-
 class TelegramBotManager:
     """Starts and manages Telegram command handlers for both bots."""
 
@@ -50,24 +39,16 @@ class TelegramBotManager:
         default_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         darkbot_chat_id = os.getenv("TELEGRAM_CHAT_ID_DARKBOT", default_chat_id)
         drkbot_chat_id = os.getenv("TELEGRAM_CHAT_ID_DRKBOT", default_chat_id)
-        darkbot_extra_chat_ids = os.getenv("TELEGRAM_CHAT_IDS_DARKBOT", "")
-        drkbot_extra_chat_ids = os.getenv("TELEGRAM_CHAT_IDS_DRKBOT", "")
 
         self.darkbot_chat_ids: Set[str] = set()
         self.drkbot_chat_ids: Set[str] = set()
 
-        _add_chat_ids(
-            self.darkbot_chat_ids,
-            default_chat_id,
-            darkbot_chat_id,
-            darkbot_extra_chat_ids,
-        )
-        _add_chat_ids(
-            self.drkbot_chat_ids,
-            default_chat_id,
-            drkbot_chat_id,
-            drkbot_extra_chat_ids,
-        )
+        for cid in (default_chat_id, darkbot_chat_id):
+            if cid:
+                self.darkbot_chat_ids.add(str(cid))
+        for cid in (default_chat_id, drkbot_chat_id):
+            if cid:
+                self.drkbot_chat_ids.add(str(cid))
 
         # Handler instances
         self._darkbot_handler: Optional[TelegramCommandHandler] = None
