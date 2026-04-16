@@ -88,12 +88,10 @@ ALWAYS_RUNNING = [
     "gs-data-gatherer.service",
     "gs-synthetic-simulator.service",
     "gs-quantum-learner.service",
-    "gs-stop-loss.service",
-    "gs-vol-trader.service",
     "gs-whatif-learner.service",
-    "gs-broker-router.service",
-    "gs-conditional-orders.service",
     "gs-paper-trader.service",
+    # NOTE: gs-stop-loss, gs-vol-trader, gs-broker-router, gs-conditional-orders
+    # are intentionally masked (2026-04-13) — removed from watchdog to stop restart spam
 ]
 
 

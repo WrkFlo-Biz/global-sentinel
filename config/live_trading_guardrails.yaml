@@ -47,14 +47,14 @@ ramp_schedule:
 
   - days_after_live: 14
     max_position_pct: 0.10
-    max_gross_exposure_pct: 2.50
-    require_human_approval: false
+    max_gross_exposure_pct: 0.50
+    require_human_approval: true
     day_trades_only: false
 
   - days_after_live: 30
     max_position_pct: 0.12
-    max_gross_exposure_pct: 3.00
-    require_human_approval: false
+    max_gross_exposure_pct: 0.60
+    require_human_approval: true
 
 # --- Operating Mode Override ---
 operating_mode:

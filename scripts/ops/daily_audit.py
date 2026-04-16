@@ -70,8 +70,9 @@ def check_services():
     fixes = []
     always_on = [
         "gs-quantum-learner", "gs-data-gatherer", "gs-paper-trader",
-        "gs-synthetic-simulator", "gs-vol-trader", "gs-broker-router",
-        "gs-stop-loss", "gs-conditional-orders", "gs-whatif-learner",
+        "gs-synthetic-simulator", "gs-vol-trader",
+        "gs-stop-loss", "gs-whatif-learner",
+        # NOTE: gs-broker-router, gs-conditional-orders intentionally masked (2026-04-13)
     ]
     for svc in always_on:
         out, rc = run(f"systemctl is-active {svc}")

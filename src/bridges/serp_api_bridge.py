@@ -182,8 +182,8 @@ HIGH_IMPACT_KEYWORDS = {
     "tariff", "trade war", "retaliation", "export ban",
 }
 
-# Default API key (override via SERP_API_KEY env var)
-_DEFAULT_SERP_API_KEY = "50ad00b0c50358c8bb5b9afee1c585dca27de16a9db81586f5c610529ec4234a"
+# API key must be set via SERP_API_KEY env var (no hardcoded fallback)
+_DEFAULT_SERP_API_KEY = ""
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 

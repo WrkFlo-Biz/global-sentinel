@@ -46,9 +46,15 @@ log "Staged changes:\n$CHANGED"
 # Commit
 git commit -m "Auto-commit: daily snapshot $DATE_STR" 2>&1 | tee -a "$LOG_FILE"
 
-# Push
+# Push — pull with rebase first to avoid rejection when remote has new commits
 if git remote -v | grep -q origin; then
-    git push origin "$(git branch --show-current)" 2>&1 | tee -a "$LOG_FILE"
+    BRANCH="$(git branch --show-current)"
+    log "Pulling with rebase before push..."
+    if ! git pull --rebase origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+        log "ERROR: pull --rebase failed. Aborting push to avoid data loss."
+        exit 1
+    fi
+    git push origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
     log "Push complete."
 else
     log "No remote 'origin' configured. Skipping push."

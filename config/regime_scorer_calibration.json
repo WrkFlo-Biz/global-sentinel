@@ -1,11 +1,8 @@
-[
-  {
-    "event": "quantum_learner_calibration",
-    "severity": 0.1,
-    "regime_signature_keys": [
-      "quantum_weight_adjustment"
-    ],
-    "updated_at": "2026-04-15T22:49:02.005976+00:00",
-    "cycle": 1961
-  }
-]
+{
+  "scenario_tail_severity": 1.0,
+  "scenario_confidence_adjustment": 0.7,
+  "scenarios_evaluated": 30,
+  "last_scenario_update": "2026-04-16T05:33:02.508991+00:00",
+  "quantum_weight_adjustment": 0.1,
+  "_migrated_from_list": true
+}

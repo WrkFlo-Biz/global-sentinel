@@ -1120,9 +1120,10 @@ def _integrate_quantum_outputs(scenario_results: Dict[str, Any], trainer) -> Non
         avg_tail = sum(worst_scenarios.values()) / max(len(worst_scenarios), 1)
         tail_severity = max(0.0, min(1.0, abs(avg_tail) * 10))  # 0-1 scale
 
-        cal_path = CONFIG_DIR / "regime_scorer_calibration.json"
+        cal_path = QUANTUM_FEED / "regime_tail_severity.json"  # separate from list-format audit log
         try:
-            cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
+            _loaded = json.loads(cal_path.read_text()) if cal_path.exists() else {}
+            cal = _loaded if isinstance(_loaded, dict) else {}
         except Exception:
             cal = {}
         cal["scenario_tail_severity"] = round(tail_severity, 4)

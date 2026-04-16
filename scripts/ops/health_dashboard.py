@@ -45,10 +45,9 @@ CRITICAL_SERVICES = [
     "gs-synthetic-simulator",
     "gs-fred-alerts",
     "gs-stop-loss",
-    "gs-broker-router",
-    "gs-conditional-orders",
     "gs-vol-trader",
     "global-sentinel",
+    # NOTE: gs-broker-router, gs-conditional-orders intentionally masked (2026-04-13)
 ]
 
 BRIDGES_24_7 = {

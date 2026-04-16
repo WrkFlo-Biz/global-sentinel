@@ -35,6 +35,8 @@ except Exception:
 REPO_ROOT   = Path("/opt/global-sentinel")
 SIGNAL_FILE = REPO_ROOT / "data/quantum_feed/latest_signal.json"
 APPROVAL_DIR = Path("/tmp")
+QUANTUM_FEED = REPO_ROOT / "data" / "quantum_feed"
+PAPER_REPORTS = REPO_ROOT / "reports" / "paper_trades"
 
 CYCLE_SECS = 300  # 5 minutes
 
@@ -240,6 +242,42 @@ def load_signal() -> dict:
         return {}
 
 
+def load_quantum_boosts() -> dict:
+    """Load portfolio ranking boosts from quantum learner (refreshed every ~15min)."""
+    boost_path = QUANTUM_FEED / "portfolio_ranking_boost.json"
+    if not boost_path.exists():
+        return {}
+    try:
+        data = json.loads(boost_path.read_text())
+        ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age > 3600:  # ignore if older than 1 hour
+            return {}
+        return data.get("asset_boosts", {})
+    except Exception:
+        return {}
+
+
+def load_paper_win_rate() -> float:
+    """Compute paper day-trade win rate from last 5 daily reports (0.0-1.0).
+    Used to scale live position sizing: profitable paper → larger live size.
+    Returns 0.5 (neutral) if insufficient data."""
+    import glob, os
+    files = sorted(glob.glob(str(PAPER_REPORTS / "day_trade_*.json")))[-5:]
+    total_w, total_l = 0, 0
+    for f in files:
+        try:
+            d = json.loads(open(f).read())
+            total_w += d.get("winners", 0)
+            total_l += d.get("losers", 0)
+        except Exception:
+            pass
+    total = total_w + total_l
+    if total < 3:
+        return 0.5  # not enough data
+    return round(total_w / total, 3)
+
+
 def session_type(now_et: datetime) -> str:
     """Return 'regular', 'extended', or 'closed' based on ET time."""
     h, m = now_et.hour, now_et.minute
@@ -353,7 +391,7 @@ def compute_volatility_score(market: dict, signal: dict) -> dict:
     }
 
 
-def score_instruments(vol: dict, signal: dict, session: str, held_syms: set) -> list:
+def score_instruments(vol: dict, signal: dict, session: str, held_syms: set, quantum_boosts: dict = {}) -> list:
     """
     Returns list of scored opportunities, sorted by confidence desc.
     Skips instruments not tradable in current session.
@@ -420,7 +458,12 @@ def score_instruments(vol: dict, signal: dict, session: str, held_syms: set) -> 
         # Global vol score contribution
         vol_conf = min(0.30, total_vol / 10.0 * 0.30)
 
-        confidence = min(0.95, bucket_conf * 0.50 + vol_conf + vix_boost + oil_boost + war_boost)
+        # Quantum portfolio boost: if this symbol is ranked by quantum optimizer, boost confidence
+        alp_sym_clean = sym.replace("/USD", "")
+        q_boost = quantum_boosts.get(alp_sym_clean, quantum_boosts.get(sym, 0.0))
+        quantum_conf_boost = min(0.10, float(q_boost) * 0.4)  # max +10% from quantum
+
+        confidence = min(0.95, bucket_conf * 0.50 + vol_conf + vix_boost + oil_boost + war_boost + quantum_conf_boost)
 
         # Only include if above minimum
         if confidence < 0.25:
@@ -535,6 +578,9 @@ print("=" * 60)
 
 last_alert_ts  = 0
 last_alert_sym = ""
+quantum_boosts: dict = {}
+paper_win_rate: float = 0.5
+live_position_size: float = 50.0
 alert_cooldown = 3600  # 1 hour between alerts for same instrument
 cycle          = 0
 
@@ -555,9 +601,16 @@ while True:
         gold_p = market.get("GC=F", {}).get("price", 0)
         print(f"  VIX={vix_p:.1f}  WTI=${wti_p:.1f}({wti_c:+.1f}%)  Gold=${gold_p:.0f}")
 
-        # 2. GS signal
+        # 2. GS signal + quantum boosts + paper performance feedback
         signal = load_signal()
         war    = signal.get("war_intensity", 0) or signal.get("market_war_intensity", 0)
+        # Refresh quantum boosts every cycle (written every ~15min by quantum_learner)
+        quantum_boosts = load_quantum_boosts()
+        # Refresh paper win rate every cycle (low cost: reads small JSON files)
+        paper_win_rate = load_paper_win_rate()
+        # Scale live position size by paper win rate:
+        # win_rate >= 60% -> 5, >= 40% -> 0, < 40% -> 0 (conservative)
+        live_position_size = 75.0 if paper_win_rate >= 0.60 else (50.0 if paper_win_rate >= 0.40 else 30.0)
         print(f"  GS war_intensity={war:.1f}  signal_age={'fresh' if signal else 'STALE'}")
 
         # 3. Volatility score
@@ -587,7 +640,7 @@ while True:
         print(f"  BTC≈${btc_p:,.0f}")
 
         # 6. Score opportunities
-        opps = score_instruments(vol, signal, session, held_syms)
+        opps = score_instruments(vol, signal, session, held_syms, quantum_boosts)
         top_opps = [o for o in opps if o["confidence"] >= MIN_CONF_TO_ALERT]
         print(f"  Opportunities: {len(top_opps)} above {int(MIN_CONF_TO_ALERT*100)}% conf threshold")
         for o in top_opps[:3]:
@@ -608,7 +661,7 @@ while True:
                     print(f"  [SKIP] {opp['sym']} -- max positions reached ({current_position_count}/{MAX_TOTAL_POSITIONS})")
                     continue
 
-                size = min(cash - MIN_CASH_RESERVE, MAX_SINGLE_POSITION)
+                size = min(cash - MIN_CASH_RESERVE, live_position_size)
                 if size < 5:
                     print(f"  [SKIP] {opp['sym']} — insufficient cash (${cash:.2f})")
                     continue
