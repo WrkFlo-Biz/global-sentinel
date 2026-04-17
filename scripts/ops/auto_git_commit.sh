@@ -50,9 +50,21 @@ git commit -m "Auto-commit: daily snapshot $DATE_STR" 2>&1 | tee -a "$LOG_FILE"
 if git remote -v | grep -q origin; then
     BRANCH="$(git branch --show-current)"
     log "Pulling with rebase before push..."
+    # Stash any unstaged/untracked changes so rebase can proceed on a clean tree
+    STASHED=false
+    if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+        git stash push -u -m "auto-git: temp stash before rebase" 2>&1 | tee -a "$LOG_FILE"
+        STASHED=true
+    fi
     if ! git pull --rebase origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
         log "ERROR: pull --rebase failed. Aborting push to avoid data loss."
+        if [ "$STASHED" = true ]; then
+            git stash pop 2>&1 | tee -a "$LOG_FILE" || true
+        fi
         exit 1
+    fi
+    if [ "$STASHED" = true ]; then
+        git stash pop 2>&1 | tee -a "$LOG_FILE" || log "WARNING: stash pop had conflicts, check manually"
     fi
     git push origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
     log "Push complete."

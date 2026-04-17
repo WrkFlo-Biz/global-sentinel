@@ -550,14 +550,22 @@ class ContinuousStrategyTrainer:
         try:
             from src.alpha.strategy_engine import StrategyEngine
 
-            config_path = self._repo_root / "config" / "war_strategies.yaml"
+            config_relpath = "config/war_strategies.yaml"
+            self._strategy_engine = StrategyEngine(config_path=config_relpath, repo_root=str(self._repo_root))
             import yaml
-            with open(config_path) as f:
+            with open(self._repo_root / config_relpath) as f:
                 config = yaml.safe_load(f)
-
-            self._strategy_engine = StrategyEngine(config)
             logger.info("Strategy engine initialized with %d strategies",
                         len(config.get("strategies", {})))
+            return True
+
+
+
+
+
+
+
+
             return True
         except Exception:
             logger.exception("Failed to init strategy engine — using mock evaluation")
