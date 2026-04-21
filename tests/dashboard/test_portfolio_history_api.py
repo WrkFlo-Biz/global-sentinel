@@ -84,3 +84,28 @@ def test_portfolio_history_single_account_returns_raw_history(monkeypatch):
     assert payload["requested_timeframe"] == "1D"
     assert payload["timestamp_utc"] is not None
     assert payload["source_timestamp_utc"] is not None
+
+
+def test_portfolio_history_uses_live_manager_for_intraday_all(monkeypatch):
+    payload = {
+        "schema_version": "dashboard.portfolio_history.v1",
+        "timestamp": [100, 200],
+        "equity": [10000.0, 10100.0],
+        "profit_loss": [0.0, 100.0],
+        "profit_loss_pct": [0.0, 0.01],
+        "base_value": 10000.0,
+        "requested_period": "1D",
+        "requested_timeframe": "1H",
+        "source_timestamp_utc": "2026-03-08T00:00:00+00:00",
+    }
+
+    class DummyLiveStateManager:
+        def get_latest_portfolio_history_intraday(self):
+            return payload
+
+    monkeypatch.setattr(server, "dashboard_live_state_manager", DummyLiveStateManager())
+    monkeypatch.setattr(server, "_fetch_alpaca_history", lambda acct, period, timeframe: (_ for _ in ()).throw(AssertionError("should not fetch direct history")))
+
+    result = server.portfolio_history(period="1D", timeframe="1H", account="all")
+
+    assert result is payload

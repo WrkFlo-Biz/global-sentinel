@@ -1,0 +1,11 @@
+{
+  "DAL": {
+    "adv_shares": 9182936.0,
+    "sigma_daily_pct": 3.4298,
+    "last_price": 61.195,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T20:52:02.547104+00:00",
+    "data_points": 21
+  }
+}

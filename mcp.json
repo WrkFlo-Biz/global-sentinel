@@ -80,6 +80,19 @@
         "FINNHUB_KEY": "${FINNHUB_KEY}"
       },
       "description": "Finnhub sentiment/headline OSINT-alt bridge (tier_c, non-confirming for policy events)"
+    },
+    "alpaca-trading": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-server-fetch"
+      ],
+      "env": {
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets/v2",
+        "ALPACA_API_KEY": "${ALPACA_API_KEY}",
+        "ALPACA_SECRET_KEY": "${ALPACA_SECRET_KEY}"
+      },
+      "description": "Alpaca paper trading API access for execution and audit workflows"
     }
   }
 }

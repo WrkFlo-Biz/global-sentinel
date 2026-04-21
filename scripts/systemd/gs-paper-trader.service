@@ -1,0 +1,22 @@
+[Unit]
+Description=Global Sentinel Paper Trade Mirror
+After=network-online.target global-sentinel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/paper_trade_mirror.py
+Restart=on-failure
+RestartSec=30
+CPUQuota=150%
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-paper-trader
+
+[Install]
+WantedBy=multi-user.target

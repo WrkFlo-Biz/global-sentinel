@@ -1,0 +1,64 @@
+type: Microsoft.App/jobs
+location: eastus
+name: quantum-research-job
+properties:
+  environmentId: /subscriptions/${SUB_ID}/resourceGroups/gs-dev-rg/providers/Microsoft.App/managedEnvironments/gs-quantum-env
+  configuration:
+    triggerType: Manual
+    manualTriggerConfig:
+      parallelism: 1
+      replicaCompletionCount: 1
+    registries:
+      - server: wrkfloopenclawacr.azurecr.io
+        identity: system
+    secrets:
+      - name: storage-account-name
+        keyVaultUrl: https://gs-quantum-kv.vault.azure.net/secrets/storage-account-name
+        identity: system
+      - name: quantum-artifacts-container
+        keyVaultUrl: https://gs-quantum-kv.vault.azure.net/secrets/quantum-artifacts-container
+        identity: system
+      - name: classical-artifacts-container
+        keyVaultUrl: https://gs-quantum-kv.vault.azure.net/secrets/classical-artifacts-container
+        identity: system
+      - name: reports-container
+        keyVaultUrl: https://gs-quantum-kv.vault.azure.net/secrets/reports-container
+        identity: system
+      - name: originq-api-key
+        keyVaultUrl: https://gs-quantum-kv.vault.azure.net/secrets/originq-api-key
+        identity: system
+  identity:
+    type: SystemAssigned
+  template:
+    containers:
+      - name: quantum-research
+        image: wrkfloopenclawacr.azurecr.io/global-sentinel/quantum-research:latest
+        command:
+          - /bin/bash
+          - -lc
+          - >
+            python src/research/run_quantum_research_job.py
+            --request-json artifacts/incoming/request.json
+            --quantum-artifact-dir artifacts/quantum
+            --classical-artifact-dir artifacts/classical
+            --comparison-out reports/research/quantum_vs_classical_latest.json
+        env:
+          - name: APP_ENV
+            value: dev
+          - name: STORAGE_ACCOUNT_NAME
+            secretRef: storage-account-name
+          - name: QUANTUM_ARTIFACTS_CONTAINER
+            secretRef: quantum-artifacts-container
+          - name: CLASSICAL_ARTIFACTS_CONTAINER
+            secretRef: classical-artifacts-container
+          - name: REPORTS_CONTAINER
+            secretRef: reports-container
+          - name: ORIGINQ_API_KEY
+            secretRef: originq-api-key
+          - name: DISABLE_EXECUTION_PATH
+            value: "true"
+          - name: SHADOW_MODE_ONLY
+            value: "true"
+        resources:
+          cpu: 1
+          memory: 2Gi

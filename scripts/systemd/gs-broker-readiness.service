@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel: Multi-Broker Weekly Readiness Check (Sun 22:00 UTC)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/bin/bash -c "set -a && source /opt/global-sentinel/.env 2>/dev/null && set +a && /usr/bin/python3 /opt/global-sentinel/scripts/ops/broker_readiness.py >> /opt/global-sentinel/logs/broker_readiness.log 2>&1"
+User=openclaw
+Group=openclaw

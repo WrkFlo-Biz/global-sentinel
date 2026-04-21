@@ -1,0 +1,13 @@
+# Global Sentinel pre-trade hard limits
+schema_version: pre_trade_controls.v1
+
+max_single_order_notional_pct: 0.12
+max_portfolio_notional_pct: 0.50
+max_single_name_pct: 0.15
+max_sector_pct: 0.30
+price_collar_pct: 0.05
+max_orders_per_minute: 10
+min_quote_freshness_seconds: 30
+max_spread_pct: 0.02
+max_quote_age_seconds: 30
+allow_market_orders_without_quote: false

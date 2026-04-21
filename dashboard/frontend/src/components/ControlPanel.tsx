@@ -11,16 +11,20 @@ export default function ControlPanel({
   shadowEligible: boolean;
   fallback: boolean;
 }) {
+  // API returns {kill_switch: {kill_switch: bool}} shape — support both .active and .kill_switch
+  const ksActive = (controls.kill_switch as any)?.active ?? (controls.kill_switch as any)?.kill_switch ?? false;
+  const mvActive = (controls.manual_veto as any)?.active ?? (controls.manual_veto as any)?.manual_veto ?? false;
+
   const items = [
     {
       label: "Kill Switch",
-      active: controls.kill_switch?.active,
+      active: ksActive,
       danger: true,
       detail: controls.kill_switch?.reason,
     },
     {
       label: "Manual Veto",
-      active: controls.manual_veto?.active,
+      active: mvActive,
       danger: true,
       detail: controls.manual_veto?.reason,
     },

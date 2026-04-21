@@ -1,0 +1,12 @@
+[Unit]
+Description=Start ORB Daemon at 9:20 AM ET (13:20 UTC) on weekdays
+
+[Timer]
+# 13:20 UTC = 9:20 AM ET (5 min before daemon's 9:25 start, gives boot time)
+# Adjust for DST: EDT=UTC-4 (13:20), EST=UTC-5 (14:20)
+OnCalendar=Mon..Fri *-*-* 13:20:00 UTC
+Persistent=false
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

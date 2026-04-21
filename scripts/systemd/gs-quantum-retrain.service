@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel Quantum Daily Retraining
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel
+EnvironmentFile=/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 src/research/quantum_retraining_job.py --repo-root /opt/global-sentinel
+TimeoutSec=600

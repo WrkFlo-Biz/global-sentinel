@@ -1,0 +1,9 @@
+{
+  "timestamp_utc": "2026-03-04T19:20:56.179842+00:00",
+  "broker_name": "mock",
+  "active_intent_count": 6,
+  "reconciled_count": 6,
+  "manual_review_count": 0,
+  "errors": [],
+  "notes": []
+}

@@ -1,0 +1,24 @@
+experiment:
+  name: "gs_quantum_backend_comparison_v1"
+  start_date: "2026-03-10"
+  minimum_days: 60
+  minimum_cycles: 200
+  backends_under_evaluation: ["qpanda3", "qiskit_finance"]
+  control_backend: "classical_strong"
+  baseline_backend: "classical_greedy"
+  metrics:
+    primary: ["objective_value_delta", "slippage_adjusted_return_delta"]
+    secondary: ["runtime_ratio", "feasibility_rate", "selection_overlap"]
+  significance:
+    paired_t_test_p: 0.05
+    wilcoxon_p: 0.05
+    both_required: true
+  stage_2_gate:
+    min_days: 60
+    min_paired_observations: 200
+    min_mean_improvement_pct: 1.0
+    p_value_threshold: 0.05
+  safety:
+    not_for_direct_execution: true
+    quantum_direct_execution_forbidden: true
+    no_stage_promotion_without_human_approval: true

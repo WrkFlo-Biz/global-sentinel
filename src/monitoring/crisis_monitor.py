@@ -365,10 +365,12 @@ class CrisisMonitor:
             from src.execution.position_manager import PositionManager
             pm = PositionManager(self.repo_root)
             pm_result = pm.run_check()
-            if pm_result.get("actions_taken", 0) > 0:
+            if pm_result.get("actions_taken", 0) > 0 or pm_result.get("proposed_close_count", 0) > 0:
                 self._log_event("position_management", {
                     "cycle": self.cycle_count,
                     "actions": pm_result.get("actions_taken", 0),
+                    "proposed_close_count": pm_result.get("proposed_close_count", 0),
+                    "manual_approval_required": pm_result.get("manual_approval_required", False),
                     "profits_taken": pm_result.get("profits_taken", 0),
                     "stops_hit": pm_result.get("stops_hit", 0),
                     "eod_flattened": pm_result.get("eod_flattened", 0),
@@ -2015,32 +2017,46 @@ class CrisisMonitor:
 
     # --- Alerting ---
     def _send_position_alert(self, pm_result: Dict[str, Any]):
-        """Send Telegram alert when positions are closed by the position manager."""
+        """Send Telegram alert when positions are closed or require manual approval."""
         actions = pm_result.get("actions_taken", 0)
+        proposed = pm_result.get("proposed_close_count", actions)
         profits = pm_result.get("profits_taken", 0)
         stops = pm_result.get("stops_hit", 0)
         eod = pm_result.get("eod_flattened", 0)
+        manual_approval_required = bool(pm_result.get("manual_approval_required", proposed > actions))
+        close_review_only = manual_approval_required and actions == 0 and proposed > 0
 
-        title = f"Position Manager: {actions} position(s) closed"
+        if close_review_only:
+            title = f"Position Manager: {proposed} close(s) require approval"
+        else:
+            title = f"Position Manager: {actions} position(s) closed"
 
         body = f"Profits taken: {profits} | Stops hit: {stops} | EOD flattened: {eod}\n"
+        if close_review_only:
+            body += "Auto-close is blocked. Manual approval required before any exit is sent.\n"
 
         for detail in pm_result.get("close_details", []):
             symbol = detail.get("symbol", "?")
             reason = detail.get("reason", "?")
             plpc = detail.get("unrealized_plpc", 0)
             pl = detail.get("unrealized_pl", 0)
-            body += f"  {symbol}: {reason} (P&L: {plpc:+.2f}%, ${pl:+,.2f})\n"
+            status = detail.get("status", "unknown")
+            if close_review_only:
+                body += f"  {symbol}: {reason} pending approval (P&L: {plpc:+.2f}%, ${pl:+,.2f})\n"
+            else:
+                body += f"  {symbol}: {reason} ({status}) (P&L: {plpc:+.2f}%, ${pl:+,.2f})\n"
 
         if pm_result.get("errors"):
             body += f"Errors: {len(pm_result['errors'])}\n"
 
         self.alerter._dispatch(title, body, level="info", extra={
-            "event": "position_management",
+            "event": "position_management_review_required" if close_review_only else "position_management",
             "actions": actions,
+            "proposed_close_count": proposed,
             "profits_taken": profits,
             "stops_hit": stops,
             "eod_flattened": eod,
+            "manual_approval_required": manual_approval_required,
         })
 
     def _load_alerter(self):

@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel Data Source Health Check
+
+[Service]
+Type=oneshot
+User=openclaw
+EnvironmentFile=-/opt/global-sentinel/.env
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/data_source_health.py

@@ -156,7 +156,24 @@ class BLSReleaseBridge:
             except Exception as e:
                 packets.append(self._error_packet(self.api_base, f"bls_api_error:{e}", page_name="bls_api"))
 
+        self._write_poll_snapshot(packets)
         return packets
+
+    def _write_poll_snapshot(self, packets: List[Dict[str, Any]]) -> None:
+        tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        snapshot = {
+            "timestamp_utc": iso_now(),
+            "bridge_name": "bls_release_bridge",
+            "packet_count": len(packets),
+            "page_count": len(self.pages),
+            "series_enabled": bool(self.series_cfg),
+            "packets": packets[:50],
+        }
+        path = self.cache_dir / f"bls_release_{tag}.json"
+        try:
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     # -------------------------
     # Schedule page polling

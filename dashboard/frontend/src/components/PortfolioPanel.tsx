@@ -28,7 +28,16 @@ function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cach
   }
 }
 
-function formatAccountLabel(label: string): string {
+function formatAgeSeconds(ageSeconds?: number | null): string {
+  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
+  if (ageSeconds < 60) return `${ageSeconds}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
+  return `${Math.floor(ageSeconds / 86400)}d`;
+}
+
+function formatAccountLabel(label: string, displayLabel?: string): string {
+  if (displayLabel) return displayLabel;
   if (label === "day_trade") return "Day Trade";
   if (label === "day_trade_2") return "Day Trade 2";
   if (label === "medium_long") return "Med/Long";
@@ -131,6 +140,9 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
   const multiAccount = totalAccountCount > 1;
   const status = data.status || (accountErrors.length > 0 ? "partial" : "ok");
   const statusClasses = statusTone(status);
+  const pricingSummary = data.pricing_summary;
+  const streamErrors = pricingSummary?.stream_error_accounts || [];
+  const streamDegraded = pricingSummary?.stream_degraded_accounts || [];
 
   return (
     <div>
@@ -152,6 +164,35 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
           </div>
         </div>
       </div>
+
+      {pricingSummary && positions.length > 0 && (
+        <div className={`rounded border px-3 py-2 mb-3 ${
+          pricingSummary.market_data_health === "stale"
+            ? "border-red-900/50 bg-red-950/20 text-red-200"
+            : pricingSummary.market_data_health !== "live"
+              ? "border-amber-900/50 bg-amber-950/20 text-amber-200"
+              : "border-emerald-900/40 bg-emerald-950/15 text-emerald-200"
+        }`}>
+          <div className="text-[10px] uppercase tracking-wider font-semibold">
+            Price Freshness
+          </div>
+          <div className="text-[11px] mt-1 leading-4">
+            Latest price age {formatAgeSeconds(pricingSummary.latest_pricing_age_seconds)}
+            {" · "}
+            Oldest price age {formatAgeSeconds(pricingSummary.oldest_pricing_age_seconds)}
+            {" · "}
+            {pricingSummary.stale_position_count} stale / {pricingSummary.delayed_position_count} delayed positions
+          </div>
+          {(streamErrors.length > 0 || streamDegraded.length > 0) && (
+            <div className="text-[10px] mt-1">
+              Stream health:
+              {streamErrors.length > 0 && ` errors on ${streamErrors.join(", ")}`}
+              {streamErrors.length > 0 && streamDegraded.length > 0 ? " ·" : ""}
+              {streamDegraded.length > 0 && ` delayed on ${streamDegraded.join(", ")}`}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
         {[
@@ -202,7 +243,7 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <div className="text-[10px] text-gray-400 uppercase">
-                    {formatAccountLabel(account.label)}
+                    {formatAccountLabel(account.label, account.display_label)}
                   </div>
                   <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${statusTone(account.status || "ok")}`}>
                     {(account.status || "ok").toUpperCase()}

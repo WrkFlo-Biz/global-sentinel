@@ -1,0 +1,21 @@
+[Unit]
+Description=Global Sentinel Economic Surprise Index Bridge
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/src/bridges/economic_surprise_bridge.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-econ-surprise
+NoNewPrivileges=true
+TimeoutStartSec=120
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

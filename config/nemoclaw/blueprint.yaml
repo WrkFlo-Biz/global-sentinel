@@ -1,0 +1,52 @@
+version: "0.1.0"
+min_openshell_version: "0.1.0"
+min_openclaw_version: "2026.3.0"
+digest: ""
+
+profiles:
+  - gs-azure-mini
+  - gs-azure-4o
+
+description: |
+  Global Sentinel staging blueprint for running OpenClaw inside OpenShell via
+  NVIDIA NemoClaw without disturbing the live Azure VM gateway.
+  The wrapper runs side-by-side on 127.0.0.1:18790 and expects policy to be
+  applied explicitly after sandbox creation.
+
+components:
+  sandbox:
+    image: "ghcr.io/nvidia/openshell-community/sandboxes/openclaw:latest"
+    name: "gs-wrapper"
+    forward_ports:
+      - "127.0.0.1:18790"
+
+  inference:
+    profiles:
+      gs-azure-mini:
+        provider_type: "openai"
+        provider_name: "gs-azure-openai"
+        endpoint: "https://example.invalid/openai/v1"
+        model: "gpt-5-mini"
+        credential_env: "AZURE_OPENAI_API_KEY"
+
+      gs-azure-4o:
+        provider_type: "openai"
+        provider_name: "gs-azure-openai"
+        endpoint: "https://example.invalid/openai/v1"
+        model: "gpt-4o"
+        credential_env: "AZURE_OPENAI_API_KEY"
+
+  policy:
+    base: "sandboxes/openclaw/policy.yaml"
+    additions:
+      azure_openai:
+        name: azure_openai
+        endpoints:
+          - host: "__AZURE_OPENAI_HOST__"
+            port: 443
+            protocol: rest
+            enforcement: enforce
+            tls: terminate
+            rules:
+              - allow: { method: GET, path: "/openai/**" }
+              - allow: { method: POST, path: "/openai/**" }

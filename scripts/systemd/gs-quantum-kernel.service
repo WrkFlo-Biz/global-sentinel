@@ -1,0 +1,16 @@
+[Unit]
+Description=Global Sentinel Quantum Kernel Regime Detector
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Environment=PYTHONPATH=/opt/global-sentinel
+Environment=GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/src/research/quantum_kernel_regime.py
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

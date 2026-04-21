@@ -1,0 +1,138 @@
+schema_version: freshness_policy.v1
+
+sources:
+  fed:
+    freshness_ttl_minutes: 60
+    backoff_on_failure: exponential
+    max_backoff_minutes: 480
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.5
+  fred:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: exponential
+    max_backoff_minutes: 1440
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  bls:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 720
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  eia:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 720
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  gdelt:
+    freshness_ttl_minutes: 30
+    backoff_on_failure: exponential
+    max_backoff_minutes: 240
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  maritime:
+    freshness_ttl_minutes: 120
+    backoff_on_failure: linear
+    max_backoff_minutes: 480
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  maritime_bridge:
+    freshness_ttl_minutes: 120
+    backoff_on_failure: linear
+    max_backoff_minutes: 480
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  sentiment:
+    freshness_ttl_minutes: 60
+    backoff_on_failure: exponential
+    max_backoff_minutes: 360
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.3
+  sec:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 2880
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.5
+  whitehouse:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 2880
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.5
+  cftc:
+    freshness_ttl_minutes: 10080
+    backoff_on_failure: linear
+    max_backoff_minutes: 10080
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.4
+  noaa:
+    freshness_ttl_minutes: 360
+    backoff_on_failure: linear
+    max_backoff_minutes: 1440
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  options_greeks:
+    freshness_ttl_minutes: 15
+    backoff_on_failure: exponential
+    max_backoff_minutes: 120
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.3
+  options_greeks_bridge:
+    freshness_ttl_minutes: 15
+    backoff_on_failure: exponential
+    max_backoff_minutes: 120
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.3
+  congressional_disclosures:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 2880
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  cds_sovereign:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: exponential
+    max_backoff_minutes: 2880
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  cds_sovereign_bridge:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: exponential
+    max_backoff_minutes: 2880
+    stale_action: degrade_trust_weight
+    stale_trust_weight_override: 0.4
+  gpr_index:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 4320
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  gpr_index_bridge:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 4320
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  semiconductor_supply:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 2880
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+  semiconductor_supply_bridge:
+    freshness_ttl_minutes: 1440
+    backoff_on_failure: linear
+    max_backoff_minutes: 2880
+    stale_action: annotate_stale
+    stale_trust_weight_override: 0.3
+
+quorum:
+  execution_escalation:
+    required_tier1_sources: 2
+    required_tier2_sources: 1
+    min_freshness_sources: 3
+  regime_transition:
+    required_confirming_sources: 2
+    max_stale_sources: 1

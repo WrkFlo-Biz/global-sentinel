@@ -1,0 +1,9 @@
+[Unit]
+Description=Alpha Validator Timer (Sunday 08:00 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 08:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

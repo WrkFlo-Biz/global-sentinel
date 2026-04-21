@@ -1,0 +1,22 @@
+[Unit]
+Description=Global Sentinel Position Threshold Monitor
+After=network-online.target global-sentinel-dashboard.service
+Wants=network-online.target global-sentinel-dashboard.service
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u scripts/ops/position_threshold_monitor.py --repo-root /opt/global-sentinel --config /opt/global-sentinel/config/position_alerts.json
+Restart=always
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-position-threshold-monitor
+
+[Install]
+WantedBy=multi-user.target

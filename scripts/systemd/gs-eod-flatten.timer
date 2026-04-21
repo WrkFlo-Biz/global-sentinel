@@ -1,0 +1,15 @@
+[Unit]
+Description=Global Sentinel EOD Flatten Timer (15:45 ET daily)
+
+[Timer]
+# Run at 19:45 UTC (15:45 EDT) and 20:45 UTC (15:45 EST)
+# The script itself checks weekday and skips weekends
+OnCalendar=*-*-* 19:45:00
+OnCalendar=*-*-* 20:45:00
+# Also run at 19:55 and 20:55 as safety net (script is idempotent)
+OnCalendar=*-*-* 19:55:00
+OnCalendar=*-*-* 20:55:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

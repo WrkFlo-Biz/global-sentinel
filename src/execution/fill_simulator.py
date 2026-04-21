@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.execution.slippage_model import compute_global_net_ev_ranking
+
 
 # -----------------------------
 # Helpers
@@ -89,6 +91,12 @@ class FillSimConfig:
     base_partial_fill_probability: float = 0.18
     base_fill_completion_probability: float = 0.88
     base_reject_risk_probability: float = 0.04
+
+    # Ranking helpers
+    short_borrow_cost_bps: float = 8.0
+    hard_to_borrow_surcharge_bps: float = 18.0
+    session_liquidity_penalty_bps_coeff: float = 14.0
+    fill_quality_penalty_bps_coeff: float = 18.0
 
 
 # -----------------------------
@@ -227,9 +235,53 @@ class FillSimulator:
             reject_risk_probability=reject_risk_probability,
             do_not_route=do_not_route,
         )
+        session_liquidity_score = self._session_liquidity_score(
+            bucket=bucket,
+            rvol=rvol,
+            spread_bps=spread_bps,
+            quote_age_ms=quote_age_ms,
+            broker_status_degraded=broker_status_degraded,
+            halted=halted,
+        )
+        fill_quality_score = self._fill_quality_score(
+            fill_feasibility=fill_feasibility,
+            fill_completion_probability=fill_completion_probability,
+            partial_fill_probability=partial_fill_probability,
+            reject_risk_probability=reject_risk_probability,
+        )
+        session_liquidity_penalty_bps = max(
+            0.0,
+            (1.0 - session_liquidity_score) * self.cfg.session_liquidity_penalty_bps_coeff,
+        )
+        fill_quality_penalty_bps = max(
+            0.0,
+            (1.0 - fill_quality_score) * self.cfg.fill_quality_penalty_bps_coeff,
+        )
+        borrow_cost_bps = self._borrow_cost_bps(
+            direction=direction,
+            execution_constraints=execution_constraints,
+            candidate=candidate,
+        )
+        cost_bps = (
+            expected_slippage_bps
+            + fill_quality_penalty_bps
+            + session_liquidity_penalty_bps
+            + borrow_cost_bps
+        )
+        net_profile = compute_global_net_ev_ranking(
+            expected_edge_bps=candidate.get("expected_edge_bps"),
+            expected_cost_bps=cost_bps,
+            confidence_score=confidence,
+            size_multiplier=size_mult,
+            fill_feasibility_score=fill_feasibility,
+            fill_quality_score=fill_quality_score,
+            session_liquidity_score=session_liquidity_score,
+            reject_risk_probability=reject_risk_probability,
+            do_not_route=do_not_route,
+        )
 
         return {
-            "schema_version": "fill_sim_assessment.v1",
+            "schema_version": "fill_sim_assessment.v2",
             "timestamp_utc": iso_now(),
             "symbol": candidate.get("symbol"),
             "window_name": window_name,
@@ -240,6 +292,16 @@ class FillSimulator:
             "partial_fill_probability": round(partial_fill_probability, 4),
             "fill_completion_probability": round(fill_completion_probability, 4),
             "reject_risk_probability": round(reject_risk_probability, 4),
+            "fill_quality_score": round(fill_quality_score, 4),
+            "fill_quality_penalty_bps": round(fill_quality_penalty_bps, 2),
+            "session_liquidity_score": round(session_liquidity_score, 4),
+            "session_liquidity_penalty_bps": round(session_liquidity_penalty_bps, 2),
+            "borrow_cost_bps": round(borrow_cost_bps, 2),
+            "expected_edge_bps": net_profile["expected_edge_bps"],
+            "expected_cost_bps": net_profile["expected_cost_bps"],
+            "net_expected_value_bps": net_profile["net_expected_value_bps"],
+            "net_ev_quality_multiplier": net_profile["quality_multiplier"],
+            "net_ev_ranking_score": net_profile["ranking_score"],
 
             "fill_price_band": fill_price_band,
             "execution_quality_class": quality_class,
@@ -555,6 +617,75 @@ class FillSimulator:
         if fill_feasibility >= 0.50 and expected_slippage_bps <= 25 and reject_risk_probability <= 0.25:
             return "acceptable_shadow_only"
         return "poor"
+
+    def _session_liquidity_score(
+        self,
+        *,
+        bucket: str,
+        rvol: float,
+        spread_bps: float,
+        quote_age_ms: float,
+        broker_status_degraded: bool,
+        halted: bool,
+    ) -> float:
+        score = 0.64
+        if bucket == "opening_windows":
+            score = 0.72
+        elif bucket == "power_hour":
+            score = 0.68
+        elif bucket == "lunch_lull":
+            score = 0.45
+        elif bucket == "close_exhaustion_watch":
+            score = 0.35
+
+        if rvol > 0:
+            score += min(max(rvol - 1.0, -1.0), 1.0) * 0.12
+        if spread_bps > 0:
+            score -= min(spread_bps / 150.0, 0.22)
+        if quote_age_ms > 1500:
+            score -= 0.08
+        if quote_age_ms > 5000:
+            score -= 0.10
+        if broker_status_degraded:
+            score -= 0.10
+        if halted:
+            score -= 0.35
+        return clamp(score)
+
+    @staticmethod
+    def _fill_quality_score(
+        *,
+        fill_feasibility: float,
+        fill_completion_probability: float,
+        partial_fill_probability: float,
+        reject_risk_probability: float,
+    ) -> float:
+        score = (
+            fill_feasibility * 0.40
+            + fill_completion_probability * 0.35
+            + (1.0 - reject_risk_probability) * 0.15
+            + (1.0 - partial_fill_probability) * 0.10
+        )
+        return clamp(score)
+
+    def _borrow_cost_bps(
+        self,
+        *,
+        direction: str,
+        execution_constraints: Dict[str, Any],
+        candidate: Dict[str, Any],
+    ) -> float:
+        side = str(direction or "").lower()
+        if "short" not in side and "bearish" not in side:
+            return 0.0
+
+        explicit = safe_float(candidate.get("borrow_fee_bps"), 0.0)
+        if explicit > 0:
+            return explicit
+
+        if safe_bool(execution_constraints.get("hard_to_borrow"), False):
+            return self.cfg.short_borrow_cost_bps + self.cfg.hard_to_borrow_surcharge_bps
+        return self.cfg.short_borrow_cost_bps
 
 
 # -----------------------------

@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel - Daily Session Memory Timer (4:30 PM ET)
+
+[Timer]
+# 4:30 PM ET (EDT) = 20:30 UTC
+# During EST (Nov-Mar), this fires at 3:30 PM ET — close enough, market still open
+OnCalendar=*-*-* 20:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,448 @@
+{
+  "intents": [
+    {
+      "schema_version": "order_intent.v1",
+      "intent_id": "intent-aa423efc28084bcf",
+      "package_id": "pkg-smoke-baseline-fc6e77ac",
+      "candidate_id": "cand-smoke-xom",
+      "client_order_id": "gs-4a5cb764d5f7653d",
+      "timestamp_utc": "2026-03-06T13:36:00.041484+00:00",
+      "status": "filled",
+      "shadow_mode": true,
+      "package_context": {
+        "package_type": "idiosyncratic_candidate_package",
+        "package_timestamp_utc": "2026-03-04T20:45:00+00:00",
+        "effective_mode": "shadow",
+        "regime_shift_probability": 0.71,
+        "time_window_name": "power_hour",
+        "watchlist_only_window": false
+      },
+      "candidate_context": {
+        "symbol": "XOM",
+        "strategy_style": "momentum_follow_through",
+        "template_key": "power_hour_continuation",
+        "direction": "long",
+        "confidence_score": 0.83,
+        "size_multiplier_suggestion": 0.9,
+        "themes": [
+          "energy",
+          "geopolitical_risk"
+        ],
+        "block_reasons": [],
+        "execution_constraints": {
+          "manual_review_required": false
+        },
+        "fill_sim_assessment": {
+          "execution_quality_class": "good",
+          "fill_feasibility_score": 0.84,
+          "reject_risk_probability": 0.06,
+          "expected_slippage_bps": 11.5,
+          "do_not_route_even_in_shadow": false
+        }
+      },
+      "order_request": {
+        "symbol": "XOM",
+        "side": "buy",
+        "type": "limit",
+        "time_in_force": "day",
+        "qty": 4,
+        "extended_hours": true,
+        "shadow_mode": true,
+        "limit_price": 107.37,
+        "client_order_id": "gs-4a5cb764d5f7653d",
+        "strategy_context": {
+          "package_id": "pkg-smoke-baseline-fc6e77ac",
+          "candidate_id": "cand-smoke-xom",
+          "intent_id": "intent-aa423efc28084bcf",
+          "time_window_name": "power_hour"
+        }
+      },
+      "broker_binding": {
+        "broker_name": "mock",
+        "broker_account_id": null,
+        "broker_order_id": "mock-01730970ed4f",
+        "submitted_at_utc": "2026-03-06T13:36:00.044887+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:00.044911+00:00"
+      },
+      "broker_state": {
+        "order_id": "mock-01730970ed4f",
+        "client_order_id": "gs-4a5cb764d5f7653d",
+        "status": "filled",
+        "symbol": "XOM",
+        "side": "buy",
+        "type": "limit",
+        "qty": 4.0,
+        "filled_qty": 4.0,
+        "remaining_qty": 0.0,
+        "limit_price": 107.37,
+        "avg_fill_price": 107.35,
+        "submitted_at_utc": "2026-03-06T13:36:00.044887+00:00",
+        "updated_at_utc": "2026-03-06T13:36:01.012480+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:00.044911+00:00",
+        "replaced_by_order_id": null,
+        "replaces_order_id": null,
+        "broker_raw_status": "filled",
+        "broker_order_payload_ref": null,
+        "reject_reason_code": null,
+        "reject_reason_message": null
+      },
+      "broker_trades": [
+        {
+          "trade_id": "trade-d5e29fe75f09",
+          "order_id": "mock-01730970ed4f",
+          "symbol": "XOM",
+          "side": "buy",
+          "fill_qty": 4.0,
+          "fill_price": 107.35,
+          "fill_time_utc": "2026-03-06T13:36:01.012087+00:00",
+          "exchange": "MOCK",
+          "liquidity_flag": null,
+          "commission": 0.0,
+          "fees": 0.0
+        }
+      ],
+      "reconciliation": {
+        "last_reconciled_at_utc": "2026-03-06T13:36:05.922572+00:00",
+        "reconciler_status": "ok",
+        "notes": []
+      },
+      "audit": {
+        "created_at_utc": "2026-03-06T13:36:00.041532+00:00",
+        "updated_at_utc": "2026-03-06T13:36:05.922628+00:00",
+        "history": [
+          {
+            "ts": "2026-03-06T13:36:00.041540+00:00",
+            "event": "intent_created",
+            "status": "draft",
+            "details": {
+              "shadow_mode": true
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:00.499860+00:00",
+            "event": "broker_order_bound",
+            "status": "open",
+            "details": {
+              "broker_name": "mock",
+              "broker_order_id": "mock-01730970ed4f",
+              "broker_status": "accepted"
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:05.922618+00:00",
+            "event": "broker_reconciled",
+            "status": "filled",
+            "details": {
+              "reconciler_status": "ok",
+              "broker_order_status": "filled",
+              "trade_count": 1
+            }
+          }
+        ]
+      },
+      "runtime_flags": {
+        "time_window_hint": "power_hour",
+        "watchlist_only_window": false,
+        "package_effective_mode": "shadow",
+        "macro_event_quorum_pass": true
+      },
+      "order_lifecycle_policy": {
+        "resolved_ttl_minutes": 8.0,
+        "ttl_resolved": true,
+        "ttl_policy_source": "config/order_ttl_policy.yaml",
+        "ttl_explanation": {
+          "resolved_ttl_minutes": 8.0,
+          "time_window_name": "power_hour",
+          "strategy_style": "momentum_follow_through",
+          "symbol": "XOM",
+          "reasons": [
+            {
+              "layer": "default",
+              "ttl_minutes": 30.0
+            },
+            {
+              "layer": "time_window",
+              "time_window_name": "power_hour",
+              "ttl_minutes": 7.0
+            },
+            {
+              "layer": "strategy",
+              "strategy_style": "momentum_follow_through",
+              "ttl_minutes": 8.0
+            },
+            {
+              "layer": "symbol",
+              "symbol": "XOM",
+              "ttl_minutes": 8.0
+            }
+          ]
+        },
+        "created_with_time_window_hint": "power_hour"
+      },
+      "extra_context": {
+        "router_run_id": "router-18ef9461bb",
+        "runtime_flags": {
+          "time_window_hint": "power_hour",
+          "watchlist_only_window": false,
+          "package_effective_mode": "shadow",
+          "macro_event_quorum_pass": true
+        },
+        "order_lifecycle_policy": {
+          "resolved_ttl_minutes": 8.0,
+          "ttl_resolved": true,
+          "ttl_policy_source": "config/order_ttl_policy.yaml",
+          "ttl_explanation": {
+            "resolved_ttl_minutes": 8.0,
+            "time_window_name": "power_hour",
+            "strategy_style": "momentum_follow_through",
+            "symbol": "XOM",
+            "reasons": [
+              {
+                "layer": "default",
+                "ttl_minutes": 30.0
+              },
+              {
+                "layer": "time_window",
+                "time_window_name": "power_hour",
+                "ttl_minutes": 7.0
+              },
+              {
+                "layer": "strategy",
+                "strategy_style": "momentum_follow_through",
+                "ttl_minutes": 8.0
+              },
+              {
+                "layer": "symbol",
+                "symbol": "XOM",
+                "ttl_minutes": 8.0
+              }
+            ]
+          },
+          "created_with_time_window_hint": "power_hour"
+        }
+      }
+    },
+    {
+      "schema_version": "order_intent.v1",
+      "intent_id": "intent-1bdb87cba65d4904",
+      "package_id": "pkg-smoke-baseline-fc6e77ac",
+      "candidate_id": "cand-smoke-cat",
+      "client_order_id": "gs-2d86be8c5e3fe2c9",
+      "timestamp_utc": "2026-03-06T13:36:00.560699+00:00",
+      "status": "filled",
+      "shadow_mode": true,
+      "package_context": {
+        "package_type": "idiosyncratic_candidate_package",
+        "package_timestamp_utc": "2026-03-04T20:45:00+00:00",
+        "effective_mode": "shadow",
+        "regime_shift_probability": 0.71,
+        "time_window_name": "power_hour",
+        "watchlist_only_window": false
+      },
+      "candidate_context": {
+        "symbol": "CAT",
+        "strategy_style": "momentum_follow_through",
+        "template_key": "power_hour_continuation",
+        "direction": "long",
+        "confidence_score": 0.72,
+        "size_multiplier_suggestion": 0.8,
+        "themes": [
+          "industrials",
+          "domestic_infra"
+        ],
+        "block_reasons": [],
+        "execution_constraints": {
+          "manual_review_required": false
+        },
+        "fill_sim_assessment": {
+          "execution_quality_class": "acceptable_shadow_only",
+          "fill_feasibility_score": 0.67,
+          "reject_risk_probability": 0.14,
+          "expected_slippage_bps": 18.2,
+          "do_not_route_even_in_shadow": false
+        }
+      },
+      "order_request": {
+        "symbol": "CAT",
+        "side": "buy",
+        "type": "limit",
+        "time_in_force": "day",
+        "qty": 2,
+        "extended_hours": true,
+        "shadow_mode": true,
+        "limit_price": 342.72,
+        "client_order_id": "gs-2d86be8c5e3fe2c9",
+        "strategy_context": {
+          "package_id": "pkg-smoke-baseline-fc6e77ac",
+          "candidate_id": "cand-smoke-cat",
+          "intent_id": "intent-1bdb87cba65d4904",
+          "time_window_name": "power_hour"
+        }
+      },
+      "broker_binding": {
+        "broker_name": "mock",
+        "broker_account_id": null,
+        "broker_order_id": "mock-e27d9fb34d34",
+        "submitted_at_utc": "2026-03-06T13:36:00.561554+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:00.561570+00:00"
+      },
+      "broker_state": {
+        "order_id": "mock-e27d9fb34d34",
+        "client_order_id": "gs-2d86be8c5e3fe2c9",
+        "status": "filled",
+        "symbol": "CAT",
+        "side": "buy",
+        "type": "limit",
+        "qty": 2.0,
+        "filled_qty": 2.0,
+        "remaining_qty": 0.0,
+        "limit_price": 342.72,
+        "avg_fill_price": 342.25,
+        "submitted_at_utc": "2026-03-06T13:36:00.561554+00:00",
+        "updated_at_utc": "2026-03-06T13:36:01.012611+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:00.561570+00:00",
+        "replaced_by_order_id": null,
+        "replaces_order_id": null,
+        "broker_raw_status": "filled",
+        "broker_order_payload_ref": null,
+        "reject_reason_code": null,
+        "reject_reason_message": null
+      },
+      "broker_trades": [
+        {
+          "trade_id": "trade-253fbaa73b6f",
+          "order_id": "mock-e27d9fb34d34",
+          "symbol": "CAT",
+          "side": "buy",
+          "fill_qty": 2.0,
+          "fill_price": 342.25,
+          "fill_time_utc": "2026-03-06T13:36:01.012600+00:00",
+          "exchange": "MOCK",
+          "liquidity_flag": null,
+          "commission": 0.0,
+          "fees": 0.0
+        }
+      ],
+      "reconciliation": {
+        "last_reconciled_at_utc": "2026-03-06T13:36:06.045976+00:00",
+        "reconciler_status": "ok",
+        "notes": []
+      },
+      "audit": {
+        "created_at_utc": "2026-03-06T13:36:00.560723+00:00",
+        "updated_at_utc": "2026-03-06T13:36:06.046010+00:00",
+        "history": [
+          {
+            "ts": "2026-03-06T13:36:00.560726+00:00",
+            "event": "intent_created",
+            "status": "draft",
+            "details": {
+              "shadow_mode": true
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:00.797921+00:00",
+            "event": "broker_order_bound",
+            "status": "open",
+            "details": {
+              "broker_name": "mock",
+              "broker_order_id": "mock-e27d9fb34d34",
+              "broker_status": "accepted"
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:06.046003+00:00",
+            "event": "broker_reconciled",
+            "status": "filled",
+            "details": {
+              "reconciler_status": "ok",
+              "broker_order_status": "filled",
+              "trade_count": 1
+            }
+          }
+        ]
+      },
+      "runtime_flags": {
+        "time_window_hint": "power_hour",
+        "watchlist_only_window": false,
+        "package_effective_mode": "shadow",
+        "macro_event_quorum_pass": true
+      },
+      "order_lifecycle_policy": {
+        "resolved_ttl_minutes": 10.0,
+        "ttl_resolved": true,
+        "ttl_policy_source": "config/order_ttl_policy.yaml",
+        "ttl_explanation": {
+          "resolved_ttl_minutes": 10.0,
+          "time_window_name": "power_hour",
+          "strategy_style": "momentum_follow_through",
+          "symbol": "CAT",
+          "reasons": [
+            {
+              "layer": "default",
+              "ttl_minutes": 30.0
+            },
+            {
+              "layer": "time_window",
+              "time_window_name": "power_hour",
+              "ttl_minutes": 7.0
+            },
+            {
+              "layer": "strategy",
+              "strategy_style": "momentum_follow_through",
+              "ttl_minutes": 8.0
+            },
+            {
+              "layer": "symbol",
+              "symbol": "CAT",
+              "ttl_minutes": 10.0
+            }
+          ]
+        },
+        "created_with_time_window_hint": "power_hour"
+      },
+      "extra_context": {
+        "router_run_id": "router-18ef9461bb",
+        "runtime_flags": {
+          "time_window_hint": "power_hour",
+          "watchlist_only_window": false,
+          "package_effective_mode": "shadow",
+          "macro_event_quorum_pass": true
+        },
+        "order_lifecycle_policy": {
+          "resolved_ttl_minutes": 10.0,
+          "ttl_resolved": true,
+          "ttl_policy_source": "config/order_ttl_policy.yaml",
+          "ttl_explanation": {
+            "resolved_ttl_minutes": 10.0,
+            "time_window_name": "power_hour",
+            "strategy_style": "momentum_follow_through",
+            "symbol": "CAT",
+            "reasons": [
+              {
+                "layer": "default",
+                "ttl_minutes": 30.0
+              },
+              {
+                "layer": "time_window",
+                "time_window_name": "power_hour",
+                "ttl_minutes": 7.0
+              },
+              {
+                "layer": "strategy",
+                "strategy_style": "momentum_follow_through",
+                "ttl_minutes": 8.0
+              },
+              {
+                "layer": "symbol",
+                "symbol": "CAT",
+                "ttl_minutes": 10.0
+              }
+            ]
+          },
+          "created_with_time_window_hint": "power_hour"
+        }
+      }
+    }
+  ]
+}

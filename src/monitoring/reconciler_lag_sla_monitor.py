@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.execution.strategy_learning import infer_strategy_family
 
 
 def iso_now() -> str:
@@ -60,6 +63,48 @@ class ReconcilerLagSLAMonitor:
                 latest[iid] = r
         return list(latest.values())
 
+    def _strategy_context(self, intent: Dict[str, Any]) -> Dict[str, Any]:
+        candidate_context = intent.get("candidate_context") or {}
+        metadata = candidate_context.get("metadata") or {}
+        strategy_style = candidate_context.get("strategy_style") or metadata.get("strategy_style")
+        strategy = (
+            candidate_context.get("strategy")
+            or metadata.get("strategy")
+            or candidate_context.get("template_key")
+            or strategy_style
+        )
+        strategy_family = (
+            candidate_context.get("strategy_family")
+            or metadata.get("strategy_family")
+            or infer_strategy_family(
+                {
+                    "strategy": strategy,
+                    "strategy_style": strategy_style,
+                    "holding_period": candidate_context.get("holding_period") or metadata.get("holding_period"),
+                    "time_window_name": candidate_context.get("time_window_name") or metadata.get("time_window_name"),
+                },
+                default_family="unknown",
+            )
+        )
+        learning_adjusted = candidate_context.get("learning_adjusted")
+        if learning_adjusted is None:
+            learning_adjusted = metadata.get("learning_adjusted", False)
+
+        return {
+            "strategy": strategy,
+            "strategy_style": strategy_style,
+            "strategy_family": strategy_family,
+            "underlying_strategy": (
+                candidate_context.get("underlying_strategy")
+                or metadata.get("underlying_strategy")
+            ),
+            "learning_adjusted": bool(learning_adjusted),
+            "learning_adjustment_detail": (
+                candidate_context.get("learning_adjustment_detail")
+                or metadata.get("learning_adjustment_detail")
+            ),
+        }
+
     def evaluate(
         self,
         target_statuses: Optional[List[str]] = None,
@@ -76,12 +121,17 @@ class ReconcilerLagSLAMonitor:
         lags = []
         breaches_warn = []
         breaches_critical = []
+        strategy_counts = defaultdict(int)
+        strategy_family_counts = defaultdict(int)
+        underlying_strategy_counts = defaultdict(int)
+        learning_adjusted_count = 0
 
         for r in intents:
             recon = r.get("reconciliation") or {}
             last_recon_ts = parse_ts(recon.get("last_reconciled_at_utc"))
             created_ts = parse_ts(r.get("timestamp_utc")) or parse_ts(((r.get("audit") or {}).get("created_at_utc")))
             updated_ts = parse_ts(((r.get("audit") or {}).get("updated_at_utc")))
+            strategy_context = self._strategy_context(r)
 
             ref_ts = last_recon_ts or updated_ts or created_ts
             lag_minutes = None
@@ -93,7 +143,7 @@ class ReconcilerLagSLAMonitor:
                 "intent_id": r.get("intent_id"),
                 "status": r.get("status"),
                 "symbol": ((r.get("candidate_context") or {}).get("symbol")),
-                "strategy_style": ((r.get("candidate_context") or {}).get("strategy_style")),
+                **strategy_context,
                 "broker_name": ((r.get("broker_binding") or {}).get("broker_name")),
                 "broker_order_id": ((r.get("broker_binding") or {}).get("broker_order_id")),
                 "broker_status": ((r.get("broker_state") or {}).get("status")) if r.get("broker_state") else None,
@@ -102,6 +152,15 @@ class ReconcilerLagSLAMonitor:
                 "reconciler_status": recon.get("reconciler_status"),
             }
             lag_rows.append(row)
+
+            if row.get("strategy"):
+                strategy_counts[str(row["strategy"])] += 1
+            if row.get("strategy_family"):
+                strategy_family_counts[str(row["strategy_family"])] += 1
+            if row.get("underlying_strategy"):
+                underlying_strategy_counts[str(row["underlying_strategy"])] += 1
+            if row.get("learning_adjusted"):
+                learning_adjusted_count += 1
 
             if lag_minutes is not None and lag_minutes >= per_intent_lag_warn_minutes:
                 breaches_warn.append(row)
@@ -147,6 +206,10 @@ class ReconcilerLagSLAMonitor:
                 "avg_lag_minutes": avg_lag,
                 "max_lag_minutes": max_lag,
                 "severity": severity,
+                "learning_adjusted_intent_count": learning_adjusted_count,
+                "strategy_counts": dict(sorted(strategy_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "strategy_family_counts": dict(sorted(strategy_family_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "underlying_strategy_counts": dict(sorted(underlying_strategy_counts.items(), key=lambda kv: kv[1], reverse=True)),
                 **sla_breaches,
             },
             "top_lagging_intents": sorted(
@@ -181,11 +244,13 @@ def render_markdown(rep: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Top Lagging Intents")
     lines.append("")
-    lines.append("| Intent ID | Symbol | Status | Broker | Broker Status | Lag (min) |")
-    lines.append("|---|---|---|---|---|---:|")
+    lines.append("| Intent ID | Symbol | Strategy | Family | Underlying | Learned | Status | Broker | Broker Status | Lag (min) |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---:|")
     for row in (rep.get("top_lagging_intents") or [])[:15]:
         lines.append(
-            f"| {row.get('intent_id')} | {row.get('symbol')} | {row.get('status')} | "
+            f"| {row.get('intent_id')} | {row.get('symbol')} | {row.get('strategy')} | "
+            f"{row.get('strategy_family')} | {row.get('underlying_strategy')} | "
+            f"{'yes' if row.get('learning_adjusted') else 'no'} | {row.get('status')} | "
             f"{row.get('broker_name')} | {row.get('broker_status')} | {row.get('lag_minutes')} |"
         )
     return "\n".join(lines)

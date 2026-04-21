@@ -1,0 +1,13 @@
+[Unit]
+Description=IBKR Client Portal Session Keepalive
+After=gs-ibkr-cpgw.service
+
+[Service]
+Type=simple
+User=openclaw
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/ibkr_keepalive.py
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,93 @@
+name: research-online-learning
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: "Target environment"
+        required: false
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod-shadow
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  online-learning:
+    runs-on: ubuntu-latest
+    env:
+      ENV_NAME: ${{ inputs.env_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml
+
+      - name: Run research tests
+        run: |
+          PYTHONPATH=. pytest -q \
+            tests/research/test_qfinance_feature_encoder.py \
+            tests/research/test_qfinance_training_dataset_builder.py
+
+      - name: Init learning state if missing
+        run: |
+          mkdir -p reports/research/state
+          PYTHONPATH=. python src/research/qfinance_online_learning_state.py \
+            --state-json reports/research/state/online_learning_state_prev.json \
+            --init
+
+      - name: Copy previous state to current baseline
+        run: |
+          cp reports/research/state/online_learning_state_prev.json \
+             reports/research/state/online_learning_state_current.json
+
+      - name: Update research model weights
+        run: |
+          if [ -f reports/research/training_labels.json ]; then
+            PYTHONPATH=. python src/research/update_research_model_weights.py \
+              --state-json reports/research/state/online_learning_state_prev.json \
+              --labeled-dataset-json reports/research/training_labels.json \
+              --output-json reports/research/state/online_learning_state_current.json \
+              --learning-rate 0.01
+          else
+            echo "training_labels.json not found; skipping weight update."
+          fi
+
+      - name: Build drift report
+        run: |
+          PYTHONPATH=. python src/reports/research_drift_report.py \
+            --previous-state-json reports/research/state/online_learning_state_prev.json \
+            --current-state-json reports/research/state/online_learning_state_current.json
+
+      - name: Upload learning-state artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-online-learning-${{ inputs.env_name }}
+          path: |
+            reports/research/state/
+            reports/research/research_drift_report.json
+            reports/research/research_drift_report.md
+          if-no-files-found: warn
+
+      - name: Append drift summary
+        run: |
+          if [ -f reports/research/research_drift_report.md ]; then
+            cat reports/research/research_drift_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi

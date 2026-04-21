@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: Walk-Forward Optimization (Saturday 10:00 UTC) Timer
+
+[Timer]
+OnCalendar=Sat *-*-* 10:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Auto-Research Engine Timer (daily 2 AM ET / 06:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Global Sentinel ORB + Multi-TF Alignment Daemon (9:25 AM - 4:05 PM ET)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/strategies/orb_multi_tf_strategy.py --mode daemon
+StandardOutput=journal
+StandardError=journal
+Restart=no
+# Daemon self-exits after market close; systemd timer restarts it daily
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

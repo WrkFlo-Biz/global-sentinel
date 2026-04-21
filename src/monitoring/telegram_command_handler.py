@@ -212,7 +212,8 @@ class TelegramCommandHandler:
                     if not message:
                         continue
 
-                    chat_id = str(message.get("chat", {}).get("id", ""))
+                    chat = message.get("chat", {}) or {}
+                    chat_id = str(chat.get("id", ""))
                     text = (message.get("text") or "").strip()
 
                     if not text or not chat_id:
@@ -220,6 +221,7 @@ class TelegramCommandHandler:
 
                     # Security: only respond to allowed chat IDs
                     if chat_id not in self.allowed_chat_ids:
+                        self._log_unauthorized_chat(message)
                         continue
 
                     # Rate limiting
@@ -248,16 +250,72 @@ class TelegramCommandHandler:
     # Command dispatcher
     # ------------------------------------------------------------------
 
+    def _llm_reply(self, chat_id: str, text: str) -> None:
+        """Send a Claude LLM response to a free-form user message."""
+        try:
+            self._send_chat_action(chat_id, "typing")
+            import anthropic
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+            # Load latest scorecard context
+            ctx = ""
+            try:
+                import json as _json
+                sc_path = Path(self.repo_root) / "logs" / "scorecards" / "latest_signal.json"
+                if sc_path.exists():
+                    sc = _json.loads(sc_path.read_text())
+                    mode = sc.get("mode", "?")
+                    prob = sc.get("regime_shift_probability", "?")
+                    ctx = f"[GS context: mode={mode}, regime_shift_prob={prob}]\n\n"
+            except Exception:
+                pass
+            system = (
+                "You are the Global Sentinel AI assistant — a live geopolitical risk and "
+                f"trading intelligence system monitoring a ${600_000:,} portfolio. "
+                "Strategy: {self.strategy}. "
+                "Answer questions about markets, positions, risk, and macro events concisely. "
+                "Use HTML formatting for Telegram (bold=<b>, code=<code>)."
+            )
+            msg = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=800,
+                system=system,
+                messages=[{"role": "user", "content": ctx + text}],
+            )
+            reply = msg.content[0].text if msg.content else "No response."
+            self._send_message(chat_id, reply, parse_mode="HTML")
+        except Exception as exc:
+            self._send_message(chat_id, f"⚠️ LLM error: {str(exc)[:120]}")
+
+    def _send_chat_action(self, chat_id: str, action: str) -> None:
+        try:
+            requests.post(
+                self._api_url("sendChatAction"),
+                json={"chat_id": chat_id, "action": action},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
     def _dispatch_command(self, chat_id: str, text: str):
-        """Parse and dispatch a command."""
+        """Dispatch /gs_ commands; route everything else to LLM."""
         # Strip leading / if present
         if text.startswith("/"):
             text = text[1:]
 
-        # Split into command and arguments
+        # Non-/gs_ messages → LLM chat response
+        if not text.lower().startswith("gs_"):
+            self._llm_reply(chat_id, text)
+            return
+
+        # Strip the gs_ prefix for dispatch
+        text = text[3:]  # Remove "gs_"
+
         parts = text.split(None, 1)
         cmd = parts[0].lower() if parts else ""
         args = parts[1] if len(parts) > 1 else ""
+
+        if "@" in cmd:
+            cmd = cmd.split("@", 1)[0]
 
         handler = self._commands.get(cmd)
         if handler:
@@ -603,25 +661,26 @@ class TelegramCommandHandler:
             f"Global Sentinel - {strategy_label}",
             "=" * 25,
             "",
+            "All commands use /gs_ prefix:",
+            "",
             "System Control:",
-            "  /status - System status",
-            "  /mode <auto|manual> <strategy> - Set mode",
-            "  /kill <on|off> [reason] - Kill switch",
-            "  /veto <on|off> [reason] - Manual veto",
-            "  /approve - Approve pending orders",
-            "  /reject - Reject pending orders",
+            "  /gs_status - System status",
+            "  /gs_mode <auto|manual> <strategy> - Set mode",
+            "  /gs_kill <on|off> [reason] - Kill switch",
+            "  /gs_veto <on|off> [reason] - Manual veto",
+            "  /gs_approve - Approve pending orders",
+            "  /gs_reject - Reject pending orders",
             "",
             "Market Intelligence:",
-            "  /gss - GSS signal analysis",
-            "  /portfolio - Portfolio & P&L",
-            "  /positions - Alias for /portfolio",
-            "  /orders - Recent order flow",
-            "  /alerts - Recent alerts",
+            "  /gs_gss - GSS signal analysis",
+            "  /gs_portfolio - Portfolio & P&L",
+            "  /gs_orders - Recent order flow",
+            "  /gs_alerts - Recent alerts",
             "",
             "Configuration:",
-            "  /config - Execution config",
-            "  /refresh - Force data refresh",
-            "  /help - This message",
+            "  /gs_config - Execution config",
+            "  /gs_refresh - Force data refresh",
+            "  /gs_help - This message",
         ]
         return "\n".join(lines)
 
@@ -686,6 +745,30 @@ class TelegramCommandHandler:
             **payload,
         }
         log_path = self.log_dir / "telegram_commands.jsonl"
+        try:
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _log_unauthorized_chat(self, message: Dict[str, Any]):
+        """Record unauthorized inbound chats so DM allowlists can be updated safely."""
+        chat = message.get("chat", {}) or {}
+        sender = message.get("from", {}) or {}
+        row = {
+            "timestamp_utc": iso_now(),
+            "event_type": "unauthorized_chat_attempt",
+            "strategy": self.strategy,
+            "chat_id": str(chat.get("id", "")),
+            "chat_type": chat.get("type", ""),
+            "chat_title": chat.get("title", ""),
+            "message_thread_id": message.get("message_thread_id"),
+            "from_user_id": sender.get("id"),
+            "from_username": sender.get("username", ""),
+            "from_first_name": sender.get("first_name", ""),
+            "text_preview": (message.get("text") or "")[:200],
+        }
+        log_path = self.log_dir / "telegram_unauthorized.jsonl"
         try:
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")

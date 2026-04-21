@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel: Walk-Forward Optimization (Saturday 10:00 UTC)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/bin/bash -c '/usr/bin/python3 -m src.research.walk_forward_optimizer >> /opt/global-sentinel/logs/walk_forward_optimizer.log 2>&1'
+User=openclaw
+Group=openclaw

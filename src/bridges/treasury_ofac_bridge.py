@@ -133,7 +133,23 @@ class TreasuryOFACBridge:
                 packets.extend(self._poll_page(source_group, page_name, url))
             except Exception as e:
                 packets.append(self._error_packet(url, f"page_error:{e}", page_name=page_name, source_group=source_group))
+        self._write_poll_snapshot(packets)
         return packets
+
+    def _write_poll_snapshot(self, packets: List[Dict[str, Any]]) -> None:
+        tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        snapshot = {
+            "timestamp_utc": iso_now(),
+            "bridge_name": "treasury_ofac_bridge",
+            "packet_count": len(packets),
+            "page_count": len(self.pages),
+            "packets": packets[:50],
+        }
+        path = self.cache_dir / f"treasury_ofac_{tag}.json"
+        try:
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     # -------------------------
     # Page polling

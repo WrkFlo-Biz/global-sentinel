@@ -1,0 +1,400 @@
+{
+  "intents": [
+    {
+      "schema_version": "order_intent.v1",
+      "intent_id": "intent-6b6bc9fd95cc4fbd",
+      "package_id": "pkg-smoke-reject_xom-b1f87864",
+      "candidate_id": "cand-smoke-xom",
+      "client_order_id": "gs-f1ab062cd30746fe",
+      "timestamp_utc": "2026-03-06T13:36:35.508847+00:00",
+      "status": "rejected",
+      "shadow_mode": true,
+      "package_context": {
+        "package_type": "idiosyncratic_candidate_package",
+        "package_timestamp_utc": "2026-03-04T20:45:00+00:00",
+        "effective_mode": "shadow",
+        "regime_shift_probability": 0.71,
+        "time_window_name": "power_hour",
+        "watchlist_only_window": false
+      },
+      "candidate_context": {
+        "symbol": "XOM",
+        "strategy_style": "momentum_follow_through",
+        "template_key": "power_hour_continuation",
+        "direction": "long",
+        "confidence_score": 0.83,
+        "size_multiplier_suggestion": 0.9,
+        "themes": [
+          "energy",
+          "geopolitical_risk"
+        ],
+        "block_reasons": [],
+        "execution_constraints": {
+          "manual_review_required": false
+        },
+        "fill_sim_assessment": {
+          "execution_quality_class": "good",
+          "fill_feasibility_score": 0.84,
+          "reject_risk_probability": 0.06,
+          "expected_slippage_bps": 11.5,
+          "do_not_route_even_in_shadow": false
+        }
+      },
+      "order_request": {
+        "symbol": "XOM",
+        "side": "buy",
+        "type": "limit",
+        "time_in_force": "day",
+        "qty": 4,
+        "extended_hours": true,
+        "shadow_mode": true,
+        "limit_price": 107.37,
+        "client_order_id": "gs-f1ab062cd30746fe",
+        "strategy_context": {
+          "package_id": "pkg-smoke-reject_xom-b1f87864",
+          "candidate_id": "cand-smoke-xom",
+          "intent_id": "intent-6b6bc9fd95cc4fbd",
+          "time_window_name": "power_hour"
+        }
+      },
+      "broker_binding": {
+        "broker_name": "mock",
+        "broker_account_id": null,
+        "broker_order_id": "mock-5908078bc2e1",
+        "submitted_at_utc": "2026-03-06T13:36:35.520154+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:35.520172+00:00"
+      },
+      "broker_state": {
+        "order_id": "mock-5908078bc2e1",
+        "client_order_id": "gs-f1ab062cd30746fe",
+        "status": "rejected",
+        "symbol": "XOM",
+        "side": "buy",
+        "type": "limit",
+        "qty": 4.0,
+        "filled_qty": 0.0,
+        "remaining_qty": 4.0,
+        "limit_price": 107.37,
+        "avg_fill_price": null,
+        "submitted_at_utc": "2026-03-06T13:36:35.520154+00:00",
+        "updated_at_utc": "2026-03-06T13:36:35.520170+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:35.520172+00:00",
+        "replaced_by_order_id": null,
+        "replaces_order_id": null,
+        "broker_raw_status": "rejected",
+        "broker_order_payload_ref": null,
+        "reject_reason_code": "mock_injected_reject",
+        "reject_reason_message": "Injected reject for symbol=XOM"
+      },
+      "broker_trades": [],
+      "reconciliation": {
+        "last_reconciled_at_utc": null,
+        "reconciler_status": null,
+        "notes": []
+      },
+      "audit": {
+        "created_at_utc": "2026-03-06T13:36:35.508877+00:00",
+        "updated_at_utc": "2026-03-06T13:36:36.022470+00:00",
+        "history": [
+          {
+            "ts": "2026-03-06T13:36:35.508880+00:00",
+            "event": "intent_created",
+            "status": "draft",
+            "details": {
+              "shadow_mode": true
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:36.022381+00:00",
+            "event": "broker_order_bound",
+            "status": "rejected",
+            "details": {
+              "broker_name": "mock",
+              "broker_order_id": "mock-5908078bc2e1",
+              "broker_status": "rejected"
+            }
+          }
+        ]
+      },
+      "runtime_flags": {
+        "time_window_hint": "power_hour",
+        "watchlist_only_window": false,
+        "package_effective_mode": "shadow",
+        "macro_event_quorum_pass": true
+      },
+      "order_lifecycle_policy": {
+        "resolved_ttl_minutes": 8.0,
+        "ttl_resolved": true,
+        "ttl_policy_source": "config/order_ttl_policy.yaml",
+        "ttl_explanation": {
+          "resolved_ttl_minutes": 8.0,
+          "time_window_name": "power_hour",
+          "strategy_style": "momentum_follow_through",
+          "symbol": "XOM",
+          "reasons": [
+            {
+              "layer": "default",
+              "ttl_minutes": 30.0
+            },
+            {
+              "layer": "time_window",
+              "time_window_name": "power_hour",
+              "ttl_minutes": 7.0
+            },
+            {
+              "layer": "strategy",
+              "strategy_style": "momentum_follow_through",
+              "ttl_minutes": 8.0
+            },
+            {
+              "layer": "symbol",
+              "symbol": "XOM",
+              "ttl_minutes": 8.0
+            }
+          ]
+        },
+        "created_with_time_window_hint": "power_hour"
+      },
+      "extra_context": {
+        "router_run_id": "router-0f26754ead",
+        "runtime_flags": {
+          "time_window_hint": "power_hour",
+          "watchlist_only_window": false,
+          "package_effective_mode": "shadow",
+          "macro_event_quorum_pass": true
+        },
+        "order_lifecycle_policy": {
+          "resolved_ttl_minutes": 8.0,
+          "ttl_resolved": true,
+          "ttl_policy_source": "config/order_ttl_policy.yaml",
+          "ttl_explanation": {
+            "resolved_ttl_minutes": 8.0,
+            "time_window_name": "power_hour",
+            "strategy_style": "momentum_follow_through",
+            "symbol": "XOM",
+            "reasons": [
+              {
+                "layer": "default",
+                "ttl_minutes": 30.0
+              },
+              {
+                "layer": "time_window",
+                "time_window_name": "power_hour",
+                "ttl_minutes": 7.0
+              },
+              {
+                "layer": "strategy",
+                "strategy_style": "momentum_follow_through",
+                "ttl_minutes": 8.0
+              },
+              {
+                "layer": "symbol",
+                "symbol": "XOM",
+                "ttl_minutes": 8.0
+              }
+            ]
+          },
+          "created_with_time_window_hint": "power_hour"
+        }
+      }
+    },
+    {
+      "schema_version": "order_intent.v1",
+      "intent_id": "intent-4164dabfbd3b4b74",
+      "package_id": "pkg-smoke-reject_xom-b1f87864",
+      "candidate_id": "cand-smoke-cat",
+      "client_order_id": "gs-1990188362dfd119",
+      "timestamp_utc": "2026-03-06T13:36:36.024371+00:00",
+      "status": "open",
+      "shadow_mode": true,
+      "package_context": {
+        "package_type": "idiosyncratic_candidate_package",
+        "package_timestamp_utc": "2026-03-04T20:45:00+00:00",
+        "effective_mode": "shadow",
+        "regime_shift_probability": 0.71,
+        "time_window_name": "power_hour",
+        "watchlist_only_window": false
+      },
+      "candidate_context": {
+        "symbol": "CAT",
+        "strategy_style": "momentum_follow_through",
+        "template_key": "power_hour_continuation",
+        "direction": "long",
+        "confidence_score": 0.72,
+        "size_multiplier_suggestion": 0.8,
+        "themes": [
+          "industrials",
+          "domestic_infra"
+        ],
+        "block_reasons": [],
+        "execution_constraints": {
+          "manual_review_required": false
+        },
+        "fill_sim_assessment": {
+          "execution_quality_class": "acceptable_shadow_only",
+          "fill_feasibility_score": 0.67,
+          "reject_risk_probability": 0.14,
+          "expected_slippage_bps": 18.2,
+          "do_not_route_even_in_shadow": false
+        }
+      },
+      "order_request": {
+        "symbol": "CAT",
+        "side": "buy",
+        "type": "limit",
+        "time_in_force": "day",
+        "qty": 2,
+        "extended_hours": true,
+        "shadow_mode": true,
+        "limit_price": 342.72,
+        "client_order_id": "gs-1990188362dfd119",
+        "strategy_context": {
+          "package_id": "pkg-smoke-reject_xom-b1f87864",
+          "candidate_id": "cand-smoke-cat",
+          "intent_id": "intent-4164dabfbd3b4b74",
+          "time_window_name": "power_hour"
+        }
+      },
+      "broker_binding": {
+        "broker_name": "mock",
+        "broker_account_id": null,
+        "broker_order_id": "mock-2ebad0a2c954",
+        "submitted_at_utc": "2026-03-06T13:36:36.024743+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:36.024748+00:00"
+      },
+      "broker_state": {
+        "order_id": "mock-2ebad0a2c954",
+        "client_order_id": "gs-1990188362dfd119",
+        "status": "accepted",
+        "symbol": "CAT",
+        "side": "buy",
+        "type": "limit",
+        "qty": 2.0,
+        "filled_qty": 0.0,
+        "remaining_qty": 2.0,
+        "limit_price": 342.72,
+        "avg_fill_price": null,
+        "submitted_at_utc": "2026-03-06T13:36:36.024743+00:00",
+        "updated_at_utc": "2026-03-06T13:36:36.024746+00:00",
+        "acknowledged_at_utc": "2026-03-06T13:36:36.024748+00:00",
+        "replaced_by_order_id": null,
+        "replaces_order_id": null,
+        "broker_raw_status": "accepted",
+        "broker_order_payload_ref": null,
+        "reject_reason_code": null,
+        "reject_reason_message": null
+      },
+      "broker_trades": [],
+      "reconciliation": {
+        "last_reconciled_at_utc": null,
+        "reconciler_status": null,
+        "notes": []
+      },
+      "audit": {
+        "created_at_utc": "2026-03-06T13:36:36.024379+00:00",
+        "updated_at_utc": "2026-03-06T13:36:36.339068+00:00",
+        "history": [
+          {
+            "ts": "2026-03-06T13:36:36.024382+00:00",
+            "event": "intent_created",
+            "status": "draft",
+            "details": {
+              "shadow_mode": true
+            }
+          },
+          {
+            "ts": "2026-03-06T13:36:36.339047+00:00",
+            "event": "broker_order_bound",
+            "status": "open",
+            "details": {
+              "broker_name": "mock",
+              "broker_order_id": "mock-2ebad0a2c954",
+              "broker_status": "accepted"
+            }
+          }
+        ]
+      },
+      "runtime_flags": {
+        "time_window_hint": "power_hour",
+        "watchlist_only_window": false,
+        "package_effective_mode": "shadow",
+        "macro_event_quorum_pass": true
+      },
+      "order_lifecycle_policy": {
+        "resolved_ttl_minutes": 10.0,
+        "ttl_resolved": true,
+        "ttl_policy_source": "config/order_ttl_policy.yaml",
+        "ttl_explanation": {
+          "resolved_ttl_minutes": 10.0,
+          "time_window_name": "power_hour",
+          "strategy_style": "momentum_follow_through",
+          "symbol": "CAT",
+          "reasons": [
+            {
+              "layer": "default",
+              "ttl_minutes": 30.0
+            },
+            {
+              "layer": "time_window",
+              "time_window_name": "power_hour",
+              "ttl_minutes": 7.0
+            },
+            {
+              "layer": "strategy",
+              "strategy_style": "momentum_follow_through",
+              "ttl_minutes": 8.0
+            },
+            {
+              "layer": "symbol",
+              "symbol": "CAT",
+              "ttl_minutes": 10.0
+            }
+          ]
+        },
+        "created_with_time_window_hint": "power_hour"
+      },
+      "extra_context": {
+        "router_run_id": "router-0f26754ead",
+        "runtime_flags": {
+          "time_window_hint": "power_hour",
+          "watchlist_only_window": false,
+          "package_effective_mode": "shadow",
+          "macro_event_quorum_pass": true
+        },
+        "order_lifecycle_policy": {
+          "resolved_ttl_minutes": 10.0,
+          "ttl_resolved": true,
+          "ttl_policy_source": "config/order_ttl_policy.yaml",
+          "ttl_explanation": {
+            "resolved_ttl_minutes": 10.0,
+            "time_window_name": "power_hour",
+            "strategy_style": "momentum_follow_through",
+            "symbol": "CAT",
+            "reasons": [
+              {
+                "layer": "default",
+                "ttl_minutes": 30.0
+              },
+              {
+                "layer": "time_window",
+                "time_window_name": "power_hour",
+                "ttl_minutes": 7.0
+              },
+              {
+                "layer": "strategy",
+                "strategy_style": "momentum_follow_through",
+                "ttl_minutes": 8.0
+              },
+              {
+                "layer": "symbol",
+                "symbol": "CAT",
+                "ttl_minutes": 10.0
+              }
+            ]
+          },
+          "created_with_time_window_hint": "power_hour"
+        }
+      }
+    }
+  ]
+}

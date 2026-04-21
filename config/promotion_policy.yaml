@@ -1,0 +1,91 @@
+schema_version: promotion_policy.v1
+
+# Centralized promotion policy for Global Sentinel V4.
+# All promotion decisions must route through policy_engine + encoder_promotion_gate.
+# This config is the source of truth for promotion eligibility rules.
+
+global_rules:
+  # Modes that freeze all promotions
+  frozen_modes:
+    - CRISIS
+    - MANUAL_REVIEW
+
+  # Human approval always required
+  human_approval_required: true
+
+  # Dual-run comparison required before any promotion
+  dual_run_required: true
+
+  # Rollback path must exist
+  rollback_required: true
+
+  # Lineage completeness required
+  lineage_completeness_required: true
+
+  # Reproducibility pass required
+  reproducibility_required: true
+
+  # No safety regressions allowed
+  no_safety_regressions: true
+
+# Per-signal-type promotion thresholds
+signal_thresholds:
+  default:
+    min_eval_days: 60
+    min_trade_count: 100
+    max_drawdown_delta_bps: 50
+    min_slippage_adjusted_win_delta_bps: 10
+    max_failure_rate: 0.05
+    max_cumulative_drift_std: 2.0
+    min_sharpe_ratio: 0.5
+    max_drift_score: 0.15
+
+  quantum_portfolio_optimizer:
+    min_eval_days: 90
+    min_trade_count: 200
+    max_drawdown_delta_bps: 30
+    min_slippage_adjusted_win_delta_bps: 15
+    max_failure_rate: 0.03
+    max_cumulative_drift_std: 1.5
+    min_sharpe_ratio: 0.8
+    max_drift_score: 0.10
+    # Quantum-specific gates
+    min_quantum_utility_score: 0.6
+    formulation_validation_required: true
+    stage_2_blocked: true
+    stage_3_blocked: true
+
+  classical_baseline:
+    min_eval_days: 30
+    min_trade_count: 50
+    max_drawdown_delta_bps: 75
+    min_slippage_adjusted_win_delta_bps: 5
+    max_failure_rate: 0.10
+    max_cumulative_drift_std: 2.5
+
+  online_weighted_encoder:
+    min_eval_days: 14
+    min_trade_count: 30
+    max_drawdown_delta_bps: 60
+    min_slippage_adjusted_win_delta_bps: 5
+    max_failure_rate: 0.08
+    max_cumulative_drift_std: 2.0
+    canary_comparison_required: true
+
+  politician_alpha:
+    # Research-only — no promotion to execution
+    promotion_blocked: true
+    reason: "political_disclosure_research_only"
+
+# Canary comparison thresholds
+canary_policy:
+  min_improvement_pct: 0.0
+  max_regression_pct: 2.0
+  min_sample_size: 50
+  confidence_level: 0.95
+
+# Encoder version rollback policy
+rollback_policy:
+  max_versions_retained: 10
+  auto_rollback_on_drift: true
+  drift_threshold_for_rollback: 0.20

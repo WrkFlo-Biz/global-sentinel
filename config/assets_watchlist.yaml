@@ -602,23 +602,218 @@ insurance_reinsurance:
   priority: medium
   keywords: ["war risk premium", "insurance loss", "catastrophe bond"]
 
+# --- Crude Oil Direct (price tracking ETFs) ---
+crude_oil_direct:
+  symbols: [USO, UCO, BNO, DBO, OILK]
+  priority: critical
+  keywords: ["crude oil price", "WTI", "brent crude", "oil futures", "oil barrel price",
+             "oil 100", "oil 150", "oil superspike", "oil supply shock"]
+
 # --- Oil Majors ---
 oil_majors:
-  symbols: [XOM, CVX, COP, OXY, SLB, HAL, BKR]
+  symbols: [XOM, CVX, COP, OXY, SLB, HAL, BKR, DVN, PXD, FANG, EOG]
   priority: critical
-  keywords: ["oil production", "OPEC", "crude oil", "supply cut", "brent", "oil services"]
+  keywords: ["oil production", "OPEC", "crude oil", "supply cut", "brent", "oil services",
+             "shale production", "drilling rigs", "oil earnings"]
+
+# --- Oil E&P Small/Mid (leveraged to oil price) ---
+oil_ep_smid:
+  symbols: [PR, CHRD, SM, MTDR, CIVI, NOG, CRGY]
+  priority: high
+  keywords: ["oil exploration", "shale producer", "permian basin", "bakken", "eagle ford"]
 
 # --- Midstream / Pipelines (oil supply chain derivative) ---
 midstream_pipelines:
-  symbols: [ET, EPD, WMB, KMI, MPLX, OKE, TRGP]
-  priority: medium
-  keywords: ["pipeline", "midstream", "LNG export", "natural gas transport", "oil transport"]
+  symbols: [ET, EPD, WMB, KMI, MPLX, OKE, TRGP, PAA, HESM]
+  priority: high
+  keywords: ["pipeline", "midstream", "LNG export", "natural gas transport", "oil transport",
+             "pipeline capacity", "throughput"]
 
 # --- Natural Gas / LNG Producers ---
 natgas_lng:
   symbols: [AR, EQT, RRC, LNG, GLNG, TELL]
-  priority: medium
+  priority: high
   keywords: ["natural gas", "LNG", "liquefied natural gas", "gas export", "gas storage"]
+
+# --- Oil Supply Chain Losers (short candidates on $150 oil) ---
+oil_demand_destruction:
+  symbols: [JETS, UAL, DAL, AAL, LUV, CCL, RCL, NCLH, LYFT, UBER, FDX, UPS]
+  priority: high
+  keywords: ["fuel cost", "jet fuel", "airline margins", "shipping cost", "freight rates",
+             "consumer squeeze", "transportation cost", "demand destruction"]
+
+# --- Inflation Hedges (oil cascade into CPI) ---
+inflation_hedges:
+  symbols: [TIP, VTIP, STIP, RINF, INFL, COMT, DJP, PDBC]
+  priority: high
+  keywords: ["inflation", "CPI", "breakeven rate", "real yields", "commodity index",
+             "inflation expectations", "oil inflation pass-through"]
+
+# --- Tankers & Marine Transport (oil rerouting = ton-mile surge) ---
+tankers_marine:
+  symbols: [FRO, STNG, INSW, DHT, TNK, NAT, EURN, TRMD, ASC, CPLP, KNOP, FLNG]
+  priority: high
+  keywords: ["tanker rates", "VLCC", "crude tanker", "product tanker", "LNG carrier",
+             "ton-mile demand", "tanker rerouting", "freight rates", "bunker fuel"]
+
+# --- Oilfield Services & Drilling (rig count surge at $150 oil) ---
+oilfield_services:
+  symbols: [SLB, HAL, BKR, OIH, PTEN, HP, RIG, VAL, NE, LBRT, NEX, WHD, WFRD, FTI, TDW]
+  priority: high
+  keywords: ["rig count", "drilling activity", "oilfield services", "well completion",
+             "pressure pumping", "offshore drilling", "deepwater"]
+
+# --- Alternative Energy Beneficiaries (oil pain = clean energy demand) ---
+alt_energy_solar:
+  symbols: [TAN, FSLR, ENPH, SEDG, RUN, NOVA, ARRY, CSIQ, JKS, MAXN]
+  priority: high
+  keywords: ["solar energy", "solar panel", "solar installer", "renewable energy",
+             "energy transition", "clean energy"]
+
+alt_energy_wind:
+  symbols: [FAN, CWEN, AES, ORA, NEP, VWDRY]
+  priority: medium
+  keywords: ["wind energy", "wind turbine", "offshore wind", "onshore wind"]
+
+alt_energy_nuclear:
+  symbols: [CCJ, URA, LEU, UUUU, NNE, SMR, OKLO, DNN, NXE]
+  priority: high
+  keywords: ["nuclear energy", "uranium", "small modular reactor", "nuclear power",
+             "uranium enrichment", "nuclear fuel"]
+
+alt_energy_ev_battery:
+  symbols: [TSLA, RIVN, LCID, NIO, LI, XPEV, BYDDY, QS, ENVX, IONQ,
+            ALB, SQM, LTHM, LAC, PLL, LIVENT, MP, FREYR]
+  priority: high
+  keywords: ["electric vehicle", "EV sales", "battery", "lithium", "cobalt",
+             "EV demand", "charging infrastructure", "solid state battery"]
+
+alt_energy_hydrogen:
+  symbols: [PLUG, FCEL, BE, BLDP, HYDR]
+  priority: medium
+  keywords: ["hydrogen", "fuel cell", "green hydrogen", "hydrogen economy"]
+
+alt_energy_clean_etfs:
+  symbols: [ICLN, QCLN, PBW, ACES, SMOG, LIT]
+  priority: medium
+  keywords: ["clean energy ETF", "green energy", "ESG energy"]
+
+# --- Autos & Transport (gas guzzlers vs EV, ride-sharing) ---
+autos_transport:
+  symbols: [F, GM, STLA, TM, HMC, RACE, LYFT, UBER, GRAB, DIDI]
+  priority: medium
+  keywords: ["auto sales", "fuel economy", "gas prices consumers", "ride sharing costs",
+             "EV adoption", "fleet fuel costs"]
+
+# --- Cruise Lines (fuel + consumer discretionary double hit) ---
+cruise_leisure:
+  symbols: [CCL, RCL, NCLH, PLYA, HLT, MAR, H, ABNB, BKNG, EXPE]
+  priority: medium
+  keywords: ["cruise fuel costs", "travel demand", "hotel occupancy", "leisure spending"]
+
+# --- Restaurants & Consumer (oil → food/transport costs → margin squeeze) ---
+restaurants_consumer:
+  symbols: [MCD, SBUX, CMG, DPZ, YUM, QSR, WEN, DIN, CAKE, TXRH,
+            WMT, TGT, COST, KR, ACI, DG, DLTR]
+  priority: medium
+  keywords: ["food costs", "consumer spending", "restaurant margins", "grocery prices",
+             "discretionary spending", "gas prices consumer impact"]
+
+# --- Homebuilders & Real Estate (rates + consumer squeeze) ---
+homebuilders_reits:
+  symbols: [XHB, ITB, LEN, DHI, PHM, TOL, NVR, KBH, MDC, TMHC,
+            VNQ, IYR, O, SPG, PLD, AMT, EQIX, DLR]
+  priority: medium
+  keywords: ["housing demand", "mortgage rates", "REIT dividend", "real estate",
+             "homebuilder sentiment", "construction costs"]
+
+# --- Banks & Financials (energy loans, trading rev, rate bets) ---
+banks_financials:
+  symbols: [JPM, GS, MS, BAC, WFC, C, BK, STT, SCHW, BX, KKR, APO,
+            AIG, TRV, ALL, PGR, CB, MET, PRU]
+  priority: medium
+  keywords: ["energy loan exposure", "bank trading revenue", "interest rate expectations",
+             "financial sector", "credit risk", "insurance underwriting"]
+
+# --- Country ETFs: Oil Exporters (beneficiaries) ---
+country_oil_exporters:
+  symbols: [KSA, NORW, EWC, FLBR, EGPT, QAT, UAE]
+  priority: high
+  keywords: ["Saudi Arabia", "Norway", "Canada oil sands", "Brazil Petrobras",
+             "oil exporting nation", "OPEC member", "petrodollar"]
+
+# --- Country ETFs: Oil Importers (losers) ---
+country_oil_importers:
+  symbols: [EWJ, INDA, EWY, TUR, EWG, EWQ, EWU, EWI, EWP, EPI, THD, VNM, EIDO]
+  priority: high
+  keywords: ["Japan oil import", "India oil import", "Korea oil import", "Turkey oil",
+             "European energy crisis", "oil importing nation", "trade deficit"]
+
+# --- Volatility & Tail Risk ---
+volatility_instruments:
+  symbols: [UVXY, VXX, VIXY, SVXY, SVOL, TAIL, SQQQ, SPXU, SDS, SH, PSQ, DOG, RWM]
+  priority: high
+  keywords: ["VIX spike", "volatility", "tail risk", "inverse ETF", "leveraged bearish",
+             "put protection", "hedging"]
+
+# --- Crypto / Digital Gold (inflation hedge, petrodollar alternative) ---
+crypto_proxies:
+  symbols: [IBIT, BITO, GBTC, ETHE, MSTR, COIN, MARA, RIOT, CLSK, HUT]
+  priority: medium
+  keywords: ["bitcoin", "crypto", "digital gold", "inflation hedge crypto",
+             "petrodollar alternative", "bitcoin mining"]
+
+# --- Materials & Industrial Metals (energy-intensive smelting costs) ---
+materials_metals:
+  symbols: [XLB, XME, PICK, COPX, FCX, SCCO, TECK, BHP, RIO, VALE,
+            AA, CENX, X, NUE, CLF, STLD, RS]
+  priority: medium
+  keywords: ["aluminum smelting", "copper", "steel production", "iron ore",
+             "mining energy costs", "industrial metals", "base metals"]
+
+# --- Oil & Gas Royalties (pure upside, ZERO operating costs — hidden gems) ---
+oil_gas_royalties:
+  symbols: [VNOM, TPL, BSM, DMLP, MNRL, PBT]
+  priority: critical
+  keywords: ["mineral rights", "royalty interest", "permian royalty", "oil royalty",
+             "zero operating cost", "mineral owner", "surface acreage"]
+
+# --- Railcar Manufacturers & Lessors (crude-by-rail surge at pipeline capacity) ---
+railcar_crude_by_rail:
+  symbols: [TRN, GBX, GATX]
+  priority: high
+  keywords: ["railcar", "tank car", "crude by rail", "railcar leasing",
+             "pipeline capacity", "rail transport oil"]
+
+# --- Coal (fuel switching demand at extreme oil/gas prices) ---
+coal_fuel_switching:
+  symbols: [BTU, ARCH, ARLP, HCC, CEIX]
+  priority: medium
+  keywords: ["coal prices", "thermal coal", "fuel switching", "coal power",
+             "met coal", "coal demand"]
+
+# --- Waste Haulers (short targets — massive diesel fleet exposure) ---
+waste_haulers:
+  symbols: [WM, RSG, GFL]
+  priority: medium
+  keywords: ["waste hauling", "diesel fleet", "fuel cost waste management",
+             "garbage truck fuel", "collection routes"]
+
+# --- Gas Stations & Fuel Distributors ---
+fuel_distributors:
+  symbols: [CAPL, PARR, CVI, DINO]
+  priority: medium
+  keywords: ["fuel distribution", "gas station", "wholesale fuel", "refining margin"]
+
+# --- Niche Oil Plays (often overlooked) ---
+niche_oil_plays:
+  symbols: [SPH, UGI, AROC, CLNE, AM, CTRA, HES, MUR, WES,
+            TGS, BORR, SDRL, USAC, PUMP, WTTR, HLX, DRQ, MRC,
+            BRY, MRO, APA, MGY, CNQ, SU, IMO, CPG, NOV, CHX, OII]
+  priority: medium
+  keywords: ["propane distribution", "oil storage", "well servicing", "marine fuel",
+             "offshore support", "drilling contractor", "subsea", "compression services",
+             "water management", "well intervention", "pipe valve fitting"]
 
 # --- AI Infrastructure & Semiconductors (Technology Revolution Tailwind) ---
 ai_infrastructure:

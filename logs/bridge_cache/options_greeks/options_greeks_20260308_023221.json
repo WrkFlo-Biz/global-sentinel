@@ -1,0 +1,53 @@
+{
+  "timestamp_utc": "2026-03-08T02:32:21.042556+00:00",
+  "source_priority": "fallback_heuristic",
+  "bridge_name": "options_greeks_bridge",
+  "source_tier": "tier_3_research",
+  "trust_weight": 0.5,
+  "symbols": {
+    "SPY": {
+      "symbol": "SPY",
+      "timestamp_utc": "2026-03-08T02:32:21.004015+00:00",
+      "source": "fallback_heuristic",
+      "fresh": false,
+      "note": "no_options_or_vix_data_available",
+      "put_call_ratio": 0.0,
+      "gamma_squeeze_risk": "unknown",
+      "put_call_signal": "no_data"
+    },
+    "QQQ": {
+      "symbol": "QQQ",
+      "timestamp_utc": "2026-03-08T02:32:21.020929+00:00",
+      "source": "fallback_heuristic",
+      "fresh": false,
+      "note": "no_options_or_vix_data_available",
+      "put_call_ratio": 0.0,
+      "gamma_squeeze_risk": "unknown",
+      "put_call_signal": "no_data"
+    },
+    "IWM": {
+      "symbol": "IWM",
+      "timestamp_utc": "2026-03-08T02:32:21.027223+00:00",
+      "source": "fallback_heuristic",
+      "fresh": false,
+      "note": "no_options_or_vix_data_available",
+      "put_call_ratio": 0.0,
+      "gamma_squeeze_risk": "unknown",
+      "put_call_signal": "no_data"
+    }
+  },
+  "vix_term_structure": {
+    "available": false
+  },
+  "implied_vol_rank": {
+    "available": false,
+    "iv_rank": null
+  },
+  "aggregate_signals": {
+    "avg_put_call_ratio": 0.0,
+    "max_gamma_squeeze_risk": "unknown",
+    "options_risk_level": "complacent",
+    "vix_signal": "normal",
+    "iv_rank_value": 50.0
+  }
+}

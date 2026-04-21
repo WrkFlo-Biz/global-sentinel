@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Post-Market Intelligence Scanner at 4:30 PM ET weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

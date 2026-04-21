@@ -1,0 +1,22 @@
+[Unit]
+Description=Global Sentinel Portfolio Stop-Loss and EOD Monitor
+After=network-online.target global-sentinel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/stop_loss_monitor.py
+Restart=on-failure
+RestartSec=15
+CPUQuota=50%
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-stop-loss
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "scenario": "baseline",
+  "fault_profile": {},
+  "bound_order_attempt_count": 2,
+  "skipped_candidates": 1,
+  "router_errors": 0,
+  "reconciled_count": 28,
+  "reconciler_errors": 0,
+  "stale_intent_count": 0,
+  "submit_attempt_count": 2,
+  "broker_rejected_count": 0,
+  "submitted_open_or_ack_count": 2
+}

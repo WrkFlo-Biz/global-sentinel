@@ -45,11 +45,36 @@ class IncidentModeController:
         rejected_rate_threshold: float = 0.15,
         router_error_rate_threshold: float = 0.10,
         manual_review_rate_threshold: float = 0.25,
+        repo_root: Optional[Path] = None,
     ):
-        self.stale_rate_threshold = stale_rate_threshold
-        self.rejected_rate_threshold = rejected_rate_threshold
-        self.router_error_rate_threshold = router_error_rate_threshold
-        self.manual_review_rate_threshold = manual_review_rate_threshold
+        # Load from config/incident_mode_policy.yaml if available
+        if repo_root:
+            self._load_policy(repo_root, locals())
+        else:
+            self.stale_rate_threshold = stale_rate_threshold
+            self.rejected_rate_threshold = rejected_rate_threshold
+            self.router_error_rate_threshold = router_error_rate_threshold
+            self.manual_review_rate_threshold = manual_review_rate_threshold
+
+    def _load_policy(self, repo_root: Path, defaults: dict) -> None:
+        """Load thresholds from incident_mode_policy.yaml, falling back to defaults."""
+        try:
+            import yaml
+            policy_path = repo_root / "config" / "incident_mode_policy.yaml"
+            if policy_path.exists():
+                policy = yaml.safe_load(policy_path.read_text(encoding="utf-8")) or {}
+                thresholds = policy.get("incident_thresholds", {})
+                self.stale_rate_threshold = float(thresholds.get("stale_rate", defaults.get("stale_rate_threshold", 0.30)))
+                self.rejected_rate_threshold = float(thresholds.get("rejected_rate", defaults.get("rejected_rate_threshold", 0.15)))
+                self.router_error_rate_threshold = float(thresholds.get("router_error_rate", defaults.get("router_error_rate_threshold", 0.10)))
+                self.manual_review_rate_threshold = float(thresholds.get("manual_review_rate", defaults.get("manual_review_rate_threshold", 0.25)))
+                return
+        except Exception:
+            pass
+        self.stale_rate_threshold = defaults.get("stale_rate_threshold", 0.30)
+        self.rejected_rate_threshold = defaults.get("rejected_rate_threshold", 0.15)
+        self.router_error_rate_threshold = defaults.get("router_error_rate_threshold", 0.10)
+        self.manual_review_rate_threshold = defaults.get("manual_review_rate_threshold", 0.25)
 
     def assess(
         self,

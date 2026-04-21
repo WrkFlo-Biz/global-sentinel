@@ -34,6 +34,30 @@ export interface BridgeSummary {
   finnhub_packet_count: number;
 }
 
+export interface BridgeOperatorStatus {
+  label: string;
+  status: "live" | "source_live" | "empty" | "snapshot_only" | "no_snapshot" | "stale" | "unknown";
+  display_status: string;
+  fresh?: boolean;
+  snapshot_recent?: boolean;
+  count?: number;
+  detail?: string;
+  exists?: boolean;
+  file_count?: number;
+  json_file_count?: number;
+  hash_file_count?: number;
+  latest_file?: string | null;
+  latest_age_min?: number | null;
+}
+
+export interface BridgeStatusResponse {
+  bridges: Record<string, BridgeOperatorStatus>;
+  bridge_summary: Record<string, number | string | undefined>;
+  data_freshness: Record<string, boolean>;
+  fallback_mode: boolean;
+  timestamp_utc?: string;
+}
+
 export interface Scorecard {
   schema_version: string;
   timestamp_utc: string;
@@ -99,6 +123,8 @@ export interface PortfolioPosition {
   unrealized_plpc: number;
   market_value: number;
   account?: string;
+  account_label?: string;
+  broker?: string;
 }
 
 export interface PortfolioAccountError {
@@ -109,6 +135,10 @@ export interface PortfolioAccountError {
 export interface PortfolioAccountDetail {
   label: string;
   status?: string;
+  broker?: string;
+  display_label?: string;
+  account_number?: string;
+  is_live?: boolean;
   equity: number;
   cash: number;
   buying_power: number;
@@ -156,6 +186,20 @@ export interface PortfolioData {
   fetched_at_utc?: string;
   cache_age_ms?: number;
   cache_status?: string;
+  pricing_summary?: {
+    priced_position_count: number;
+    position_count: number;
+    latest_pricing_timestamp_utc?: string | null;
+    latest_pricing_age_seconds?: number | null;
+    oldest_pricing_timestamp_utc?: string | null;
+    oldest_pricing_age_seconds?: number | null;
+    delayed_position_count: number;
+    stale_position_count: number;
+    market_data_health: "live" | "delayed" | "degraded" | "stale";
+    stream_error_accounts?: string[];
+    stream_degraded_accounts?: string[];
+  };
+  stream_health?: Record<string, any>;
   error?: string;
 }
 
@@ -276,7 +320,7 @@ export const api = {
   controls: () => fetchJSON<Controls>("/api/controls"),
   latestScorecard: () => fetchJSON<Scorecard>("/api/scorecard/latest"),
   timeline: (limit = 200) => fetchJSON<TimelinePoint[]>(`/api/scorecards/timeline?limit=${limit}`),
-  bridges: () => fetchJSON<any>("/api/bridges"),
+  bridges: () => fetchJSON<BridgeStatusResponse>("/api/bridges"),
   orders: (limit = 50) => fetchJSON<any[]>(`/api/execution/orders?limit=${limit}`),
   bindings: (limit = 50) => fetchJSON<any[]>(`/api/execution/bindings?limit=${limit}`),
   executionSummary: (routerLimit = 100, brokerLimit = 100, lookbackHours = 24) =>
@@ -313,10 +357,17 @@ export const api = {
   gssTimeline: (limit = 100) => fetchJSON<GSSTimelinePoint[]>(`/api/gss-timeline?limit=${limit}`),
   gssLatest: () => fetchJSON<GSSLatest>("/api/gss-latest"),
   dashboardLayout: () => fetchJSON<DashboardLayout>("/api/dashboard/layout"),
+  quantum: () => fetchJSON<any>("/api/quantum"),
 };
 
 export interface PerformanceData {
   timestamp_utc?: string;
+  source_timestamp_utc?: string;
+  source_age_seconds?: number | null;
+  source_freshness?: "live" | "degraded" | "stale" | "unknown";
+  open_positions_snapshot_timestamp_utc?: string;
+  open_positions_snapshot_age_seconds?: number | null;
+  open_positions_snapshot_freshness?: "live" | "degraded" | "stale" | "unknown";
   total_trades: number;
   wins: number;
   losses: number;
@@ -361,6 +412,9 @@ export interface HistoricalExample {
 
 export interface TradeAnalysis {
   timestamp_utc: string;
+  source_timestamp_utc?: string;
+  source_age_seconds?: number | null;
+  source_freshness?: "live" | "degraded" | "stale" | "unknown";
   mode: string;
   regime_p: number;
   transition: string;

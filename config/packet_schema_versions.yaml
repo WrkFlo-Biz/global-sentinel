@@ -1,0 +1,7 @@
+# Canonical packet schema versions for packet factories
+schema_version: packet_schema_versions.v1
+
+base_packet: "1.0.0"
+macro_policy_event: "1.0.0"
+geopolitical_event: "1.0.0"
+physical_flow_event: "1.0.0"

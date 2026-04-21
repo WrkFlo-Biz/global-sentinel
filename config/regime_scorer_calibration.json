@@ -1,0 +1,8 @@
+{
+  "scenario_tail_severity": 1.0,
+  "scenario_confidence_adjustment": 0.7,
+  "scenarios_evaluated": 30,
+  "last_scenario_update": "2026-04-16T05:33:02.508991+00:00",
+  "quantum_weight_adjustment": 0.1,
+  "_migrated_from_list": true
+}

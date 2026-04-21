@@ -44,6 +44,14 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
 # ---------------------------------------------------------------------------
 # Signal types
 # ---------------------------------------------------------------------------
@@ -141,35 +149,38 @@ class GSSExecutionEngine:
             and advisory_only flag.
         """
         # --- Extract field layer (GCP consciousness) ---
-        gcp = snapshot.get("gcp_consciousness", {})
+        snapshot = _as_dict(snapshot)
+        scorecard = _as_dict(scorecard)
+
+        gcp = _as_dict(snapshot.get("gcp_consciousness"))
         z_score = float(gcp.get("max_z", 0))
-        coherence_level = gcp.get("coherence_level", "random")
-        regional_spikes = gcp.get("regional_spikes", [])
+        coherence_level = str(gcp.get("coherence_level", "random") or "random")
+        regional_spikes = _as_list(gcp.get("regional_spikes"))
 
         # --- Extract narrative layer ---
-        narrative = snapshot.get("narrative_velocity", {})
+        narrative = _as_dict(snapshot.get("narrative_velocity"))
         narrative_vel = self._normalize_narrative_velocity(narrative)
-        dominant_narrative = narrative.get("dominant_narrative", "none")
+        dominant_narrative = str(narrative.get("dominant_narrative", "none") or "none")
 
         # --- Extract execution layer ---
-        micro = snapshot.get("market_microstructure", {})
-        options = snapshot.get("options_greeks", {})
+        micro = _as_dict(snapshot.get("market_microstructure"))
+        options = _as_dict(snapshot.get("options_greeks"))
         gamma_exposure = options.get("net_gamma_exposure", 0.0)
         put_call_ratio = options.get("put_call_ratio", 1.0)
-        open_interest_data = options.get("open_interest", {})
+        open_interest_data = _as_dict(options.get("open_interest"))
         vix = self._extract_vix(snapshot)
 
         # --- Extract politician alpha layer ---
-        politician_alpha = snapshot.get("politician_alpha", {})
-        pol_scores = politician_alpha.get("political_alpha_scores", {})
-        pol_sentiment = politician_alpha.get("aggregate_sentiment", "neutral")
+        politician_alpha = _as_dict(snapshot.get("politician_alpha"))
+        pol_scores = _as_dict(politician_alpha.get("political_alpha_scores"))
+        pol_sentiment = str(politician_alpha.get("aggregate_sentiment", "neutral") or "neutral")
         pol_avg_score = (
             sum(pol_scores.values()) / len(pol_scores)
             if pol_scores else 0.0
         )
 
         # --- Extract portfolio/margin data ---
-        portfolio = snapshot.get("portfolio", {})
+        portfolio = _as_dict(snapshot.get("portfolio"))
 
         # --- Run decision matrix (priority order) ---
         # 1. Margin emergency overrides everything
@@ -1027,23 +1038,26 @@ class GSSExecutionEngine:
 
     def _extract_vix(self, snapshot: Dict[str, Any]) -> float:
         """Extract VIX level from snapshot data."""
+        snapshot = _as_dict(snapshot)
+
         # Check direct VIX field
         vix = snapshot.get("vix", 0)
         if vix:
             return float(vix)
 
         # Check market microstructure for VIX-related symbols
-        micro = snapshot.get("market_microstructure", {})
+        micro = _as_dict(snapshot.get("market_microstructure"))
         for sym in ("VIX", "^VIX", "VIXY", "UVXY"):
             if sym in micro:
-                price = micro[sym].get("last_price") or micro[sym].get("close", 0)
+                sym_data = _as_dict(micro.get(sym))
+                price = sym_data.get("last_price") or sym_data.get("close", 0)
                 if price:
                     return float(price)
 
         # Estimate from realized vol if no direct VIX
         sigmas = []
         for sym, data in micro.items():
-            sigma = data.get("sigma_daily_pct", 0)
+            sigma = _as_dict(data).get("sigma_daily_pct", 0)
             if sigma > 0:
                 sigmas.append(sigma)
 

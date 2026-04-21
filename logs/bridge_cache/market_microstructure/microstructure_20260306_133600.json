@@ -1,0 +1,29 @@
+{
+  "XOM": {
+    "adv_shares": 21012460.0,
+    "sigma_daily_pct": 1.8541,
+    "last_price": 150.76,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-06T13:35:59.509938+00:00",
+    "data_points": 21
+  },
+  "CAT": {
+    "adv_shares": 3118725.0,
+    "sigma_daily_pct": 2.6049,
+    "last_price": 706.08,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-06T13:35:59.796289+00:00",
+    "data_points": 21
+  },
+  "NVDA": {
+    "adv_shares": 196584815.0,
+    "sigma_daily_pct": 2.7526,
+    "last_price": 183.34,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-06T13:36:00.038539+00:00",
+    "data_points": 21
+  }
+}

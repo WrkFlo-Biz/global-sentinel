@@ -1,0 +1,27 @@
+[Unit]
+Description=Global Sentinel Overnight Research Engine
+After=network-online.target global-sentinel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u scripts/ops/overnight_research_engine.py
+Restart=no
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-research
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/opt/global-sentinel/control
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

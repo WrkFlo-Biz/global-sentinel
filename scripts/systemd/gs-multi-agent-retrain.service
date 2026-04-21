@@ -1,0 +1,20 @@
+[Unit]
+Description=Global Sentinel Multi-Agent RL Ensemble — Weekly Full Retrain
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment="PATH=/home/openclaw/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/opt/global-sentinel"
+ExecStart=/usr/bin/python3 /opt/global-sentinel/src/research/multi_agent_ensemble.py --mode retrain
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-multi-agent-retrain
+
+[Install]
+WantedBy=multi-user.target

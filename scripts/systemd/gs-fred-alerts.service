@@ -1,0 +1,18 @@
+[Unit]
+Description=Global Sentinel FRED Macro Surprise Alerts
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel
+Environment=GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/fred_macro_alerts.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

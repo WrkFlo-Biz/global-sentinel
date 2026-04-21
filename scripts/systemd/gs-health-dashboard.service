@@ -1,0 +1,13 @@
+[Unit]
+Description=Global Sentinel Service Health Dashboard
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/health_dashboard.py
+StandardOutput=journal
+StandardError=journal

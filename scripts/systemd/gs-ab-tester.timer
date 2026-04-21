@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: Strategy A/B Tester Timer (weekdays 20:45 UTC)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20:45:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

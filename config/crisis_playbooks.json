@@ -1,0 +1,144 @@
+{
+  "war": {
+    "immediate_longs": [
+      "XLE",
+      "XOP",
+      "USO",
+      "GLD",
+      "GDX",
+      "LMT",
+      "RTX",
+      "NOC",
+      "UVXY"
+    ],
+    "immediate_shorts": [
+      "JETS",
+      "UAL",
+      "DAL",
+      "EEM",
+      "EZU"
+    ],
+    "hold_period": "1-5 days for initial spike, then reassess",
+    "exit_signal": "ceasefire talk or contained assessment",
+    "risk": "escalation beyond initial scope",
+    "sizing": "2% per position, max 3 same-direction positions"
+  },
+  "pandemic": {
+    "immediate_longs": [
+      "ZM",
+      "AMZN",
+      "PFE",
+      "MRNA",
+      "IBB",
+      "TLT",
+      "UVXY"
+    ],
+    "immediate_shorts": [
+      "JETS",
+      "CCL",
+      "MGM",
+      "travel"
+    ],
+    "hold_period": "weeks to months",
+    "exit_signal": "containment or vaccine progress",
+    "risk": "being late on healthcare/travel rotations",
+    "sizing": "1% per position"
+  },
+  "financial_crisis": {
+    "immediate_longs": [
+      "TLT",
+      "GLD",
+      "UVXY"
+    ],
+    "immediate_shorts": [
+      "KRE",
+      "XLF",
+      "IYR"
+    ],
+    "hold_period": "weeks until policy intervention",
+    "exit_signal": "central-bank bazooka or funding normalization",
+    "risk": "short-selling bans, forced covering",
+    "sizing": "1% per position"
+  },
+  "supply_chain": {
+    "immediate_longs": [
+      "shipping",
+      "commodities",
+      "energy"
+    ],
+    "immediate_shorts": [
+      "affected manufacturers",
+      "import-heavy retailers"
+    ],
+    "hold_period": "weeks to months",
+    "exit_signal": "freight rates and backlog normalize",
+    "risk": "mis-timing the disruption peak",
+    "sizing": "2% per position"
+  },
+  "policy": {
+    "immediate_longs": [
+      "GLD",
+      "UVXY",
+      "domestic-focused names"
+    ],
+    "immediate_shorts": [
+      "trade-exposed names",
+      "EEM",
+      "importers"
+    ],
+    "hold_period": "hours for headlines, months for rates",
+    "exit_signal": "deal announcement or policy pivot",
+    "risk": "headline whipsaw",
+    "sizing": "1% per position"
+  },
+  "cyber": {
+    "immediate_longs": [
+      "CIBR",
+      "PANW",
+      "CRWD",
+      "ZS",
+      "FTNT"
+    ],
+    "immediate_shorts": [
+      "affected company stock"
+    ],
+    "hold_period": "3-5 days",
+    "exit_signal": "attack contained or services restored",
+    "risk": "fading quickly if attack scope is small",
+    "sizing": "2% per position"
+  },
+  "climate": {
+    "immediate_longs": [
+      "UNG",
+      "USO",
+      "reconstruction",
+      "grid equipment"
+    ],
+    "immediate_shorts": [
+      "regional utilities",
+      "affected insurers"
+    ],
+    "hold_period": "days to weeks",
+    "exit_signal": "weather clears or damage fully assessed",
+    "risk": "overreacting to a contained event",
+    "sizing": "2% per position"
+  },
+  "terrorism": {
+    "immediate_longs": [
+      "GLD",
+      "TLT",
+      "LMT",
+      "RTX",
+      "NOC"
+    ],
+    "immediate_shorts": [
+      "JETS",
+      "travel",
+      "insurance"
+    ],
+    "hold_period": "hours to days",
+    "exit_signal": "shock absorbed and travel volume stabilizes",
+    "risk": "overholding a fast-fading fear spike",
+    "sizing": "1% per position"
+  }
+}

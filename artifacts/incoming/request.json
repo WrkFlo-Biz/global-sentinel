@@ -1,0 +1,73 @@
+{
+  "request_id": "qreq-e2e-test-001-1772893206",
+  "package_id": "e2e-test-001",
+  "timestamp_utc": "2026-03-07T14:20:06.807456+00:00",
+  "runtime_flags": {
+    "shadow_mode_only": true,
+    "incident_mode": false
+  },
+  "time_window_state": {
+    "window": "overnight"
+  },
+  "regime_state": {
+    "regime_shift_probability": 0.55,
+    "macro_state": "mixed"
+  },
+  "objective": {
+    "type": "hedge_basket_optimization",
+    "target": "maximize_risk_adjusted_protection"
+  },
+  "constraints": {
+    "max_names": 5,
+    "max_sector_weight": 0.4,
+    "impact_budget_bps": 15.0
+  },
+  "candidate_universe": [
+    {
+      "symbol": "XOM",
+      "score": 0.85,
+      "sector": "Energy"
+    },
+    {
+      "symbol": "CVX",
+      "score": 0.78,
+      "sector": "Energy"
+    },
+    {
+      "symbol": "LMT",
+      "score": 0.72,
+      "sector": "Defense"
+    },
+    {
+      "symbol": "GLD",
+      "score": 0.68,
+      "sector": "Commodities"
+    },
+    {
+      "symbol": "TLT",
+      "score": 0.65,
+      "sector": "Bonds"
+    },
+    {
+      "symbol": "UNH",
+      "score": 0.6,
+      "sector": "Healthcare"
+    },
+    {
+      "symbol": "RTX",
+      "score": 0.55,
+      "sector": "Defense"
+    }
+  ],
+  "market_microstructure": {
+    "XOM": {
+      "adv": 15000000.0
+    },
+    "CVX": {
+      "adv": 10000000.0
+    }
+  },
+  "provenance": {
+    "test": true
+  }
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=Global Sentinel Congress Trading Bridge
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment=GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/src/bridges/congress_trading_bridge.py
+StandardOutput=journal
+StandardError=journal

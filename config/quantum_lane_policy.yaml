@@ -1,0 +1,193 @@
+schema_version: quantum_lane_policy.v2
+
+# ---------------------------------------------------------------
+# QPanda3 is the only supported quantum framework.
+# QPanda2 / pyqpanda (v2) imports are deprecated and unsupported.
+# ---------------------------------------------------------------
+framework:
+  required: pyqpanda3
+  deprecated:
+    - pyqpanda      # QPanda2 — do not use
+    - qiskit        # Not part of Origin stack
+  optional:
+    - pyqpanda-algorithm   # Structured VQE/QAOA modules
+    - pyvqnet              # Hybrid quantum-classical ML (optional, bounded use)
+
+lane_rules:
+  artifact_only: true
+  disable_execution_path: true
+  shadow_mode_only: true
+  allow_threshold_mutation: false
+  allow_router_access: false
+  allow_broker_credentials: false
+
+benchmark_rules:
+  require_classical_baseline: true
+  require_slippage_adjusted_evaluation: true
+  minimum_eval_window_days: 30
+
+finance_capabilities:
+  portfolio_optimization: true
+  derivative_pricing_research: true
+  risk_management_research: true
+  anomaly_detection_research: true
+  monte_carlo_acceleration_research: true
+
+experiment_registry:
+  path: "config/quantum_experiment_registry.yaml"
+  required_for_hardware_runs: false
+
+allowed_objectives:
+  - hedge_basket_optimization
+  - constrained_subset_selection
+  - scenario_allocation
+  - robust_portfolio_design
+  - portfolio_optimization
+  - derivative_pricing_research
+  - risk_management_research
+  - anomaly_detection_research
+
+forbidden_uses:
+  - live_order_execution
+  - direct_trade_trigger
+  - config_autowrite
+  - production_threshold_override
+  - broker_access
+
+# ---------------------------------------------------------------
+# Execution backend configuration
+# Two explicit paths:
+#   1. local_sim  — CPUQVM(), deterministic, for replay/testing
+#   2. qcloud     — QCloudService, real hardware, async-capable
+#   3. pilot      — QPilotService, managed execution
+# ---------------------------------------------------------------
+backends:
+  local_sim:
+    class: CPUQVM
+    description: "Local deterministic simulation via pyqpanda3"
+    use_for: ["testing", "replay", "development", "ci"]
+    deterministic: true
+    async_capable: false
+
+  qcloud:
+    class: QCloudService
+    description: "Origin QCloud real-device or cloud simulator"
+    use_for: ["research", "benchmarking"]
+    deterministic: false
+    async_capable: true
+    default_backend: "72-bit"
+
+  pilot:
+    class: QPilotService
+    description: "Origin Pilot OS managed execution"
+    use_for: ["research"]
+    deterministic: false
+    async_capable: true
+
+# ---------------------------------------------------------------
+# Additional research backends (cross-platform comparison)
+# All artifact-only, not_for_direct_execution=true
+# ---------------------------------------------------------------
+research_backends:
+  operational_comparison_enabled: true
+  # Two-tier frequency: lightweight every cycle, full every 12 cycles
+  lightweight_interval_cycles: 1        # every cycle (~5 min), quick mode
+  full_comparison_interval_cycles: 12   # every 12 cycles (~1 hour), all backends
+  comparison_mode: "quick"              # default for lightweight
+  max_lightweight_runtime_seconds: 30   # tight timeout for lightweight
+  max_full_runtime_seconds: 120         # full comparison budget
+  include_anomaly_screening: true
+
+  primary:
+    qpanda3:
+      package: pyqpanda3
+      algorithm_family: qaoa_vqe
+      backend: local_sim_or_origin_qcloud
+      status: required
+      notes: "Primary quantum research backend for Global Sentinel"
+
+  additional:
+    qiskit_finance:
+      package: qiskit-finance
+      algorithm: QAOA
+      backend: aer_simulator
+      max_assets: 12
+      status: optional
+      notes: "Cross-platform QAOA comparison via Qiskit Finance"
+
+    pennylane_vqc:
+      package: pennylane
+      algorithm: VQC
+      backend: lightning.qubit
+      purpose: anomaly_detection
+      status: optional
+      notes: "VQC anomaly detector for signal validation"
+
+    classical_strong:
+      package: cvxpy
+      algorithm: markowitz_milp
+      backend: GLPK_MI
+      purpose: strong_baseline
+      status: recommended
+      notes: "Quantum backends must outperform this to claim advantage"
+
+origin_config:
+  provider: "origin-qcloud"
+  cloud_url: "https://qcloud.originqc.com.cn"
+  backend_name: "72-bit"
+  chip_id: "72"
+  shots: 1000
+  max_candidates: 5
+  fallback: "classical"
+
+# ---------------------------------------------------------------
+# Async job orchestration
+# ---------------------------------------------------------------
+async_jobs:
+  poll_interval_seconds: 5
+  max_poll_attempts: 120     # 10 minutes max wait
+  timeout_seconds: 600
+  persist_submitted_jobs: true
+  artifact_on_timeout: true  # Write partial artifact if job times out
+
+# ---------------------------------------------------------------
+# Noise / error mitigation (opt-in per experiment)
+# ---------------------------------------------------------------
+noise_mitigation:
+  enabled: false
+  supported_methods:
+    - randomized_benchmarking
+    - state_tomography
+    - zero_noise_extrapolation
+    - measurement_error_mitigation
+  metadata_always_captured: true
+  default_rb_sequence_lengths: [1, 2, 4, 8, 16]
+
+# ---------------------------------------------------------------
+# Decomposition policy
+# ---------------------------------------------------------------
+decomposition_policy:
+  max_qubits: 20
+  max_candidates: 15
+  min_candidates_for_quantum: 4
+  max_circuit_depth: 100
+  classical_prune_keep_ratio: 0.6
+  shot_budget: 1024
+
+# ---------------------------------------------------------------
+# Maturity stages (unchanged — Stage 1 only)
+# ---------------------------------------------------------------
+maturity_stages:
+  stage_1:
+    name: "simulation_and_research_only"
+    description: "QPanda outputs are artifact-only, never influence execution"
+    active: true
+  stage_2:
+    name: "comparative_ranking"
+    description: "QPanda hedge scores shown alongside classical, no execution influence"
+    active: false
+  stage_3:
+    name: "bounded_contribution"
+    description: "QPanda contributes bounded weight to candidate ranking after measured outperformance"
+    active: false
+    max_influence_weight: 0.15

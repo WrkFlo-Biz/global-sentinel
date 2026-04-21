@@ -1,0 +1,75 @@
+{
+  "schema_version": "stale_intent_sweeper_report.v1",
+  "timestamp_utc": "2026-03-06T13:36:58.687541+00:00",
+  "config": {
+    "stale_after_minutes": 0.0,
+    "target_statuses": [
+      "submitted",
+      "acknowledged",
+      "open",
+      "partially_filled"
+    ],
+    "mark_manual_review": false,
+    "emit_shadow_cancel_recommendations": true,
+    "use_time_window_ttl_policy": false,
+    "ttl_policy_yaml": null,
+    "package_ids": [
+      "pkg-smoke-stale_open_xom-639905b2"
+    ],
+    "router_run_id_filter": null,
+    "intent_id_prefix_filter": null
+  },
+  "summary": {
+    "target_intent_count": 1,
+    "stale_intent_count": 1,
+    "stale_rate": 1.0,
+    "shadow_cancel_recommendation_count": 1,
+    "time_window_bucket_counts": {
+      "unknown": 1
+    }
+  },
+  "stale_intents": [
+    {
+      "intent_id": "intent-ed3c5e9751ea43d8",
+      "package_id": "pkg-smoke-stale_open_xom-639905b2",
+      "candidate_id": "cand-smoke-xom",
+      "client_order_id": "gs-b98b588a0d2fdd18",
+      "status": "open",
+      "shadow_mode": true,
+      "symbol": "XOM",
+      "strategy_style": "momentum_follow_through",
+      "broker_name": "mock",
+      "broker_order_id": "mock-870522541946",
+      "broker_status": "accepted",
+      "created_at_utc": "2026-03-06T13:36:55.544107+00:00",
+      "updated_at_utc": "2026-03-06T13:36:58.428623+00:00",
+      "last_reconciled_at_utc": "2026-03-06T13:36:58.428600+00:00",
+      "age_minutes": 0.004314483333333333,
+      "resolved_ttl_minutes": 0.0,
+      "ttl_explanation": {
+        "resolved_ttl_minutes": 0.0,
+        "time_window_name": null,
+        "reasons": [
+          {
+            "layer": "cli_override_zero_ttl",
+            "ttl_minutes": 0.0
+          }
+        ]
+      }
+    }
+  ],
+  "shadow_cancel_recommendations": [
+    {
+      "intent_id": "intent-ed3c5e9751ea43d8",
+      "client_order_id": "gs-b98b588a0d2fdd18",
+      "broker_order_id": "mock-870522541946",
+      "symbol": "XOM",
+      "recommendation": "shadow_cancel_review",
+      "reason": "stale_open_intent>0.0m",
+      "age_minutes": 0.004314483333333333,
+      "resolved_ttl_minutes": 0.0,
+      "time_window_name": null
+    }
+  ],
+  "operator_summary": "stale sweeper | target=1 stale=1 rate=1.0 threshold_min=0.0 ttl_policy=off intent_prefix_filter=None"
+}

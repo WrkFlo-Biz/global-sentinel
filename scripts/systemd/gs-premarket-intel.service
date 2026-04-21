@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel Pre-Market Intelligence Scanner
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/premarket_scanner.py
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

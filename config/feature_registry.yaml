@@ -1,0 +1,125 @@
+schema_version: feature_registry.v1
+
+# Feature Registry — canonical list of all features used in Global Sentinel V4.
+# Each feature has a source, version, type, and freshness requirement.
+
+features:
+  base_score:
+    source: qfinance_feature_encoder
+    version: v4.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 60
+    description: "Composite base score from fundamental + event signals"
+
+  event_score:
+    source: qfinance_feature_encoder
+    version: v4.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 15
+    description: "Geopolitical event intensity score"
+
+  quality_score:
+    source: qfinance_feature_encoder
+    version: v4.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 60
+    description: "Data quality and source reliability score"
+
+  anomaly_score:
+    source: qfinance_feature_encoder
+    version: v4.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 30
+    description: "Statistical anomaly detection score"
+
+  liquidity_score:
+    source: market_microstructure
+    version: v3.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 5
+    description: "Real-time liquidity assessment"
+
+  regime_alignment:
+    source: regime_conditioned_optimizer
+    version: v2.0
+    type: numeric
+    range: [-1.0, 1.0]
+    freshness_ttl_minutes: 30
+    description: "Alignment with current macro regime"
+
+  volatility_penalty:
+    source: market_microstructure
+    version: v3.0
+    type: numeric
+    range: [-1.0, 0.0]
+    freshness_ttl_minutes: 5
+    description: "Penalty for excessive realized volatility"
+
+  preopt_feature_score:
+    source: online_weighted_feature_encoder
+    version: v4.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 15
+    description: "Final weighted composite score for optimization input"
+
+  put_call_ratio:
+    source: options_greeks_bridge
+    version: v1.0
+    type: numeric
+    range: [0.0, 5.0]
+    freshness_ttl_minutes: 15
+    description: "Put/call open interest ratio"
+
+  implied_volatility:
+    source: options_greeks_bridge
+    version: v1.0
+    type: numeric
+    range: [0.0, 200.0]
+    freshness_ttl_minutes: 15
+    description: "Average implied volatility percentage"
+
+  gamma_squeeze_risk:
+    source: options_greeks_bridge
+    version: v1.0
+    type: categorical
+    categories: [low, moderate, elevated, high]
+    freshness_ttl_minutes: 30
+    description: "Gamma squeeze risk indicator"
+
+  gpr_index:
+    source: gpr_index_bridge
+    version: v1.0
+    type: numeric
+    range: [0.0, 500.0]
+    freshness_ttl_minutes: 1440
+    description: "Geopolitical Risk Index (Caldara-Iacoviello)"
+
+  cds_spread:
+    source: cds_sovereign_bridge
+    version: v1.0
+    type: numeric
+    range: [0.0, 10000.0]
+    freshness_ttl_minutes: 60
+    description: "Sovereign CDS spread in basis points"
+
+  semiconductor_supply_index:
+    source: semiconductor_supply_bridge
+    version: v1.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 1440
+    description: "Semiconductor supply chain stress index"
+
+  maritime_congestion:
+    source: maritime_bridge_v2
+    version: v2.0
+    type: numeric
+    range: [0.0, 1.0]
+    freshness_ttl_minutes: 360
+    description: "Maritime shipping congestion indicator"

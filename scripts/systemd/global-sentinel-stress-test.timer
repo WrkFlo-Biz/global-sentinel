@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Stress Tests daily at 4:20 PM ET (20:20 UTC)
+
+[Timer]
+OnCalendar=*-*-* 20:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

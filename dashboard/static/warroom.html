@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Global Sentinel War Room</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#1a1a2e;--card:#16213e;--border:#0f3460;--text:#e0e0e0;
+  --green:#00e676;--yellow:#ffea00;--orange:#ff9100;--red:#ff1744;
+  --accent:#00b0ff;--muted:#666;
+}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;font-size:14px;min-height:100vh}
+h1{font-size:1.2em;color:var(--accent);margin-bottom:4px}
+h2{font-size:1em;color:var(--accent);margin-bottom:6px;border-bottom:1px solid var(--border);padding-bottom:4px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#0d1117;border-bottom:2px solid var(--border);flex-wrap:wrap;gap:8px}
+.header-left{display:flex;align-items:center;gap:12px}
+.ws-status{width:10px;height:10px;border-radius:50%;display:inline-block}
+.ws-status.connected{background:var(--green)}
+.ws-status.disconnected{background:var(--red)}
+.ws-status.polling{background:var(--yellow)}
+.timestamp{color:var(--muted);font-size:12px}
+.grid{display:grid;gap:12px;padding:12px;grid-template-columns:1fr;max-width:1400px;margin:0 auto}
+@media(min-width:768px){.grid{grid-template-columns:1fr 1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px;overflow:auto;max-height:400px}
+.card.full-width{grid-column:1/-1}
+
+/* Top row */
+.top-row{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;grid-column:1/-1}
+.top-row .card{flex:1;min-width:140px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 12px}
+
+/* Gauge */
+.gauge-ring{width:100px;height:100px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:8px 0}
+.gauge-value{font-size:1.6em;font-weight:bold}
+
+/* Mode badge */
+.mode-badge{font-size:1.4em;font-weight:bold;padding:8px 20px;border-radius:4px;text-transform:uppercase}
+.mode-NORMAL{background:#1b5e20;color:var(--green)}
+.mode-ELEVATED{background:#e65100;color:var(--orange)}
+.mode-CRISIS{background:#b71c1c;color:var(--red)}
+
+/* Chokepoint badges */
+.choke-badges{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.choke-badge{padding:6px 10px;border-radius:4px;font-size:12px;font-weight:bold;min-width:100px;text-align:center}
+
+/* Lists */
+.idea-item,.edge-item,.scanner-item,.alert-item{padding:6px 0;border-bottom:1px solid var(--border);font-size:13px}
+.idea-item:last-child,.edge-item:last-child,.scanner-item:last-child,.alert-item:last-child{border-bottom:none}
+.idea-ticker{color:var(--accent);font-weight:bold}
+.idea-direction{display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:bold;margin-left:4px}
+.idea-direction.LONG{background:#1b5e20;color:var(--green)}
+.idea-direction.SHORT{background:#b71c1c;color:var(--red)}
+
+/* Bridge health */
+.bridge-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:13px}
+.bridge-status{font-weight:bold}
+
+/* Kill switch */
+.controls{display:flex;gap:10px;flex-wrap:wrap}
+.btn-kill{background:#b71c1c;color:#fff;border:2px solid var(--red);padding:8px 18px;font-family:inherit;font-size:14px;font-weight:bold;cursor:pointer;border-radius:4px;text-transform:uppercase}
+.btn-kill:hover{background:var(--red)}
+.btn-deactivate{background:#1b5e20;color:#fff;border:2px solid var(--green);padding:8px 18px;font-family:inherit;font-size:14px;font-weight:bold;cursor:pointer;border-radius:4px;text-transform:uppercase}
+.btn-deactivate:hover{background:var(--green);color:#000}
+.kill-status{font-size:12px;margin-top:4px}
+.empty{color:var(--muted);font-style:italic;font-size:13px}
+
+/* PnL placeholder */
+.pnl-value{font-size:2em;font-weight:bold;margin:12px 0}
+.pnl-positive{color:var(--green)}
+.pnl-negative{color:var(--red)}
+.pnl-neutral{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>GLOBAL SENTINEL WAR ROOM</h1>
+    <span class="ws-status disconnected" id="wsIndicator" title="WebSocket status"></span>
+    <span class="timestamp" id="wsLabel">disconnected</span>
+  </div>
+  <div class="controls">
+    <button class="btn-kill" id="btnKill" onclick="activateKillSwitch()">KILL SWITCH</button>
+    <button class="btn-deactivate" id="btnDeactivate" onclick="deactivateKillSwitch()">DEACTIVATE</button>
+  </div>
+</div>
+<div id="killStatus" class="kill-status" style="padding:0 16px"></div>
+
+<div class="grid">
+  <!-- TOP ROW -->
+  <div class="top-row">
+    <div class="card" id="regimeCard">
+      <h2>REGIME PROBABILITY</h2>
+      <div class="gauge-ring" id="gaugeRing">
+        <span class="gauge-value" id="gaugeValue">--</span>
+      </div>
+      <div id="regimeConf" class="timestamp">confidence: --</div>
+    </div>
+    <div class="card" id="modeCard">
+      <h2>EXECUTION MODE</h2>
+      <div class="mode-badge" id="modeBadge">--</div>
+    </div>
+    <div class="card" id="chokeCard">
+      <h2>CHOKEPOINTS</h2>
+      <div class="choke-badges" id="chokeBadges">
+        <div class="choke-badge" style="background:var(--border)">Hormuz: --</div>
+        <div class="choke-badge" style="background:var(--border)">Bab El Mandeb: --</div>
+        <div class="choke-badge" style="background:var(--border)">Med: --</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MIDDLE ROW -->
+  <div class="card" id="pnlCard">
+    <h2>P&L</h2>
+    <div class="pnl-value pnl-neutral" id="pnlValue">--</div>
+    <div class="empty">Awaiting market data feed</div>
+  </div>
+  <div class="card" id="ideasCard">
+    <h2>STRATEGY IDEAS</h2>
+    <div id="ideasList"><span class="empty">No ideas yet</span></div>
+  </div>
+
+  <!-- BOTTOM ROW -->
+  <div class="card" id="edgeCard">
+    <h2>EDGE FINDINGS / SCANNER</h2>
+    <div id="edgeList"><span class="empty">No findings</span></div>
+  </div>
+  <div class="card" id="bridgeCard">
+    <h2>BRIDGE HEALTH / ALERTS</h2>
+    <div id="bridgeList"><span class="empty">No bridge data</span></div>
+  </div>
+
+  <!-- Timestamp footer -->
+  <div class="card full-width" style="text-align:center;padding:6px">
+    <span class="timestamp">Last update: <span id="lastUpdate">--</span></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ws = null;
+  var pollTimer = null;
+  var reconnectTimer = null;
+  var reconnectDelay = 2000;
+  var maxReconnectDelay = 30000;
+
+  var wsIndicator = document.getElementById('wsIndicator');
+  var wsLabel = document.getElementById('wsLabel');
+
+  function getBaseUrl() {
+    return window.location.protocol + '//' + window.location.host;
+  }
+
+  function getWsUrl() {
+    var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return proto + '//' + window.location.host + '/ws/warroom';
+  }
+
+  // ---------- Color helpers ----------
+  function regimeColor(p) {
+    if (p < 0.3) return 'var(--green)';
+    if (p < 0.5) return 'var(--yellow)';
+    if (p < 0.7) return 'var(--orange)';
+    return 'var(--red)';
+  }
+
+  function chokeColor(score) {
+    if (typeof score !== 'number') return 'var(--border)';
+    if (score < 0.3) return '#1b5e20';
+    if (score < 0.5) return '#e65100';
+    return '#b71c1c';
+  }
+
+  // ---------- Render ----------
+  function render(data) {
+    if (!data) return;
+
+    var freshness = data.source_freshness || 'unknown';
+    var sourceTs = data.source_timestamp_utc || data.timestamp_utc || '--';
+    var sourceAge = typeof data.source_age_seconds === 'number' ? data.source_age_seconds : null;
+    var sourceAgeLabel = sourceAge === null ? '' : (sourceAge < 60 ? sourceAge + 's' : (sourceAge < 3600 ? Math.floor(sourceAge / 60) + 'm' : Math.floor(sourceAge / 3600) + 'h'));
+    var updateLabel = 'source ' + sourceTs;
+    if (sourceAgeLabel) updateLabel += ' · age ' + sourceAgeLabel;
+    updateLabel += ' · ' + freshness;
+    updateLabel += ' · server ' + (data.timestamp_utc || '--');
+    var lastUpdate = document.getElementById('lastUpdate');
+    lastUpdate.textContent = updateLabel;
+    lastUpdate.style.color = freshness === 'stale' ? 'var(--red)' : (freshness === 'degraded' ? 'var(--orange)' : 'var(--muted)');
+
+    // Regime
+    var regime = data.regime || {};
+    var prob = typeof regime.probability === 'number' ? regime.probability : 0;
+    var color = regimeColor(prob);
+    document.getElementById('gaugeValue').textContent = prob.toFixed(2);
+    document.getElementById('gaugeRing').style.border = '6px solid ' + color;
+    document.getElementById('gaugeValue').style.color = color;
+    document.getElementById('regimeConf').textContent = 'confidence: ' + (typeof regime.confidence === 'number' ? regime.confidence.toFixed(2) : '--');
+
+    // Mode
+    var mode = regime.mode || 'NORMAL';
+    var badge = document.getElementById('modeBadge');
+    badge.textContent = mode;
+    badge.className = 'mode-badge mode-' + mode;
+
+    // Chokepoints
+    var choke = data.chokepoints || {};
+    var chokeHtml = '';
+    var chokeNames = {
+      'hormuz': 'Hormuz', 'strait_of_hormuz': 'Hormuz',
+      'bab_el_mandeb': 'Bab El Mandeb', 'bab-el-mandeb': 'Bab El Mandeb',
+      'mediterranean': 'Med', 'med': 'Med', 'suez': 'Suez'
+    };
+    var rendered = {};
+    for (var key in choke) {
+      if (!choke.hasOwnProperty(key)) continue;
+      var val = choke[key];
+      var score = typeof val === 'number' ? val : (val && typeof val.score === 'number' ? val.score : null);
+      var label = chokeNames[key.toLowerCase()] || key;
+      if (rendered[label]) continue;
+      rendered[label] = true;
+      var bg = chokeColor(score);
+      chokeHtml += '<div class="choke-badge" style="background:' + bg + '">' + label + ': ' + (score !== null ? score.toFixed(2) : '--') + '</div>';
+    }
+    if (!chokeHtml) chokeHtml = '<span class="empty">No chokepoint data</span>';
+    document.getElementById('chokeBadges').innerHTML = chokeHtml;
+
+    // Strategy ideas
+    var ideas = data.strategy_ideas || [];
+    var ideasHtml = '';
+    if (ideas.length === 0) {
+      ideasHtml = '<span class="empty">No ideas yet</span>';
+    } else {
+      for (var i = 0; i < ideas.length; i++) {
+        var idea = ideas[i];
+        var ticker = idea.ticker || idea.symbol || idea.asset || '??';
+        var dir = idea.direction || idea.side || '';
+        var rationale = idea.rationale || idea.thesis || idea.reason || '';
+        var conf = idea.confidence;
+        ideasHtml += '<div class="idea-item">';
+        ideasHtml += '<span class="idea-ticker">' + esc(ticker) + '</span>';
+        if (dir) ideasHtml += ' <span class="idea-direction ' + esc(dir.toUpperCase()) + '">' + esc(dir.toUpperCase()) + '</span>';
+        if (typeof conf === 'number') ideasHtml += ' <span style="color:var(--muted)">[' + conf.toFixed(2) + ']</span>';
+        if (rationale) ideasHtml += '<div style="color:var(--muted);font-size:12px;margin-top:2px">' + esc(rationale.substring(0, 200)) + '</div>';
+        ideasHtml += '</div>';
+      }
+    }
+    document.getElementById('ideasList').innerHTML = ideasHtml;
+
+    // Edge findings + Scanner
+    var edge = data.edge_findings || {};
+    var scanner = data.scanner_discoveries || [];
+    var edgeHtml = '';
+
+    // Edge findings can be an object with keys or array
+    if (Array.isArray(edge)) {
+      for (var i = 0; i < edge.length; i++) {
+        edgeHtml += '<div class="edge-item">' + esc(JSON.stringify(edge[i]).substring(0, 200)) + '</div>';
+      }
+    } else if (typeof edge === 'object' && Object.keys(edge).length > 0) {
+      for (var ek in edge) {
+        if (!edge.hasOwnProperty(ek)) continue;
+        var ev = edge[ek];
+        edgeHtml += '<div class="edge-item"><strong>' + esc(ek) + ':</strong> ';
+        if (typeof ev === 'string') edgeHtml += esc(ev.substring(0, 200));
+        else edgeHtml += esc(JSON.stringify(ev).substring(0, 200));
+        edgeHtml += '</div>';
+      }
+    }
+
+    if (scanner.length > 0) {
+      edgeHtml += '<h2 style="margin-top:10px">SCANNER DISCOVERIES</h2>';
+      for (var s = 0; s < scanner.length; s++) {
+        var sd = scanner[s];
+        var sdText = sd.symbol || sd.ticker || '';
+        if (sd.signal) sdText += ' - ' + sd.signal;
+        if (sd.description) sdText += ' - ' + sd.description;
+        edgeHtml += '<div class="scanner-item">' + esc(sdText || JSON.stringify(sd).substring(0, 200)) + '</div>';
+      }
+    }
+
+    if (!edgeHtml) edgeHtml = '<span class="empty">No findings</span>';
+    document.getElementById('edgeList').innerHTML = edgeHtml;
+
+    // Bridge health + deescalation/scenarios as alerts
+    var bridge = data.bridge_health || {};
+    var deesc = data.deescalation || {};
+    var bridgeHtml = '';
+
+    if (typeof bridge === 'object' && Object.keys(bridge).length > 0) {
+      for (var bk in bridge) {
+        if (!bridge.hasOwnProperty(bk)) continue;
+        var bv = bridge[bk];
+        var statusText, statusColor;
+        if (typeof bv === 'object' && bv !== null) {
+          statusText = bv.display_status || bv.status || (bv.healthy ? 'OK' : 'DEGRADED');
+          if (bv.status === 'live' || statusText === 'OK' || statusText === 'healthy' || bv.healthy) statusColor = 'var(--green)';
+          else if (bv.status === 'source_live' || bv.status === 'empty' || bv.status === 'snapshot_only' || bv.status === 'no_snapshot') statusColor = 'var(--yellow)';
+          else statusColor = 'var(--red)';
+          if (typeof bv.latest_age_min === 'number') statusText += ' · ' + (bv.latest_age_min < 60 ? Math.round(bv.latest_age_min) + 'm' : Math.round(bv.latest_age_min / 60) + 'h');
+        } else {
+          statusText = String(bv);
+          statusColor = 'var(--muted)';
+        }
+        bridgeHtml += '<div class="bridge-row"><span>' + esc(bk) + '</span><span class="bridge-status" style="color:' + statusColor + '">' + esc(statusText) + '</span></div>';
+      }
+    }
+
+    // Deescalation as alert section
+    if (typeof deesc === 'object' && Object.keys(deesc).length > 0) {
+      bridgeHtml += '<h2 style="margin-top:10px">DE-ESCALATION</h2>';
+      for (var dk in deesc) {
+        if (!deesc.hasOwnProperty(dk)) continue;
+        bridgeHtml += '<div class="alert-item"><strong>' + esc(dk) + ':</strong> ' + esc(String(deesc[dk]).substring(0, 200)) + '</div>';
+      }
+    }
+
+    if (!bridgeHtml) bridgeHtml = '<span class="empty">No bridge data</span>';
+    document.getElementById('bridgeList').innerHTML = bridgeHtml;
+  }
+
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // ---------- WebSocket ----------
+  function connectWs() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+    try {
+      ws = new WebSocket(getWsUrl());
+    } catch(e) {
+      startPolling();
+      return;
+    }
+
+    ws.onopen = function() {
+      wsIndicator.className = 'ws-status connected';
+      wsLabel.textContent = 'ws connected';
+      reconnectDelay = 2000;
+      stopPolling();
+    };
+
+    ws.onmessage = function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        render(data);
+      } catch(err) {}
+    };
+
+    ws.onclose = function() {
+      wsIndicator.className = 'ws-status disconnected';
+      wsLabel.textContent = 'ws disconnected';
+      ws = null;
+      startPolling();
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      wsIndicator.className = 'ws-status disconnected';
+      wsLabel.textContent = 'ws error';
+      if (ws) ws.close();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(function() {
+      connectWs();
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, maxReconnectDelay);
+  }
+
+  // ---------- Polling fallback ----------
+  function startPolling() {
+    if (pollTimer) return;
+    wsIndicator.className = 'ws-status polling';
+    wsLabel.textContent = 'polling';
+    poll();
+    pollTimer = setInterval(poll, 5000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function poll() {
+    fetch(getBaseUrl() + '/api/v6/warroom')
+      .then(function(r) { return r.json(); })
+      .then(function(data) { render(data); })
+      .catch(function() {});
+  }
+
+  // ---------- Kill switch ----------
+  window.activateKillSwitch = function() {
+    if (!confirm('ACTIVATE KILL SWITCH?\n\nThis will halt ALL trading immediately.')) return;
+    var status = document.getElementById('killStatus');
+    status.textContent = 'Activating...';
+    status.style.color = 'var(--yellow)';
+    fetch(getBaseUrl() + '/api/v6/kill-switch', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        status.textContent = 'KILL SWITCH ACTIVE - ' + (d.timestamp || '');
+        status.style.color = 'var(--red)';
+      })
+      .catch(function(e) {
+        status.textContent = 'Error: ' + e.message;
+        status.style.color = 'var(--red)';
+      });
+  };
+
+  window.deactivateKillSwitch = function() {
+    if (!confirm('Deactivate kill switch and resume trading?')) return;
+    var status = document.getElementById('killStatus');
+    status.textContent = 'Deactivating...';
+    status.style.color = 'var(--yellow)';
+    fetch(getBaseUrl() + '/api/v6/kill-switch/deactivate', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        status.textContent = 'Kill switch deactivated - ' + (d.timestamp || '');
+        status.style.color = 'var(--green)';
+      })
+      .catch(function(e) {
+        status.textContent = 'Error: ' + e.message;
+        status.style.color = 'var(--red)';
+      });
+  };
+
+  // ---------- Init ----------
+  connectWs();
+})();
+</script>
+</body>
+</html>

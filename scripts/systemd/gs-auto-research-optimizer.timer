@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: AutoResearch Strategy Optimizer (daily 07:00 UTC) Timer
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

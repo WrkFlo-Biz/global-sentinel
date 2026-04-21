@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Economic Surprise Calculator (7:30 AM ET / 11:30 UTC, after calendar)
+
+[Timer]
+OnCalendar=*-*-* 11:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

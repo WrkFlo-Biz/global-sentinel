@@ -1,0 +1,10 @@
+[Unit]
+Description=Global Sentinel Correlation Meta-Classifier
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/strategies/correlation_meta_classifier.py
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,15 @@
+[Unit]
+Description=Global Sentinel 24/7 Data Gatherer
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/continuous_data_gatherer.py
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

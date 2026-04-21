@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel Overnight Gap Analysis
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment=GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/overnight_gap_strategy.py gap
+StandardOutput=journal
+StandardError=journal

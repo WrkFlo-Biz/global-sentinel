@@ -1,0 +1,64 @@
+# Global Sentinel policy-as-code reference
+schema_version: policy_engine_config.v2
+
+# Execution trust floor. If omitted by a caller-specific test fixture,
+# the engine falls back to the legacy behavior of only blocking tier_4.
+trust_tier_execution_floor: tier_2_operational
+
+# Sanctions and compliance policy
+sanctions_lists_update_frequency_hours: 24
+blocked_execution_lineage_terms: []
+blocked_execution_sources: []
+
+# Trade idea thresholds
+max_single_order_notional_pct: 0.12
+max_portfolio_notional_pct: 0.50
+max_single_name_pct: 0.15
+max_sector_pct: 0.30
+max_orders_per_minute: 10
+default_order_ttl_minutes_min: 1
+default_order_ttl_minutes_max: 1440
+
+# Research / learning policy
+max_abs_weight_step: 0.05
+min_eval_count_for_promotion: 50
+min_eval_days_for_promotion: 30
+max_cumulative_drift_std: 2.0
+require_reproducibility_pass: true
+near_miss_ratio: 0.10
+
+# Quantum influence caps by maturity stage
+quantum_influence_caps_by_stage:
+  stage_1: 0.0
+  stage_2: 0.0
+  stage_3: 0.15
+
+# Execution modes
+shadow_drafts_allowed_by_mode:
+  NORMAL: true
+  ELEVATED: true
+  CRISIS: false
+  MANUAL_REVIEW: false
+
+# Mode transition rules
+mode_transition_rules:
+  NORMAL:
+    allowed_targets: [NORMAL, ELEVATED, MANUAL_REVIEW]
+  ELEVATED:
+    allowed_targets: [NORMAL, ELEVATED, CRISIS, MANUAL_REVIEW]
+  CRISIS:
+    allowed_targets: [ELEVATED, CRISIS, MANUAL_REVIEW]
+  MANUAL_REVIEW:
+    allowed_targets: [NORMAL, ELEVATED, CRISIS, MANUAL_REVIEW]
+  freeze_config_in_modes: [CRISIS, MANUAL_REVIEW]
+  hysteresis_minutes: 15
+
+# Timing / venue / options policy defaults used when the specific config
+# does not define an override for a given trade idea.
+timing_policy:
+  default_allow_execution: true
+venue_policy:
+  blocked_assets: []
+  blocked_venues: []
+options_policy:
+  default_options_enabled: false

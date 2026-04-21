@@ -1,0 +1,18 @@
+{
+  "status": "ok",
+  "scenario": "timeout_cat",
+  "fault_profile": {
+    "timeout_on_submit_symbols": [
+      "CAT"
+    ]
+  },
+  "bound_order_attempt_count": 1,
+  "skipped_candidates": 1,
+  "router_errors": 1,
+  "reconciled_count": 27,
+  "reconciler_errors": 0,
+  "stale_intent_count": 0,
+  "submit_attempt_count": 1,
+  "broker_rejected_count": 0,
+  "submitted_open_or_ack_count": 1
+}

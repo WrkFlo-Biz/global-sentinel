@@ -1,0 +1,25 @@
+[Unit]
+Description=Global Sentinel - Interactive Brokers Gateway (via IBC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/ibc
+Environment=JAVA_HOME=/opt/ibgateway/jre
+
+ExecStart=/opt/ibc/gs-gateway-wrapper.sh
+
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-ibkr-gateway
+
+[Install]
+WantedBy=multi-user.target

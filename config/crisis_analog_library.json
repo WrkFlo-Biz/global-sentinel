@@ -1,0 +1,1752 @@
+[
+  {
+    "label": "Gulf War oil shock (1990-91)",
+    "tags": [
+      "oil_shock",
+      "geopolitical",
+      "middle_east",
+      "energy"
+    ],
+    "regime_markers": {
+      "energy_disruption": 0.9,
+      "flight_to_quality": 0.7,
+      "vol_spike": 0.8
+    },
+    "asset_impacts": {
+      "CL": "sharp_up",
+      "GLD": "up",
+      "SPX": "down",
+      "UST10Y": "down"
+    }
+  },
+  {
+    "label": "Red Sea / Houthi shipping disruption (2024)",
+    "tags": [
+      "shipping",
+      "middle_east",
+      "supply_chain",
+      "energy"
+    ],
+    "regime_markers": {
+      "energy_disruption": 0.6,
+      "supply_chain_stress": 0.8,
+      "vol_spike": 0.4
+    },
+    "asset_impacts": {
+      "CL": "moderate_up",
+      "shipping_rates": "sharp_up",
+      "XLE": "up"
+    }
+  },
+  {
+    "label": "Strait of Hormuz tension escalation",
+    "tags": [
+      "oil_shock",
+      "geopolitical",
+      "middle_east",
+      "energy",
+      "hormuz"
+    ],
+    "regime_markers": {
+      "energy_disruption": 0.95,
+      "flight_to_quality": 0.8,
+      "vol_spike": 0.9
+    },
+    "asset_impacts": {
+      "CL": "sharp_up",
+      "GLD": "up",
+      "SPX": "sharp_down",
+      "DXY": "up"
+    }
+  },
+  {
+    "label": "Volcker inflation scare (1980-82)",
+    "tags": [
+      "inflation",
+      "fed_hawkish",
+      "rates",
+      "recession"
+    ],
+    "regime_markers": {
+      "hawkish_fed": 0.95,
+      "inflation_stress": 0.9,
+      "recession_risk": 0.7
+    },
+    "asset_impacts": {
+      "UST10Y": "sharp_up",
+      "SPX": "down",
+      "GLD": "volatile",
+      "DXY": "up"
+    }
+  },
+  {
+    "label": "Fed pause-to-cut transition (2019)",
+    "tags": [
+      "fed_dovish",
+      "rates",
+      "easing"
+    ],
+    "regime_markers": {
+      "hawkish_fed": -0.5,
+      "growth_concern": 0.5,
+      "vol_spike": 0.2
+    },
+    "asset_impacts": {
+      "UST10Y": "down",
+      "SPX": "up",
+      "GLD": "up",
+      "XLF": "mixed"
+    }
+  },
+  {
+    "label": "Tariff escalation (US-China 2018-19)",
+    "tags": [
+      "tariff",
+      "trade_war",
+      "china",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "trade_stress": 0.8,
+      "supply_chain_stress": 0.6,
+      "vol_spike": 0.5
+    },
+    "asset_impacts": {
+      "SPX": "down",
+      "EEM": "sharp_down",
+      "DXY": "up",
+      "GLD": "up"
+    }
+  },
+  {
+    "label": "Banking stress / SVB (2023)",
+    "tags": [
+      "banking_stress",
+      "flight_to_quality",
+      "contagion"
+    ],
+    "regime_markers": {
+      "banking_stress": 0.9,
+      "flight_to_quality": 0.85,
+      "vol_spike": 0.7
+    },
+    "asset_impacts": {
+      "XLF": "sharp_down",
+      "UST10Y": "sharp_down",
+      "GLD": "up",
+      "SPX": "down"
+    }
+  },
+  {
+    "label": "Labor shock + tariff combo (2025-26)",
+    "tags": [
+      "tariff",
+      "labor",
+      "inflation",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "trade_stress": 0.7,
+      "inflation_stress": 0.6,
+      "labor_tightness": 0.7
+    },
+    "asset_impacts": {
+      "SPX": "volatile",
+      "XLI": "down",
+      "CL": "up",
+      "DXY": "mixed"
+    }
+  },
+  {
+    "label": "Afghanistan War / Post-9/11 Military Response",
+    "tags": [
+      "flight_to_safety",
+      "oil_demand_fear",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "vix_above": 30,
+      "flight_to_safety": true,
+      "oil_demand_fear": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "gold",
+        "treasuries"
+      ],
+      "losers": [
+        "airlines",
+        "tourism",
+        "insurance"
+      ],
+      "intraday_pattern": "gap_down_morning_rally_afternoon",
+      "optimal_day_trade": "Long defense and short airlines on the open, then reduce into the close.",
+      "recovery_shape": "V_with_rotation"
+    },
+    "source_event_id": "afghan_war_2001",
+    "category": "war",
+    "severity": 0.7
+  },
+  {
+    "label": "Iraq War / Operation Iraqi Freedom",
+    "tags": [
+      "oil_premium_high",
+      "pre_war_uncertainty",
+      "war"
+    ],
+    "regime_markers": {
+      "pre_war_uncertainty": true,
+      "oil_premium_high": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "broad equities",
+        "defense",
+        "oil services"
+      ],
+      "losers": [
+        "gold",
+        "emerging markets"
+      ],
+      "intraday_pattern": "sell_the_rumor_buy_the_news",
+      "optimal_day_trade": "Buy SPY after invasion confirmation while uncertainty premium collapses.",
+      "recovery_shape": "V_sharp"
+    },
+    "source_event_id": "iraq_war_2003",
+    "category": "war",
+    "severity": 0.6
+  },
+  {
+    "label": "Libya Civil War Oil Shock",
+    "tags": [
+      "energy_supply_shock",
+      "middle_east_escalation",
+      "war"
+    ],
+    "regime_markers": {
+      "energy_supply_shock": true,
+      "middle_east_escalation": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "oil",
+        "energy services",
+        "gold"
+      ],
+      "losers": [
+        "European airlines",
+        "Mediterranean travel"
+      ],
+      "intraday_pattern": "oil_spike_then_grind",
+      "optimal_day_trade": "Long energy on supply-disruption headlines and fade travel rallies.",
+      "recovery_shape": "L_with_rotation"
+    },
+    "source_event_id": "libya_civil_war_2011",
+    "category": "war",
+    "severity": 0.55
+  },
+  {
+    "label": "Crimea Annexation / Russia Sanctions Shock",
+    "tags": [
+      "geopolitical_state",
+      "sanctions_escalation",
+      "war"
+    ],
+    "regime_markers": {
+      "sanctions_escalation": true,
+      "geopolitical_state": "heightened"
+    },
+    "asset_impacts": {
+      "winners": [
+        "gold",
+        "defense",
+        "agriculture"
+      ],
+      "losers": [
+        "Eastern Europe ETFs",
+        "Russia exposure"
+      ],
+      "intraday_pattern": "sanctions_gap_then_range",
+      "optimal_day_trade": "Long gold and defense while shorting Russia-linked exposures.",
+      "recovery_shape": "grinding_with_flare_ups"
+    },
+    "source_event_id": "crimea_2014",
+    "category": "war",
+    "severity": 0.45
+  },
+  {
+    "label": "Russia-Ukraine War",
+    "tags": [
+      "energy_supply_shock",
+      "sanctions_escalation",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "energy_supply_shock": true,
+      "sanctions_escalation": true,
+      "vix_above": 30
+    },
+    "asset_impacts": {
+      "winners": [
+        "energy",
+        "defense",
+        "wheat",
+        "gold",
+        "uranium"
+      ],
+      "losers": [
+        "European equities",
+        "airlines",
+        "Russia ETFs"
+      ],
+      "intraday_pattern": "extreme_gap_moves_then_grinding",
+      "optimal_day_trade": "Long energy, defense, and grains while shorting Europe-sensitive assets.",
+      "recovery_shape": "L_with_sector_divergence"
+    },
+    "source_event_id": "russia_ukraine_2022",
+    "category": "war",
+    "severity": 0.85
+  },
+  {
+    "label": "Israel-Hamas War / October 7",
+    "tags": [
+      "middle_east_escalation",
+      "oil_supply_risk",
+      "war"
+    ],
+    "regime_markers": {
+      "middle_east_escalation": true,
+      "oil_supply_risk": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "oil",
+        "gold",
+        "cybersecurity"
+      ],
+      "losers": [
+        "airlines",
+        "travel",
+        "Israel ETF"
+      ],
+      "intraday_pattern": "gap_down_defense_rally",
+      "optimal_day_trade": "Long defense, gold, and oil while fading travel exposure.",
+      "recovery_shape": "V_moderate"
+    },
+    "source_event_id": "israel_hamas_2023",
+    "category": "war",
+    "severity": 0.6
+  },
+  {
+    "label": "Red Sea / Houthi Shipping Attacks",
+    "tags": [
+      "chokepoint_risk",
+      "shipping_disruption",
+      "supply_chain_stress",
+      "war"
+    ],
+    "regime_markers": {
+      "shipping_disruption": true,
+      "chokepoint_risk": true,
+      "supply_chain_stress": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "shipping",
+        "oil",
+        "defense"
+      ],
+      "losers": [
+        "container importers",
+        "European manufacturers"
+      ],
+      "intraday_pattern": "slow_grind_up_shipping",
+      "optimal_day_trade": "Long shipping stocks and oil on tanker rerouting stress.",
+      "recovery_shape": "grinding_with_flare_ups"
+    },
+    "source_event_id": "red_sea_houthi_2024",
+    "category": "war",
+    "severity": 0.5
+  },
+  {
+    "label": "Taiwan Strait Military Drills",
+    "tags": [
+      "chip_supply_risk",
+      "taiwan_risk",
+      "war"
+    ],
+    "regime_markers": {
+      "taiwan_risk": true,
+      "chip_supply_risk": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "semiconductor equipment",
+        "shipping hedges"
+      ],
+      "losers": [
+        "China/Taiwan ETFs",
+        "consumer electronics"
+      ],
+      "intraday_pattern": "semiconductor_gap_then_reversal",
+      "optimal_day_trade": "Hedge semiconductor exposure and buy defense/cyber on escalation headlines.",
+      "recovery_shape": "V_with_supply_chain_rotation"
+    },
+    "source_event_id": "taiwan_strait_drills_2022",
+    "category": "war",
+    "severity": 0.45
+  },
+  {
+    "label": "US-Iran Military Strikes (2026)",
+    "tags": [
+      "defense_momentum",
+      "hormuz_risk",
+      "oil_above_100",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "hormuz_risk": true,
+      "oil_above_100": true,
+      "vix_above": 25,
+      "defense_momentum": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "oil",
+        "defense",
+        "gold",
+        "volatility"
+      ],
+      "losers": [
+        "airlines",
+        "consumer discretionary",
+        "European equities"
+      ],
+      "intraday_pattern": "gap_up_energy_gap_down_equities",
+      "optimal_day_trade": "Long energy, defense, and gold while shorting risk assets during Hormuz stress.",
+      "recovery_shape": "unknown_ongoing"
+    },
+    "source_event_id": "iran_us_2026",
+    "category": "war",
+    "severity": 0.9
+  },
+  {
+    "label": "SARS Outbreak",
+    "tags": [
+      "pandemic",
+      "pandemic_fear",
+      "travel_demand_collapse"
+    ],
+    "regime_markers": {
+      "pandemic_fear": true,
+      "travel_demand_collapse": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "pharma",
+        "biotech"
+      ],
+      "losers": [
+        "airlines",
+        "hotels",
+        "travel"
+      ],
+      "intraday_pattern": "sector_rotation_slow",
+      "optimal_day_trade": "Long pharma and short travel on outbreak acceleration.",
+      "recovery_shape": "V_moderate"
+    },
+    "source_event_id": "sars_2003",
+    "category": "pandemic",
+    "severity": 0.4
+  },
+  {
+    "label": "H1N1 / Swine Flu Outbreak",
+    "tags": [
+      "pandemic",
+      "pandemic_fear",
+      "travel_demand_collapse"
+    ],
+    "regime_markers": {
+      "pandemic_fear": true,
+      "travel_demand_collapse": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "pharma",
+        "defensive healthcare"
+      ],
+      "losers": [
+        "airlines",
+        "tourism"
+      ],
+      "intraday_pattern": "fast_healthcare_rotation",
+      "optimal_day_trade": "Buy healthcare and avoid overholding travel shorts once containment improves.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "h1n1_2009",
+    "category": "pandemic",
+    "severity": 0.3
+  },
+  {
+    "label": "COVID-19 Pandemic Crash",
+    "tags": [
+      "all_correlations_to_1",
+      "circuit_breakers",
+      "fed_emergency",
+      "pandemic",
+      "vix_above"
+    ],
+    "regime_markers": {
+      "vix_above": 50,
+      "circuit_breakers": true,
+      "all_correlations_to_1": true,
+      "fed_emergency": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "WFH tech",
+        "pharma",
+        "gold",
+        "treasuries",
+        "volatility"
+      ],
+      "losers": [
+        "airlines",
+        "cruise",
+        "oil",
+        "REITs",
+        "banks"
+      ],
+      "intraday_pattern": "circuit_breakers_extreme_vol",
+      "optimal_day_trade": "Short travel early, own volatility, and buy quality tech after capitulation.",
+      "recovery_shape": "V_sharp_tech_led"
+    },
+    "source_event_id": "covid_crash_2020",
+    "category": "pandemic",
+    "severity": 1.0
+  },
+  {
+    "label": "Dot-Com Bubble Burst",
+    "tags": [
+      "financial_crisis",
+      "ipo_mania",
+      "tech_dominance",
+      "valuation_extreme"
+    ],
+    "regime_markers": {
+      "valuation_extreme": true,
+      "tech_dominance": true,
+      "ipo_mania": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "value",
+        "gold",
+        "treasuries",
+        "short tech"
+      ],
+      "losers": [
+        "tech",
+        "telecom",
+        "unprofitable IPOs"
+      ],
+      "intraday_pattern": "grinding_selling_dead_cat_bounces",
+      "optimal_day_trade": "Short weak tech rallies and favor value until valuations reset.",
+      "recovery_shape": "L_extended"
+    },
+    "source_event_id": "dotcom_crash_2000",
+    "category": "financial_crisis",
+    "severity": 0.9
+  },
+  {
+    "label": "Global Financial Crisis / Lehman Brothers",
+    "tags": [
+      "credit_spreads_blow_out",
+      "fed_emergency",
+      "financial_crisis",
+      "interbank_freeze",
+      "vix_above"
+    ],
+    "regime_markers": {
+      "credit_spreads_blow_out": true,
+      "interbank_freeze": true,
+      "vix_above": 50,
+      "fed_emergency": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "treasuries",
+        "gold",
+        "volatility",
+        "short financials"
+      ],
+      "losers": [
+        "banks",
+        "real estate",
+        "commodities",
+        "emerging markets"
+      ],
+      "intraday_pattern": "extreme_gaps_both_directions",
+      "optimal_day_trade": "Short financial rallies until policy bazooka, then buy quality at capitulation.",
+      "recovery_shape": "L_then_slow_grind"
+    },
+    "source_event_id": "gfc_2008",
+    "category": "financial_crisis",
+    "severity": 1.0
+  },
+  {
+    "label": "Flash Crash",
+    "tags": [
+      "financial_crisis",
+      "no_fundamental_trigger",
+      "sudden_liquidity_vacuum"
+    ],
+    "regime_markers": {
+      "sudden_liquidity_vacuum": true,
+      "no_fundamental_trigger": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "panic buyers",
+        "volatility holders"
+      ],
+      "losers": [
+        "stop-loss traders",
+        "thin-liquidity market makers"
+      ],
+      "intraday_pattern": "vertical_drop_intraday_full_recovery",
+      "optimal_day_trade": "Use resting limit orders below market and never force market orders into liquidity vacuums.",
+      "recovery_shape": "V_intraday"
+    },
+    "source_event_id": "flash_crash_2010",
+    "category": "financial_crisis",
+    "severity": 0.7
+  },
+  {
+    "label": "European Sovereign Debt Crisis",
+    "tags": [
+      "bank_run_risk",
+      "ecb_intervention_expected",
+      "financial_crisis",
+      "sovereign_cds_blow_out"
+    ],
+    "regime_markers": {
+      "sovereign_cds_blow_out": true,
+      "bank_run_risk": true,
+      "ecb_intervention_expected": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "gold",
+        "USD",
+        "treasuries",
+        "short European banks"
+      ],
+      "losers": [
+        "European banks",
+        "euro",
+        "periphery debt"
+      ],
+      "intraday_pattern": "ecb_headline_reversals",
+      "optimal_day_trade": "Short European banks into contagion scares and prepare for central-bank reversal rallies.",
+      "recovery_shape": "L_then_policy_driven_V"
+    },
+    "source_event_id": "euro_crisis_2011",
+    "category": "financial_crisis",
+    "severity": 0.8
+  },
+  {
+    "label": "China Yuan Devaluation Shock",
+    "tags": [
+      "china_growth_fear",
+      "currency_devaluation",
+      "financial_crisis",
+      "vol_spike"
+    ],
+    "regime_markers": {
+      "china_growth_fear": true,
+      "currency_devaluation": true,
+      "vol_spike": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USD",
+        "treasuries",
+        "gold"
+      ],
+      "losers": [
+        "commodities",
+        "EM",
+        "industrials"
+      ],
+      "intraday_pattern": "global_gap_down_then_partial_recovery",
+      "optimal_day_trade": "Short EM and cyclicals while owning defensive duration and gold.",
+      "recovery_shape": "V_with_aftershocks"
+    },
+    "source_event_id": "china_devaluation_2015",
+    "category": "financial_crisis",
+    "severity": 0.55
+  },
+  {
+    "label": "Swiss Franc Unpeg",
+    "tags": [
+      "broker_contagion",
+      "currency_regime_break",
+      "financial_crisis"
+    ],
+    "regime_markers": {
+      "currency_regime_break": true,
+      "broker_contagion": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "CHF longs",
+        "defensive FX brokers"
+      ],
+      "losers": [
+        "levered FX brokers",
+        "Swiss exporters"
+      ],
+      "intraday_pattern": "fx_gap_then_repricing",
+      "optimal_day_trade": "Extreme FX dislocations favor fast de-risking and avoiding leverage.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "swiss_franc_unpeg_2015",
+    "category": "financial_crisis",
+    "severity": 0.45
+  },
+  {
+    "label": "Volmageddon / XIV Collapse",
+    "tags": [
+      "financial_crisis",
+      "short_vol_crowded",
+      "vol_spike_extreme"
+    ],
+    "regime_markers": {
+      "short_vol_crowded": true,
+      "vol_spike_extreme": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "long volatility",
+        "mean-reversion buyers after close"
+      ],
+      "losers": [
+        "short-vol ETPs",
+        "momentum longs"
+      ],
+      "intraday_pattern": "one_day_volatility_explosion",
+      "optimal_day_trade": "Own convexity when short-vol regimes are crowded and buy panic after vol products implode.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "volmageddon_2018",
+    "category": "financial_crisis",
+    "severity": 0.55
+  },
+  {
+    "label": "US Repo Market Funding Spike",
+    "tags": [
+      "financial_crisis",
+      "funding_stress",
+      "money_market_dislocation"
+    ],
+    "regime_markers": {
+      "funding_stress": true,
+      "money_market_dislocation": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "front-end rate trades",
+        "cash-rich banks"
+      ],
+      "losers": [
+        "levered fixed-income funds"
+      ],
+      "intraday_pattern": "rates_dislocation_then_policy_fix",
+      "optimal_day_trade": "Fade the funding panic once the Fed injects liquidity.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "repo_spike_2019",
+    "category": "financial_crisis",
+    "severity": 0.35
+  },
+  {
+    "label": "SVB / Regional Banking Crisis",
+    "tags": [
+      "bank_run_risk",
+      "financial_crisis",
+      "flight_to_quality",
+      "rate_inversion_deep"
+    ],
+    "regime_markers": {
+      "bank_run_risk": true,
+      "rate_inversion_deep": true,
+      "flight_to_quality": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "gold",
+        "treasuries",
+        "mega-cap tech",
+        "short regionals"
+      ],
+      "losers": [
+        "regional banks",
+        "commercial real estate",
+        "crypto"
+      ],
+      "intraday_pattern": "gap_down_banks_rotation_to_quality",
+      "optimal_day_trade": "Short regional banks while buying quality duration and mega-cap safety.",
+      "recovery_shape": "sector_bifurcation"
+    },
+    "source_event_id": "svb_banking_2023",
+    "category": "financial_crisis",
+    "severity": 0.6
+  },
+  {
+    "label": "Japanese Yen Carry Trade Unwind",
+    "tags": [
+      "boj_rate_change",
+      "carry_trade_crowded",
+      "financial_crisis",
+      "vix_spike_extreme"
+    ],
+    "regime_markers": {
+      "boj_rate_change": true,
+      "carry_trade_crowded": true,
+      "vix_spike_extreme": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "JPY",
+        "volatility",
+        "panic buyers after spike"
+      ],
+      "losers": [
+        "carry trades",
+        "Japan equities",
+        "global beta"
+      ],
+      "intraday_pattern": "global_synchronized_selloff_then_reversal",
+      "optimal_day_trade": "Buy the volatility spike after forced carry unwinds blow out positioning.",
+      "recovery_shape": "V_sharp"
+    },
+    "source_event_id": "yen_carry_unwind_2024",
+    "category": "financial_crisis",
+    "severity": 0.6
+  },
+  {
+    "label": "China Property Stress / Evergrande",
+    "tags": [
+      "china_growth_fear",
+      "financial_crisis",
+      "property_bust"
+    ],
+    "regime_markers": {
+      "property_bust": true,
+      "china_growth_fear": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USD",
+        "defensive growth",
+        "gold"
+      ],
+      "losers": [
+        "China property",
+        "industrial metals",
+        "EM"
+      ],
+      "intraday_pattern": "contagion_fear_then_policy_support",
+      "optimal_day_trade": "Own defensive assets until China policy support becomes explicit.",
+      "recovery_shape": "V_with_policy_support"
+    },
+    "source_event_id": "evergrande_2021",
+    "category": "financial_crisis",
+    "severity": 0.45
+  },
+  {
+    "label": "Luna/Terra Stablecoin Collapse",
+    "tags": [
+      "crypto_contagion",
+      "financial_crisis",
+      "stablecoin_depeg"
+    ],
+    "regime_markers": {
+      "crypto_contagion": true,
+      "stablecoin_depeg": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "short crypto",
+        "USD stablecoins"
+      ],
+      "losers": [
+        "crypto",
+        "crypto-exposed equities"
+      ],
+      "intraday_pattern": "crypto_leads_equities_follow",
+      "optimal_day_trade": "Short crypto-exposed equities when digital-asset support breaks.",
+      "recovery_shape": "L_for_crypto"
+    },
+    "source_event_id": "luna_terra_crash_2022",
+    "category": "financial_crisis",
+    "severity": 0.5
+  },
+  {
+    "label": "FTX Exchange Collapse",
+    "tags": [
+      "counterparty_risk",
+      "exchange_failure",
+      "financial_crisis"
+    ],
+    "regime_markers": {
+      "exchange_failure": true,
+      "counterparty_risk": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "short crypto-exposed stocks",
+        "gold"
+      ],
+      "losers": [
+        "crypto exchanges",
+        "high-beta crypto proxies"
+      ],
+      "intraday_pattern": "crypto_crash_limited_equity_contagion",
+      "optimal_day_trade": "Short COIN and other crypto-beta names on exchange solvency breaks.",
+      "recovery_shape": "L_then_slow_rebuild"
+    },
+    "source_event_id": "ftx_collapse_2022",
+    "category": "financial_crisis",
+    "severity": 0.5
+  },
+  {
+    "label": "Saudi-Russia Oil Price War",
+    "tags": [
+      "demand_collapse_plus_supply_flood",
+      "opec_breakdown",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "opec_breakdown": true,
+      "demand_collapse_plus_supply_flood": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "airlines",
+        "short oil",
+        "contango trades"
+      ],
+      "losers": [
+        "oil producers",
+        "shale",
+        "oil services"
+      ],
+      "intraday_pattern": "limit_down_oil_futures_contango_extreme",
+      "optimal_day_trade": "Short front-month oil and buy capitulation only after forced liquidation exhausts.",
+      "recovery_shape": "V_delayed"
+    },
+    "source_event_id": "oil_price_war_2020",
+    "category": "supply_chain",
+    "severity": 0.9
+  },
+  {
+    "label": "Suez Canal Blockage (Ever Given)",
+    "tags": [
+      "chokepoint_blockage",
+      "supply_chain",
+      "supply_chain_fragility"
+    ],
+    "regime_markers": {
+      "chokepoint_blockage": true,
+      "supply_chain_fragility": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "shipping",
+        "oil"
+      ],
+      "losers": [
+        "European importers"
+      ],
+      "intraday_pattern": "mild_shipping_spike_quick_resolution",
+      "optimal_day_trade": "Long shipping and oil immediately, then exit on reopening headlines.",
+      "recovery_shape": "V_immediate"
+    },
+    "source_event_id": "suez_blockage_2021",
+    "category": "supply_chain",
+    "severity": 0.3
+  },
+  {
+    "label": "Global Supply Chain Crisis (Post-COVID)",
+    "tags": [
+      "chip_shortage",
+      "freight_rates_spike",
+      "port_congestion",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "freight_rates_spike": true,
+      "chip_shortage": true,
+      "port_congestion": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "shipping",
+        "commodities",
+        "energy"
+      ],
+      "losers": [
+        "auto manufacturers",
+        "margin-sensitive retailers"
+      ],
+      "intraday_pattern": "sector_rotation_shipping_commodities_lead",
+      "optimal_day_trade": "Long shipping and inflation beneficiaries while shorting shortage-hit manufacturers.",
+      "recovery_shape": "grinding_normalization"
+    },
+    "source_event_id": "global_supply_chain_2021",
+    "category": "supply_chain",
+    "severity": 0.7
+  },
+  {
+    "label": "Global Semiconductor Shortage",
+    "tags": [
+      "auto_production_cuts",
+      "chip_lead_times_elevated",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "chip_lead_times_elevated": true,
+      "auto_production_cuts": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "semiconductor equipment",
+        "leading chip makers"
+      ],
+      "losers": [
+        "autos",
+        "consumer electronics assemblers"
+      ],
+      "intraday_pattern": "sector_specific_grinding",
+      "optimal_day_trade": "Own the equipment makers rather than the constrained downstream users.",
+      "recovery_shape": "grinding_multi_year"
+    },
+    "source_event_id": "semiconductor_shortage_2021",
+    "category": "supply_chain",
+    "severity": 0.6
+  },
+  {
+    "label": "Ukraine Grain and Fertilizer Shock",
+    "tags": [
+      "fertilizer_disruption",
+      "food_supply_shock",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "food_supply_shock": true,
+      "fertilizer_disruption": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "wheat",
+        "fertilizer",
+        "ag exporters"
+      ],
+      "losers": [
+        "food manufacturers",
+        "import-dependent EM"
+      ],
+      "intraday_pattern": "commodities_gap_then_trend",
+      "optimal_day_trade": "Long ag commodities and fertilizer while avoiding downstream margin compression.",
+      "recovery_shape": "L_with_periodic_relief"
+    },
+    "source_event_id": "ukraine_grain_shock_2022",
+    "category": "supply_chain",
+    "severity": 0.55
+  },
+  {
+    "label": "Panama Canal Drought Shipping Limits",
+    "tags": [
+      "chokepoint_risk",
+      "climate_shock",
+      "shipping_disruption",
+      "supply_chain"
+    ],
+    "regime_markers": {
+      "shipping_disruption": true,
+      "climate_shock": true,
+      "chokepoint_risk": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "shipping",
+        "rail alternatives",
+        "logistics"
+      ],
+      "losers": [
+        "bulk importers",
+        "consumer cyclicals"
+      ],
+      "intraday_pattern": "slow_logistics_repricing",
+      "optimal_day_trade": "Long freight beneficiaries when canal throughput constraints worsen.",
+      "recovery_shape": "grinding_with_relief_rallies"
+    },
+    "source_event_id": "panama_drought_2023",
+    "category": "supply_chain",
+    "severity": 0.4
+  },
+  {
+    "label": "US-China Trade War",
+    "tags": [
+      "policy",
+      "tariff_escalation",
+      "trade_uncertainty_index_high",
+      "tweet_volatility"
+    ],
+    "regime_markers": {
+      "tariff_escalation": true,
+      "trade_uncertainty_index_high": true,
+      "tweet_volatility": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "domestic-focused names",
+        "treasuries",
+        "gold"
+      ],
+      "losers": [
+        "China-exposed tech",
+        "industrials",
+        "agriculture",
+        "EM"
+      ],
+      "intraday_pattern": "tweet_driven_whipsaw",
+      "optimal_day_trade": "Fade overextended tariff headline moves and stay small around policy tweets.",
+      "recovery_shape": "grinding_with_tweet_reversals"
+    },
+    "source_event_id": "us_china_trade_war_2018",
+    "category": "policy",
+    "severity": 0.7
+  },
+  {
+    "label": "Fed Taper Tantrum",
+    "tags": [
+      "em_capital_flight",
+      "fed_policy_shift",
+      "policy",
+      "yield_spike"
+    ],
+    "regime_markers": {
+      "fed_policy_shift": true,
+      "yield_spike": true,
+      "em_capital_flight": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USD",
+        "short bonds",
+        "domestic equities"
+      ],
+      "losers": [
+        "EM",
+        "gold",
+        "long-duration bonds"
+      ],
+      "intraday_pattern": "bond_selloff_led_equity_weakness",
+      "optimal_day_trade": "Short EM, gold, and long-duration bonds on hawkish Fed surprises.",
+      "recovery_shape": "V_moderate"
+    },
+    "source_event_id": "fed_taper_tantrum_2013",
+    "category": "policy",
+    "severity": 0.5
+  },
+  {
+    "label": "Fed Aggressive Rate Hike Cycle",
+    "tags": [
+      "fed_hiking_fast",
+      "inflation_above_5pct",
+      "policy",
+      "yield_curve_inverting"
+    ],
+    "regime_markers": {
+      "inflation_above_5pct": true,
+      "fed_hiking_fast": true,
+      "yield_curve_inverting": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USD",
+        "energy",
+        "short growth tech",
+        "short bonds"
+      ],
+      "losers": [
+        "growth tech",
+        "bonds",
+        "crypto",
+        "real estate"
+      ],
+      "intraday_pattern": "CPI_and_FOMC_days_dominate",
+      "optimal_day_trade": "Focus risk on CPI and FOMC windows; other sessions are mostly noise.",
+      "recovery_shape": "grinding_pivot_driven"
+    },
+    "source_event_id": "fed_rate_hikes_2022",
+    "category": "policy",
+    "severity": 0.8
+  },
+  {
+    "label": "Brexit Referendum Shock",
+    "tags": [
+      "european_policy_risk",
+      "policy",
+      "referendum_shock"
+    ],
+    "regime_markers": {
+      "referendum_shock": true,
+      "european_policy_risk": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USD",
+        "gold",
+        "defensive US equities"
+      ],
+      "losers": [
+        "GBP",
+        "European banks",
+        "UK domestic names"
+      ],
+      "intraday_pattern": "overnight_gap_and_relief",
+      "optimal_day_trade": "Long USD and gold while shorting UK financial exposure into the vote shock.",
+      "recovery_shape": "V_moderate"
+    },
+    "source_event_id": "brexit_vote_2016",
+    "category": "policy",
+    "severity": 0.6
+  },
+  {
+    "label": "Trump Tariff Escalation 2025-2026",
+    "tags": [
+      "policy",
+      "retaliation_active",
+      "supply_chain_reshoring",
+      "tariff_rate_above_20pct"
+    ],
+    "regime_markers": {
+      "tariff_rate_above_20pct": true,
+      "retaliation_active": true,
+      "supply_chain_reshoring": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "gold",
+        "select domestic small caps",
+        "defense",
+        "volatility"
+      ],
+      "losers": [
+        "China-exposed tech",
+        "importers",
+        "EM"
+      ],
+      "intraday_pattern": "gap_moves_on_tariff_headlines",
+      "optimal_day_trade": "Long gold on escalation and fade the first extreme headline move after the initial day.",
+      "recovery_shape": "unknown_ongoing"
+    },
+    "source_event_id": "trump_tariffs_2025",
+    "category": "policy",
+    "severity": 0.8
+  },
+  {
+    "label": "Colonial Pipeline Ransomware Attack",
+    "tags": [
+      "cyber",
+      "infrastructure_attack",
+      "ransomware"
+    ],
+    "regime_markers": {
+      "infrastructure_attack": true,
+      "ransomware": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "cybersecurity",
+        "refiners"
+      ],
+      "losers": [
+        "gas-dependent transport"
+      ],
+      "intraday_pattern": "cybersecurity_stocks_gap_up",
+      "optimal_day_trade": "Buy cybersecurity baskets on critical infrastructure attacks.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "colonial_pipeline_2021",
+    "category": "cyber",
+    "severity": 0.4
+  },
+  {
+    "label": "NotPetya Global Cyberattack",
+    "tags": [
+      "cyber",
+      "infrastructure_attack",
+      "supply_chain_stress"
+    ],
+    "regime_markers": {
+      "infrastructure_attack": true,
+      "supply_chain_stress": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "cybersecurity",
+        "disaster recovery vendors"
+      ],
+      "losers": [
+        "shipping firms",
+        "global logistics"
+      ],
+      "intraday_pattern": "cybersecurity_bid_logistics_hit",
+      "optimal_day_trade": "Long cybersecurity and avoid directly impacted logistics names.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "notpetya_2017",
+    "category": "cyber",
+    "severity": 0.35
+  },
+  {
+    "label": "SolarWinds Supply-Chain Hack",
+    "tags": [
+      "cyber",
+      "cybersecurity_spend_shock",
+      "supply_chain_attack"
+    ],
+    "regime_markers": {
+      "supply_chain_attack": true,
+      "cybersecurity_spend_shock": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "cybersecurity",
+        "identity management"
+      ],
+      "losers": [
+        "federal IT vendors under scrutiny"
+      ],
+      "intraday_pattern": "slow_cyber_repricing",
+      "optimal_day_trade": "Buy cybersecurity software after major software supply-chain compromises.",
+      "recovery_shape": "grinding"
+    },
+    "source_event_id": "solarwinds_2020",
+    "category": "cyber",
+    "severity": 0.3
+  },
+  {
+    "label": "CrowdStrike Global IT Outage",
+    "tags": [
+      "cyber",
+      "operational_it_failure",
+      "transport_disruption"
+    ],
+    "regime_markers": {
+      "operational_it_failure": true,
+      "transport_disruption": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "resiliency software",
+        "incident response firms"
+      ],
+      "losers": [
+        "airlines",
+        "affected software providers"
+      ],
+      "intraday_pattern": "operational_outage_gap_then_recovery",
+      "optimal_day_trade": "Short directly affected names early and rotate into recovery/redundancy beneficiaries.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "crowdstrike_outage_2024",
+    "category": "cyber",
+    "severity": 0.35
+  },
+  {
+    "label": "Hurricane Katrina",
+    "tags": [
+      "climate",
+      "energy_supply_disruption",
+      "weather_extreme"
+    ],
+    "regime_markers": {
+      "weather_extreme": true,
+      "energy_supply_disruption": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "energy",
+        "reconstruction",
+        "building materials"
+      ],
+      "losers": [
+        "insurance",
+        "gulf transport",
+        "regional utilities"
+      ],
+      "intraday_pattern": "energy_spike_then_rebuild",
+      "optimal_day_trade": "Long energy and reconstruction suppliers while shorting exposed insurers.",
+      "recovery_shape": "L_then_rebuild"
+    },
+    "source_event_id": "hurricane_katrina_2005",
+    "category": "climate",
+    "severity": 0.65
+  },
+  {
+    "label": "Japan Earthquake + Fukushima",
+    "tags": [
+      "climate",
+      "natural_disaster",
+      "nuclear_risk",
+      "supply_chain_japan"
+    ],
+    "regime_markers": {
+      "natural_disaster": true,
+      "nuclear_risk": true,
+      "supply_chain_japan": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "JPY",
+        "gold",
+        "solar"
+      ],
+      "losers": [
+        "Japan equities",
+        "nuclear",
+        "insurance"
+      ],
+      "intraday_pattern": "gap_down_contagion_then_recovery",
+      "optimal_day_trade": "Short nuclear exposure and own renewables plus safe-haven FX.",
+      "recovery_shape": "V_with_sector_rotation"
+    },
+    "source_event_id": "japan_earthquake_2011",
+    "category": "climate",
+    "severity": 0.7
+  },
+  {
+    "label": "Hurricane Harvey / Gulf Refining Shock",
+    "tags": [
+      "climate",
+      "refining_disruption",
+      "weather_extreme"
+    ],
+    "regime_markers": {
+      "weather_extreme": true,
+      "refining_disruption": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "gasoline cracks",
+        "refiners after outage recovery",
+        "reconstruction"
+      ],
+      "losers": [
+        "regional insurers",
+        "chemical producers"
+      ],
+      "intraday_pattern": "refining_spike_then_normalization",
+      "optimal_day_trade": "Trade energy spreads and reconstruction names rather than broad indices.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "hurricane_harvey_2017",
+    "category": "climate",
+    "severity": 0.45
+  },
+  {
+    "label": "Texas Winter Storm / Grid Failure",
+    "tags": [
+      "climate",
+      "energy_supply_disruption",
+      "grid_failure",
+      "weather_extreme"
+    ],
+    "regime_markers": {
+      "weather_extreme": true,
+      "grid_failure": true,
+      "energy_supply_disruption": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "natural gas",
+        "oil",
+        "grid equipment"
+      ],
+      "losers": [
+        "Texas utilities",
+        "insurance"
+      ],
+      "intraday_pattern": "nat_gas_spike_energy_surge",
+      "optimal_day_trade": "Long natural gas and oil on grid stress, exit on thaw forecasts.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "texas_freeze_2021",
+    "category": "climate",
+    "severity": 0.4
+  },
+  {
+    "label": "Maui Wildfires / Insurance Stress",
+    "tags": [
+      "climate",
+      "climate_shock",
+      "insurance_loss_event"
+    ],
+    "regime_markers": {
+      "climate_shock": true,
+      "insurance_loss_event": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "building materials",
+        "disaster recovery"
+      ],
+      "losers": [
+        "insurers",
+        "travel"
+      ],
+      "intraday_pattern": "localized_disaster_rotation",
+      "optimal_day_trade": "Trade insurer weakness against recovery and reconstruction suppliers.",
+      "recovery_shape": "grinding_localized"
+    },
+    "source_event_id": "maui_wildfires_2023",
+    "category": "climate",
+    "severity": 0.25
+  },
+  {
+    "label": "September 11 Terrorist Attacks",
+    "tags": [
+      "existential_shock",
+      "flight_to_safety_extreme",
+      "market_closure",
+      "terrorism"
+    ],
+    "regime_markers": {
+      "market_closure": true,
+      "existential_shock": true,
+      "flight_to_safety_extreme": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "gold",
+        "treasuries"
+      ],
+      "losers": [
+        "airlines",
+        "insurance",
+        "hotels"
+      ],
+      "intraday_pattern": "market_closed_then_gap_down_reopen",
+      "optimal_day_trade": "Buy defense and gold on reopen while shorting travel exposure.",
+      "recovery_shape": "V_moderate"
+    },
+    "source_event_id": "nine_eleven_2001",
+    "category": "terrorism",
+    "severity": 0.9
+  },
+  {
+    "label": "Madrid Train Bombings",
+    "tags": [
+      "flight_to_safety",
+      "terror_shock",
+      "terrorism"
+    ],
+    "regime_markers": {
+      "terror_shock": true,
+      "flight_to_safety": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "gold"
+      ],
+      "losers": [
+        "European airlines",
+        "travel"
+      ],
+      "intraday_pattern": "travel_gap_and_fade",
+      "optimal_day_trade": "Long defense/gold and fade travel names after European terror shocks.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "madrid_bombings_2004",
+    "category": "terrorism",
+    "severity": 0.3
+  },
+  {
+    "label": "London 7/7 Bombings",
+    "tags": [
+      "flight_to_safety",
+      "terror_shock",
+      "terrorism"
+    ],
+    "regime_markers": {
+      "terror_shock": true,
+      "flight_to_safety": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "defense",
+        "gold"
+      ],
+      "losers": [
+        "travel",
+        "insurance"
+      ],
+      "intraday_pattern": "short_shock_fast_fade",
+      "optimal_day_trade": "Trade the immediate safe-haven rotation and avoid overstaying it.",
+      "recovery_shape": "V_quick"
+    },
+    "source_event_id": "london_bombings_2005",
+    "category": "terrorism",
+    "severity": 0.3
+  },
+  {
+    "label": "Strait of Hormuz Blockade (Iran-US War 2026)",
+    "tags": [
+      "defense_momentum",
+      "energy_supply_shock",
+      "hormuz_risk",
+      "iran_naval_activity",
+      "oil_above_100",
+      "tanker_rerouting",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "hormuz_risk": true,
+      "oil_above_100": true,
+      "vix_above": 30,
+      "defense_momentum": true,
+      "energy_supply_shock": true,
+      "iran_naval_activity": true,
+      "tanker_rerouting": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USO",
+        "XLE",
+        "XOP",
+        "GLD",
+        "LMT",
+        "RTX"
+      ],
+      "losers": [
+        "JETS",
+        "EZU",
+        "EEM"
+      ],
+      "intraday_pattern": "gap_up_energy_open_follow_through_then_profit_taking",
+      "optimal_day_trade": "Long USO/XLE/XOP at the open, pair with GLD/LMT, short JETS/EZU, and trade volatility spikes intraday.",
+      "recovery_shape": "event_driven_with_energy_grind"
+    },
+    "source_event_id": "hormuz_blockade_2026",
+    "category": "war",
+    "severity": 0.95
+  },
+  {
+    "label": "Dual Chokepoint: Hormuz + Red Sea (2026)",
+    "tags": [
+      "bab_el_mandeb_risk",
+      "dual_chokepoint",
+      "global_shipping_crisis",
+      "hormuz_risk",
+      "oil_above_120",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "hormuz_risk": true,
+      "bab_el_mandeb_risk": true,
+      "dual_chokepoint": true,
+      "global_shipping_crisis": true,
+      "oil_above_120": true,
+      "vix_above": 40
+    },
+    "asset_impacts": {
+      "winners": [
+        "USO",
+        "XLE",
+        "XOP",
+        "ZIM",
+        "GLD",
+        "UVXY"
+      ],
+      "losers": [
+        "JETS",
+        "EZU",
+        "EEM",
+        "SPY"
+      ],
+      "intraday_pattern": "global_gap_dislocation_then_commodity_momentum",
+      "optimal_day_trade": "Max long energy and shipping, long gold, short Europe, EM, and airlines; keep exposure capped.",
+      "recovery_shape": "policy_driven_relief_then_grind"
+    },
+    "source_event_id": "dual_chokepoint_2026",
+    "category": "war",
+    "severity": 1.0
+  },
+  {
+    "label": "Triple Chokepoint Crisis (2026 - Maximum Scenario)",
+    "tags": [
+      "bab_el_mandeb_risk",
+      "global_energy_crisis",
+      "global_shipping_halt",
+      "hormuz_risk",
+      "inflation_spike",
+      "med_gas_risk",
+      "oil_above_150",
+      "triple_chokepoint",
+      "vix_above",
+      "war"
+    ],
+    "regime_markers": {
+      "hormuz_risk": true,
+      "bab_el_mandeb_risk": true,
+      "med_gas_risk": true,
+      "triple_chokepoint": true,
+      "global_energy_crisis": true,
+      "oil_above_150": true,
+      "vix_above": 50,
+      "global_shipping_halt": true,
+      "inflation_spike": true
+    },
+    "asset_impacts": {
+      "winners": [
+        "USO",
+        "XLE",
+        "UNG",
+        "GLD",
+        "GDX",
+        "UVXY",
+        "LMT",
+        "RTX"
+      ],
+      "losers": [
+        "JETS",
+        "EZU",
+        "EEM",
+        "EIS",
+        "EUFN"
+      ],
+      "intraday_pattern": "capital_preservation_mode_extreme_volatility",
+      "optimal_day_trade": "1% positions only. Long energy, gold, vol, and defense while shorting risk assets. Capital preservation first.",
+      "recovery_shape": "regime_change_multi_month"
+    },
+    "source_event_id": "triple_chokepoint_2026",
+    "category": "war",
+    "severity": 1.0
+  }
+]

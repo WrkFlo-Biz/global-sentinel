@@ -44,6 +44,9 @@ class PerformanceTracker:
         exit_time: str,
         reason: str = "",
         strategy: str = "regime_playbook",
+        metadata: Optional[Dict[str, Any]] = None,
+        order_metadata: Optional[Dict[str, Any]] = None,
+        **extra_fields: Any,
     ):
         """Record a completed (closed) trade."""
         if side == "buy" or side == "long":
@@ -68,6 +71,14 @@ class PerformanceTracker:
             "reason": reason,
             "strategy": strategy,
         }
+
+        if metadata:
+            record["metadata"] = metadata
+        if order_metadata:
+            record["order_metadata"] = order_metadata
+        for key, value in extra_fields.items():
+            if value is not None:
+                record[key] = value
 
         with self.history_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

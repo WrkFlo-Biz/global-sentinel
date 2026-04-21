@@ -1,0 +1,302 @@
+{
+  "timestamp_utc": "2026-03-06T02:36:50.043504+00:00",
+  "fresh": true,
+  "source": "quiver+fmp",
+  "political_alpha_scores": {
+    "VLO": 0.0,
+    "PLTR": 0.1,
+    "CTRA": -0.1,
+    "UAL": 0.1,
+    "RTX": 0.35,
+    "SPY": -0.2,
+    "LHX": 0.15,
+    "BA": 0.1,
+    "COP": -0.05,
+    "GD": -0.3,
+    "NOC": -0.15,
+    "AVAV": 0.5,
+    "CVX": -0.35,
+    "CCJ": -0.2,
+    "LMT": -0.1,
+    "XOM": -0.2,
+    "PANW": 0.2,
+    "EFA": -0.2
+  },
+  "top_whale_trades": [
+    {
+      "politician": "John Hickenlooper",
+      "symbol": "SIRI",
+      "transaction_type": "Sale (Partial)",
+      "amount": "$50,001 - $100,000",
+      "transaction_date": "2026-02-05",
+      "committee": "",
+      "score": -1.4,
+      "chamber": "house"
+    },
+    {
+      "politician": "Scott Scott Franklin",
+      "symbol": "HSY",
+      "transaction_type": "Sale",
+      "amount": "$50,001 - $100,000",
+      "transaction_date": "2026-02-10",
+      "committee": "",
+      "score": -1.4,
+      "chamber": "house"
+    },
+    {
+      "politician": "Lisa Mcclain",
+      "symbol": "BBAI",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-06",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "CRS",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "MPWR",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "C",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "COHR",
+      "transaction_type": "Sale (Full)",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": -1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "APG",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "AMKR",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "GS",
+      "transaction_type": "Sale (Full)",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": -1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "CRDO",
+      "transaction_type": "Sale (Full)",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": -1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "ADBE",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "DELL",
+      "transaction_type": "Sale (Full)",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": -1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "MTZ",
+      "transaction_type": "Sale (Full)",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": -1.05,
+      "chamber": "house"
+    },
+    {
+      "politician": "Markwayne Mullin",
+      "symbol": "FCFS",
+      "transaction_type": "Purchase",
+      "amount": "$15,001 - $50,000",
+      "transaction_date": "2026-02-04",
+      "committee": "",
+      "score": 1.05,
+      "chamber": "house"
+    }
+  ],
+  "committee_signals": [
+    {
+      "committee": "Unknown",
+      "symbol": "MSFT",
+      "trade_count": 25,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "NVDA",
+      "trade_count": 21,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "AAPL",
+      "trade_count": 20,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "GOOGL",
+      "trade_count": 18,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "META",
+      "trade_count": 13,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "AMZN",
+      "trade_count": 13,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "GOOG",
+      "trade_count": 12,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "UNH",
+      "trade_count": 12,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "GS",
+      "trade_count": 10,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "JPM",
+      "trade_count": 10,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "LLY",
+      "trade_count": 10,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "LRCX",
+      "trade_count": 9,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "HD",
+      "trade_count": 9,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "AVGO",
+      "trade_count": 8,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "CVX",
+      "trade_count": 8,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "MU",
+      "trade_count": 7,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "ADBE",
+      "trade_count": 6,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "CRM",
+      "trade_count": 6,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "PG",
+      "trade_count": 6,
+      "influence_weight": 1.0
+    },
+    {
+      "committee": "Unknown",
+      "symbol": "ETN",
+      "trade_count": 6,
+      "influence_weight": 1.0
+    }
+  ],
+  "aggregate_sentiment": "neutral",
+  "total_trades_analyzed": 1036,
+  "tracked_symbols_with_activity": 18
+}

@@ -254,13 +254,29 @@ class ExaSearchBridge:
         packets: List[Dict[str, Any]] = []
         lookback = datetime.now(timezone.utc) - timedelta(hours=6)
 
+        exa_402_count = 0
         for category, config in SEARCH_QUERIES.items():
             try:
                 results = self._search_category(category, config, lookback)
                 packets.extend(results)
             except Exception as e:
+                err_str = str(e)
+                if "402" in err_str or "NO_MORE_CREDITS" in err_str:
+                    exa_402_count += 1
+                    # Fallback to SerpAPI when Exa credits exhausted
+                    try:
+                        fallback = self._serp_fallback(category, config)
+                        if fallback:
+                            packets.extend(fallback)
+                            continue
+                    except Exception:
+                        pass
                 print(f"[ExaSearchBridge] Error in {category}: {e}", file=sys.stderr)
-                packets.append(self._error_packet(category, str(e)))
+                packets.append(self._error_packet(category, err_str))
+
+        if exa_402_count > 0:
+            print(f"[ExaSearchBridge] Exa credits exhausted ({exa_402_count} categories). "
+                  f"SerpAPI fallback used.", file=sys.stderr)
 
         # Save seen hashes and cache
         self._save_seen_hashes()
@@ -328,6 +344,60 @@ class ExaSearchBridge:
                 "rate_regime_shock_candidate": impact_score >= 0.5,
             })
 
+        return packets
+
+    def _serp_fallback(self, category: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Fallback to SerpAPI when Exa credits are exhausted."""
+        import urllib.request
+        import urllib.parse
+        serp_key = os.getenv("SERP_API_KEY", "")
+        if not serp_key:
+            return []
+        query = config.get("query", category.replace("_", " "))
+        params = urllib.parse.urlencode({
+            "q": query,
+            "api_key": serp_key,
+            "engine": "google",
+            "num": config.get("num_results", 5),
+            "tbm": "nws",  # news search
+        })
+        url = f"https://serpapi.com/search.json?{params}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "GlobalSentinel/6.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception:
+            return []
+        packets = []
+        for item in data.get("news_results", data.get("organic_results", []))[:5]:
+            title = item.get("title", "")
+            snippet = item.get("snippet", item.get("description", ""))
+            link = item.get("link", "")
+            content_hash = hashlib.sha256((link + title).encode()).hexdigest()[:16]
+            if content_hash in self.seen_hashes:
+                continue
+            self.seen_hashes[content_hash] = iso_now()
+            combined = (title + " " + snippet).lower()
+            impact_hits = sum(1 for kw in HIGH_IMPACT_KEYWORDS if kw in combined)
+            impact_score = min(impact_hits / 5.0, 1.0)
+            packets.append({
+                "schema_version": "exa_search_event.v1",
+                "event_id": f"serp-{content_hash}",
+                "timestamp_utc": iso_now(),
+                "source": "serp_api_fallback",
+                "source_tier": "tier_2",
+                "category": category,
+                "title": title,
+                "url": link,
+                "text_snippet": snippet[:500],
+                "severity": "high" if impact_score >= 0.5 else "medium" if impact_score >= 0.3 else "low",
+                "impact_score": round(impact_score, 3),
+                "parsing_meta": {
+                    "fallback_source": "serpapi",
+                    "impact_keyword_count": impact_hits,
+                    "category_weight": config.get("weight", 1.0),
+                },
+            })
         return packets
 
     def _error_packet(self, category: str, error: str) -> Dict[str, Any]:

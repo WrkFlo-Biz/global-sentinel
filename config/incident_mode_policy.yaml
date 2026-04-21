@@ -1,0 +1,27 @@
+# Incident Mode Controller — Threshold Policy
+# These thresholds determine when the system transitions to incident mode.
+# All rates are expressed as fractions (0.0 - 1.0).
+
+incident_thresholds:
+  # Stale intent rate: fraction of intents past TTL
+  stale_rate: 0.30
+
+  # Broker rejection rate: fraction of submitted orders rejected
+  rejected_rate: 0.15
+
+  # Router error rate: fraction of routing attempts that errored
+  router_error_rate: 0.10
+
+  # Manual review rate: fraction of orders requiring manual review
+  manual_review_rate: 0.25
+
+# Lag SLA: any critical breach triggers incident regardless of rate
+lag_sla:
+  critical_triggers_incident: true
+
+# Mode transitions
+transitions:
+  # Minimum seconds before flipping back from incident to normal
+  hysteresis_seconds: 300
+  # Number of consecutive clean assessments before clearing incident
+  clear_after_clean_count: 3

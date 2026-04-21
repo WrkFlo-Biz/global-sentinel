@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel Disk Cleanup
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/bin/bash /opt/global-sentinel/scripts/ops/disk_cleanup.sh
+StandardOutput=journal
+StandardError=journal

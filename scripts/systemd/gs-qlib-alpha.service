@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel qlib-alpha
+After=network-online.target
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/research/qlib_alpha_engine.py
+StandardOutput=journal
+StandardError=journal

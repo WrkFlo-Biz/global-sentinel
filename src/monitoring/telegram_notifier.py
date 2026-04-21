@@ -29,6 +29,9 @@ try:
 except ImportError:
     yaml = None
 
+from src.monitoring.notification_window import mute_reason, notifications_muted
+from src.execution.strategy_learning import infer_strategy_family
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -60,6 +63,16 @@ class TelegramNotifier:
         self._hourly_thread: Optional[threading.Thread] = None
         self._running = False
 
+        # Notification buffer for batched hourly digests
+        self._event_buffer: Dict[str, List[Dict[str, Any]]] = {
+            "orders_submitted": [],
+            "orders_filled": [],
+            "positions_closed": [],
+        }
+        self._buffer_lock = threading.Lock()
+        self._seen_events: Dict[str, float] = {}  # key -> timestamp, for dedup
+        self._dedup_window = 3600  # 1 hour dedup window
+
         # Log
         self.log_dir = repo_root / "logs" / "notifications"
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -76,10 +89,29 @@ class TelegramNotifier:
     def _get_chat_id(self, bot_name: str) -> str:
         return self.bot_chat_ids.get(bot_name, self.default_chat_id)
 
-    def send_message(self, text: str, bot_name: str = "mo2darkbot", parse_mode: str = ""):
-        """Send a message via Telegram Bot API."""
+    def send_message(
+        self,
+        text: str,
+        bot_name: str = "mo2darkbot",
+        parse_mode: str = "",
+        chat_id: str = "",
+        message_thread_id: int | None = None,
+    ):
+        """Send a message via Telegram Bot API.
+
+        Args:
+            chat_id: Override the default chat_id for this bot.
+            message_thread_id: Telegram forum topic ID (for supergroups with topics).
+        """
+        if notifications_muted():
+            self._log("send_suppressed", {
+                "bot": bot_name,
+                "reason": mute_reason(),
+            })
+            return
+
         token = self._get_bot_token(bot_name)
-        chat_id = self._get_chat_id(bot_name)
+        chat_id = chat_id or self._get_chat_id(bot_name)
 
         if not token or not chat_id:
             self._log("send_failed", {"bot": bot_name, "reason": "missing_token_or_chat_id"})
@@ -92,6 +124,8 @@ class TelegramNotifier:
         }
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
 
         try:
             resp = requests.post(url, json=payload, timeout=15)
@@ -109,16 +143,64 @@ class TelegramNotifier:
         order_summary: Dict[str, Any],
         formatted_message: str,
     ):
-        """Send instant notification when new orders are submitted or pending approval."""
-        strategy = order_summary.get("strategy", "day_trade")
+        """Buffer new order notification for hourly digest."""
         bot = order_summary.get("bot", "mo2darkbot")
+        orders = order_summary.get("orders", [])
 
-        self.send_message(formatted_message, bot_name=bot)
-        self._log("order_notification_sent", {
-            "strategy": strategy,
+        with self._buffer_lock:
+            for order in orders:
+                symbol = order.get("symbol", "unknown")
+                side = order.get("side", "buy")
+                strategy = order.get("strategy") or order_summary.get("strategy") or "day_trade"
+                strategy_family = (
+                    order.get("strategy_family")
+                    or order_summary.get("strategy_family")
+                    or infer_strategy_family(
+                        {
+                            "strategy": strategy,
+                            "strategy_style": order.get("strategy_style") or order_summary.get("strategy_style"),
+                            "holding_period": order.get("holding_period") or order_summary.get("holding_period"),
+                        },
+                        default_family="day_trade",
+                    )
+                    or "day_trade"
+                )
+                dedup_key = f"order:{symbol}:{side}:{strategy}"
+
+                now = time.time()
+                if dedup_key in self._seen_events:
+                    if now - self._seen_events[dedup_key] < self._dedup_window:
+                        continue  # Skip duplicate
+                self._seen_events[dedup_key] = now
+
+                self._event_buffer["orders_submitted"].append({
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": order.get("qty", 0),
+                    "strategy": strategy,
+                    "strategy_family": strategy_family,
+                    "underlying_strategy": (
+                        order.get("underlying_strategy") or order_summary.get("underlying_strategy")
+                    ),
+                    "learning_adjusted": bool(
+                        order.get(
+                            "learning_adjusted",
+                            order_summary.get("learning_adjusted", False),
+                        )
+                    ),
+                    "learning_adjustment_detail": (
+                        order.get("learning_adjustment_detail")
+                        or order_summary.get("learning_adjustment_detail")
+                    ),
+                    "bot": bot,
+                    "confidence": order.get("confidence", 0),
+                    "timestamp": iso_now(),
+                })
+
+        self._log("order_notification_buffered", {
+            "strategy": order_summary.get("strategy"),
             "bot": bot,
             "order_count": order_summary.get("order_count", 0),
-            "execution_mode": order_summary.get("execution_mode", "auto"),
         })
 
     def notify_position_update(
@@ -141,18 +223,43 @@ class TelegramNotifier:
         qty: float,
         fill_price: float,
         strategy_name: str,
+        strategy_family: Optional[str] = None,
+        underlying_strategy: Optional[str] = None,
+        learning_adjusted: bool = False,
+        learning_adjustment_detail: Optional[Dict[str, Any]] = None,
     ):
-        """Instant notification when an order is filled."""
+        """Buffer order fill notification for hourly digest."""
         bot = self.config.get("strategies", {}).get(strategy_name, {}).get("bot", "mo2darkbot")
-        strategy_label = "Day Trade" if strategy_name == "day_trade" else "Medium/Long Hold"
-
-        msg = (
-            f"ORDER FILLED - {strategy_label}\n"
-            f"{symbol} {side.upper()} x{qty}\n"
-            f"Fill Price: ${fill_price:,.2f}\n"
-            f"Time: {iso_now()[:19]}Z"
+        resolved_family = strategy_family or infer_strategy_family(
+            {"strategy": strategy_name},
+            default_family="day_trade",
         )
-        self.send_message(msg, bot_name=bot)
+
+        with self._buffer_lock:
+            dedup_key = f"fill:{symbol}:{side}:{strategy_name}"
+
+            now = time.time()
+            if dedup_key in self._seen_events:
+                if now - self._seen_events[dedup_key] < self._dedup_window:
+                    self._log("fill_notification_deduped", {"symbol": symbol, "strategy": strategy_name})
+                    return
+            self._seen_events[dedup_key] = now
+
+            self._event_buffer["orders_filled"].append({
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "fill_price": fill_price,
+                "strategy": strategy_name,
+                "strategy_family": resolved_family,
+                "underlying_strategy": underlying_strategy,
+                "learning_adjusted": learning_adjusted,
+                "learning_adjustment_detail": learning_adjustment_detail,
+                "bot": bot,
+                "timestamp": iso_now(),
+            })
+
+        self._log("fill_notification_buffered", {"symbol": symbol, "strategy": strategy_name})
 
     def notify_position_closed(
         self,
@@ -161,19 +268,43 @@ class TelegramNotifier:
         pnl_pct: float,
         pnl_usd: float,
         strategy_name: str,
+        strategy_family: Optional[str] = None,
+        underlying_strategy: Optional[str] = None,
+        learning_adjusted: bool = False,
+        learning_adjustment_detail: Optional[Dict[str, Any]] = None,
     ):
-        """Instant notification when a position is closed."""
+        """Buffer position close notification for hourly digest."""
         bot = self.config.get("strategies", {}).get(strategy_name, {}).get("bot", "mo2darkbot")
-        strategy_label = "Day Trade" if strategy_name == "day_trade" else "Medium/Long Hold"
-
-        result_label = "PROFIT" if pnl_usd >= 0 else "LOSS"
-        msg = (
-            f"POSITION CLOSED - {strategy_label}\n"
-            f"{symbol} | {reason.upper()}\n"
-            f"P&L: {pnl_pct:+.2f}% (${pnl_usd:+,.2f}) [{result_label}]\n"
-            f"Time: {iso_now()[:19]}Z"
+        resolved_family = strategy_family or infer_strategy_family(
+            {"strategy": strategy_name},
+            default_family="day_trade",
         )
-        self.send_message(msg, bot_name=bot)
+
+        with self._buffer_lock:
+            dedup_key = f"close:{symbol}:{strategy_name}"
+
+            now = time.time()
+            if dedup_key in self._seen_events:
+                if now - self._seen_events[dedup_key] < self._dedup_window:
+                    self._log("close_notification_deduped", {"symbol": symbol, "strategy": strategy_name})
+                    return
+            self._seen_events[dedup_key] = now
+
+            self._event_buffer["positions_closed"].append({
+                "symbol": symbol,
+                "reason": reason,
+                "pnl_pct": pnl_pct,
+                "pnl_usd": pnl_usd,
+                "strategy": strategy_name,
+                "strategy_family": resolved_family,
+                "underlying_strategy": underlying_strategy,
+                "learning_adjusted": learning_adjusted,
+                "learning_adjustment_detail": learning_adjustment_detail,
+                "bot": bot,
+                "timestamp": iso_now(),
+            })
+
+        self._log("close_notification_buffered", {"symbol": symbol, "strategy": strategy_name})
 
     def start_hourly_updates(self, position_fetcher, strategy_manager):
         """Start background thread for hourly position updates."""
@@ -203,11 +334,91 @@ class TelegramNotifier:
             except Exception as e:
                 self._log("hourly_update_error", {"error": str(e)})
 
+            try:
+                self._send_hourly_digest()
+            except Exception as e:
+                self._log("hourly_digest_error", {"error": str(e)})
+
             # Sleep with interruptibility
             for _ in range(interval):
                 if not self._running:
                     break
                 time.sleep(1)
+
+    def _send_hourly_digest(self):
+        """Send a consolidated hourly digest of all buffered events."""
+        with self._buffer_lock:
+            buffer = {k: list(v) for k, v in self._event_buffer.items()}
+            self._event_buffer = {
+                "orders_submitted": [],
+                "orders_filled": [],
+                "positions_closed": [],
+            }
+            # Clean old dedup entries
+            now = time.time()
+            self._seen_events = {
+                k: v for k, v in self._seen_events.items()
+                if now - v < self._dedup_window
+            }
+
+        # Build digest for each strategy/bot
+        for strategy in ("day_trade", "medium_long"):
+            bot = self.config.get("strategies", {}).get(strategy, {}).get("bot", "mo2darkbot")
+
+            submitted = [e for e in buffer["orders_submitted"] if e.get("strategy_family", e["strategy"]) == strategy]
+            filled = [e for e in buffer["orders_filled"] if e.get("strategy_family", e["strategy"]) == strategy]
+            closed = [e for e in buffer["positions_closed"] if e.get("strategy_family", e["strategy"]) == strategy]
+
+            if not submitted and not filled and not closed:
+                continue
+
+            strategy_label = "Day Trade" if strategy == "day_trade" else "Medium/Long"
+            lines = [f"HOURLY TRADE DIGEST - {strategy_label}"]
+            lines.append("=" * 30)
+            lines.append("Period: Last 60 minutes")
+            lines.append("")
+
+            if submitted:
+                lines.append(f"NEW ORDERS ({len(submitted)}):")
+                for e in submitted:
+                    lines.append(
+                        f"  {e['symbol']} {e['side'].upper()} x{e['qty']}{self._format_strategy_digest_context(e)}"
+                    )
+                lines.append("")
+
+            if filled:
+                lines.append(f"FILLS ({len(filled)}):")
+                total_notional = 0
+                for e in filled:
+                    notional = e.get("fill_price", 0) * e.get("qty", 0)
+                    total_notional += notional
+                    lines.append(
+                        f"  {e['symbol']} {e['side'].upper()} x{e['qty']} @ ${e.get('fill_price', 0):,.2f}"
+                        f"{self._format_strategy_digest_context(e)}"
+                    )
+                lines.append(f"  Total notional: ${total_notional:,.2f}")
+                lines.append("")
+
+            if closed:
+                total_pnl = sum(e.get("pnl_usd", 0) for e in closed)
+                winners = sum(1 for e in closed if e.get("pnl_usd", 0) >= 0)
+                lines.append(f"CLOSED ({len(closed)}) | {winners}W/{len(closed)-winners}L:")
+                for e in closed:
+                    pnl = e.get("pnl_usd", 0)
+                    label = "+" if pnl >= 0 else ""
+                    lines.append(
+                        f"  {e['symbol']} {e['reason']} ${label}{pnl:,.2f}{self._format_strategy_digest_context(e)}"
+                    )
+                lines.append(f"  Net P&L: ${total_pnl:+,.2f}")
+
+            msg = "\n".join(lines)
+            self.send_message(msg, bot_name=bot)
+            self._log("hourly_digest_sent", {
+                "strategy": strategy,
+                "submitted": len(submitted),
+                "filled": len(filled),
+                "closed": len(closed),
+            })
 
     def _send_all_position_updates(self, position_fetcher, strategy_manager):
         """Fetch positions and send updates for each strategy."""
@@ -228,8 +439,7 @@ class TelegramNotifier:
         for pos in all_positions:
             symbol = pos.get("symbol", "")
             entry = order_history.get(symbol, {})
-            holding = entry.get("holding_period", "day")
-            strategy = "medium_long" if holding in ("swing", "medium", "long", "macro") else "day_trade"
+            strategy = infer_strategy_family(entry, default_family="day_trade") or "day_trade"
             strategy_positions[strategy].append(pos)
 
         # Send updates for each strategy
@@ -238,6 +448,9 @@ class TelegramNotifier:
                 continue
             bot = strategy_manager.get_bot_for_strategy(strategy_name)
             msg = strategy_manager.format_telegram_position_update(positions, strategy_name)
+            context_lines = self._position_strategy_context_lines(positions, order_history)
+            if context_lines:
+                msg = "\n".join([msg, "", *context_lines])
             self.notify_position_update(msg, strategy_name, bot)
 
     def _load_order_history(self) -> Dict[str, Dict]:
@@ -258,15 +471,80 @@ class TelegramNotifier:
                         for cand in payload.get("selected_candidates", []):
                             sym = cand.get("symbol")
                             if sym:
+                                metadata = cand.get("metadata") or {}
                                 history[sym] = {
-                                    "strategy_style": cand.get("strategy_style"),
-                                    "holding_period": "day" if payload.get("time_window_name") == "us_regular_hours" else "swing",
+                                    "strategy": cand.get("strategy") or metadata.get("strategy"),
+                                    "strategy_style": cand.get("strategy_style") or metadata.get("strategy_style"),
+                                    "strategy_family": cand.get("strategy_family") or metadata.get("strategy_family"),
+                                    "underlying_strategy": cand.get("underlying_strategy") or metadata.get("underlying_strategy"),
+                                    "learning_adjusted": cand.get("learning_adjusted", metadata.get("learning_adjusted", False)),
+                                    "learning_adjustment_detail": cand.get("learning_adjustment_detail") or metadata.get("learning_adjustment_detail"),
+                                    "holding_period": cand.get("holding_period")
+                                    or metadata.get("holding_period")
+                                    or ("day" if payload.get("time_window_name") == "us_regular_hours" else "swing"),
                                 }
                     except json.JSONDecodeError:
                         continue
         except Exception:
             pass
         return history
+
+    def _position_strategy_context_lines(
+        self,
+        positions: List[Dict[str, Any]],
+        order_history: Dict[str, Dict[str, Any]],
+    ) -> List[str]:
+        lines: List[str] = []
+        for pos in positions:
+            symbol = pos.get("symbol")
+            if not symbol:
+                continue
+            entry = order_history.get(symbol, {})
+            strategy = str(entry.get("strategy") or entry.get("strategy_style") or "").strip()
+            family = str(
+                entry.get("strategy_family")
+                or infer_strategy_family(entry, default_family="day_trade")
+                or ""
+            ).strip()
+            underlying = str(entry.get("underlying_strategy") or "").strip()
+            learning_adjusted = bool(entry.get("learning_adjusted", False))
+            if not any((strategy, family, underlying, learning_adjusted)):
+                continue
+
+            parts = [symbol]
+            if strategy:
+                parts.append(strategy)
+            if family:
+                parts.append(f"[{family}]")
+            if underlying:
+                parts.append(f"underlying={underlying}")
+            if learning_adjusted:
+                parts.append("learning=on")
+            lines.append("  " + " ".join(parts))
+
+        if not lines:
+            return []
+        return ["Strategy Context:", *lines]
+
+    def _format_strategy_digest_context(self, event: Dict[str, Any]) -> str:
+        strategy = str(event.get("strategy") or "").strip()
+        family = str(event.get("strategy_family") or "").strip()
+        underlying = str(event.get("underlying_strategy") or "").strip()
+        learning_adjusted = bool(event.get("learning_adjusted", False))
+
+        if not any((strategy, family, underlying, learning_adjusted)):
+            return ""
+
+        parts = []
+        if strategy:
+            parts.append(strategy)
+        if family:
+            parts.append(f"family={family}")
+        if underlying:
+            parts.append(f"underlying={underlying}")
+        if learning_adjusted:
+            parts.append("learning=on")
+        return f" ({', '.join(parts)})"
 
     def send_manual_mode_summary(self, summary: Dict[str, Any], formatted: str):
         """Send order summary in manual mode and wait for approval via Telegram."""

@@ -1,0 +1,32 @@
+{
+  "schema_version": "stale_intent_sweeper_report.v1",
+  "timestamp_utc": "2026-03-06T13:36:43.803850+00:00",
+  "config": {
+    "stale_after_minutes": 9999.0,
+    "target_statuses": [
+      "submitted",
+      "acknowledged",
+      "open",
+      "partially_filled"
+    ],
+    "mark_manual_review": false,
+    "emit_shadow_cancel_recommendations": true,
+    "use_time_window_ttl_policy": true,
+    "ttl_policy_yaml": "/Users/mosestut/global-sentinel/config/order_ttl_policy.yaml",
+    "package_ids": [
+      "pkg-smoke-reject_xom-b1f87864"
+    ],
+    "router_run_id_filter": null,
+    "intent_id_prefix_filter": null
+  },
+  "summary": {
+    "target_intent_count": 0,
+    "stale_intent_count": 0,
+    "stale_rate": null,
+    "shadow_cancel_recommendation_count": 0,
+    "time_window_bucket_counts": {}
+  },
+  "stale_intents": [],
+  "shadow_cancel_recommendations": [],
+  "operator_summary": "stale sweeper | target=0 stale=0 rate=None threshold_min=9999.0 ttl_policy=on intent_prefix_filter=None"
+}

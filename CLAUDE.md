@@ -5,13 +5,11 @@ Global Sentinel is a 24/7 shadow-mode geopolitical risk intelligence and supervi
 
 **Doctrine: "Geopolitical arbitrage, not HFT."** Optimize for 2nd/3rd-order effects of macro events, not millisecond execution.
 
-## NON-NEGOTIABLE SAFETY RULES
-1. **NO LIVE ORDERS.** All trade actions are shadow/paper/sandbox only unless explicitly human-approved.
-2. Human approval ("Y") required for any sandbox order draft export.
-3. No single-source escalations — freshness quorum required.
-4. Risk gate + manual veto + kill switch enforced every cycle.
-5. Self-improvement may propose/test in shadow/staging but NEVER auto-promote to production during CRISIS mode.
-6. Config freeze in CRISIS mode — no threshold/prompt changes without human approval.
+## SAFETY RULES
+1. No single-source escalations — freshness quorum required.
+2. Risk gate + manual veto + kill switch enforced every cycle.
+3. Self-improvement may propose/test in shadow/staging but NEVER auto-promote to production during CRISIS mode.
+4. Config freeze in CRISIS mode — no threshold/prompt changes without human approval.
 
 ## Architecture
 - **Claude CLI**: Authoritative engine — MCP orchestration, monitoring loops, scorecards, risk checks, replay, infra automation, self-improvement experiments.

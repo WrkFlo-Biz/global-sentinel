@@ -1,0 +1,14 @@
+[Unit]
+Description=Global Sentinel Auto-Research Engine
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/research/auto_researcher.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=3600

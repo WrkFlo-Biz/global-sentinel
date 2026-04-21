@@ -2,17 +2,20 @@
 """
 Global Sentinel V5.1 - Position Manager
 
-Monitors open positions and closes them when:
+Monitors open positions and identifies when they would normally be closed:
 1. Profit target is hit (default 2%)
 2. Stop loss is hit (default 1%)
 3. Trailing stop: if position is up >1.5%, stop moves to breakeven
 4. End-of-day flatten: all day-trade positions closed after 3:45 PM ET
 
+These are approval-required proposals only. Auto-close is hard-blocked in
+code so no position can be closed without manual approval.
+
 Runs every cycle from crisis_monitor._run_cycle().
 
 Safety:
 - Paper/shadow mode only (uses Alpaca paper API)
-- All close actions logged with reason, P&L, hold duration
+- Close signals are logged as proposals unless auto close is explicitly enabled
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from src.execution.strategy_learning import infer_strategy_family
 
 try:
     import yaml
@@ -60,7 +65,7 @@ def safe_float(v: Any, default: float = 0.0) -> float:
 
 
 class PositionManager:
-    """Monitors open positions and closes at profit targets or stop losses."""
+    """Monitors open positions and proposes closes at profit targets or stop losses."""
 
     def __init__(
         self,
@@ -69,12 +74,19 @@ class PositionManager:
         stop_loss_pct: float = 1.0,
         trailing_stop_activation_pct: float = 1.5,
         eod_flatten_time: str = "15:45",  # ET, 24h format
+        auto_close_enabled: bool = False,
     ):
         self.repo_root = repo_root
         self.profit_target_pct = profit_target_pct
         self.stop_loss_pct = stop_loss_pct
         self.trailing_stop_activation_pct = trailing_stop_activation_pct
         self.eod_flatten_time = eod_flatten_time
+        self.live_guardrails = self._load_live_guardrails()
+        # Hard safety policy: this monitor is proposal-only unless the code is
+        # intentionally changed in a future review. Constructor overrides do not
+        # enable automatic closes.
+        self.require_human_approval_for_closures = True
+        self.auto_close_enabled = False
 
         # Alpaca API credentials
         self.base_url = os.getenv(
@@ -92,6 +104,13 @@ class PositionManager:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             })
+
+        # Rate limiter for Alpaca API calls
+        try:
+            from src.utils.rate_limiter import get_limiter
+            self._rate_limiter = get_limiter(self.api_key or "", max_rpm=180) if self.api_key else None
+        except ImportError:
+            self._rate_limiter = None
 
         # Log paths
         self.log_dir = repo_root / "logs" / "execution"
@@ -117,11 +136,14 @@ class PositionManager:
     def run_check(self) -> Dict[str, Any]:
         """
         Main entry point. Check all open positions against targets.
-        Returns summary of actions taken.
+        Returns a summary of proposal signals and any executed actions.
         """
         result = {
             "timestamp_utc": iso_now(),
             "actions_taken": 0,
+            "actions_executed": 0,
+            "proposed_close_count": 0,
+            "manual_approval_required": True,
             "profits_taken": 0,
             "stops_hit": 0,
             "eod_flattened": 0,
@@ -150,38 +172,57 @@ class PositionManager:
         result["portfolio_drawdown_pct"] = portfolio_drawdown.get("drawdown_pct", 0)
         if portfolio_drawdown.get("emergency_liquidate"):
             result["emergency_liquidation"] = True
+            result["emergency_liquidation_blocked"] = not self.auto_close_enabled
             for pos in positions:
                 symbol = pos.get("symbol", "")
                 try:
-                    close_result = self._close_position(
-                        symbol=symbol,
-                        qty=abs(safe_float(pos.get("qty"), 0)),
-                        side=pos.get("side", "long"),
-                        reason="emergency_portfolio_drawdown_25pct",
-                    )
-                    result["close_details"].append({
+                    detail = {
                         "symbol": symbol,
                         "reason": "emergency_portfolio_drawdown_25pct",
                         "unrealized_pl": safe_float(pos.get("unrealized_pl"), 0),
-                        "close_result": close_result,
-                    })
-                    result["actions_taken"] += 1
+                        "unrealized_plpc": safe_float(pos.get("unrealized_plpc"), 0),
+                        "qty": abs(safe_float(pos.get("qty"), 0)),
+                        "status": "pending_manual_approval",
+                        "auto_close_blocked": not self.auto_close_enabled,
+                        "close_result": None,
+                    }
+                    result["close_details"].append(detail)
+                    result["proposed_close_count"] += 1
+                    if self.auto_close_enabled:
+                        close_result = self._close_position(
+                            symbol=symbol,
+                            qty=abs(safe_float(pos.get("qty"), 0)),
+                            side=pos.get("side", "long"),
+                            reason="emergency_portfolio_drawdown_25pct",
+                        )
+                        detail["close_result"] = close_result
+                        detail["status"] = "executed"
+                        result["actions_taken"] += 1
+                        result["actions_executed"] += 1
                 except Exception as e:
                     result["errors"].append(f"Emergency close {symbol}: {e}")
             # Notify
             if self._notifier:
                 try:
-                    self._notifier.send_message(
-                        f"EMERGENCY LIQUIDATION: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
-                        f"exceeded 25% threshold. All positions closed.",
-                        bot_name="mo2darkbot",
-                    )
+                    if self.auto_close_enabled:
+                        self._notifier.send_message(
+                            f"EMERGENCY LIQUIDATION: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
+                            f"exceeded 25% threshold. All positions closed.",
+                            bot_name="mo2darkbot",
+                        )
+                    else:
+                        self._notifier.send_message(
+                            f"EMERGENCY LIQUIDATION REVIEW REQUIRED: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
+                            f"exceeded 25% threshold. Close-out is blocked until manual approval.",
+                            bot_name="mo2darkbot",
+                        )
                 except Exception:
                     pass
             self._log_close({
                 "event": "emergency_portfolio_liquidation",
                 "drawdown_pct": portfolio_drawdown["drawdown_pct"],
-                "positions_closed": len(positions),
+                "positions_affected": len(positions),
+                "auto_close_blocked": not self.auto_close_enabled,
             })
             return result
 
@@ -193,12 +234,6 @@ class PositionManager:
             try:
                 action = self._evaluate_position(pos, order_history)
                 if action:
-                    close_result = self._close_position(
-                        symbol=symbol,
-                        qty=abs(safe_float(pos.get("qty"), 0)),
-                        side=pos.get("side", "long"),
-                        reason=action["reason"],
-                    )
                     strategy_name = action.get("strategy", "day_trade")
                     pnl_pct = safe_float(pos.get("unrealized_plpc"), 0) * 100
                     pnl_usd = safe_float(pos.get("unrealized_pl"), 0)
@@ -212,10 +247,23 @@ class PositionManager:
                         "qty": safe_float(pos.get("qty"), 0),
                         "avg_entry_price": safe_float(pos.get("avg_entry_price"), 0),
                         "current_price": safe_float(pos.get("current_price"), 0),
-                        "close_result": close_result,
+                        "status": "pending_manual_approval" if not self.auto_close_enabled else "executed",
+                        "auto_close_blocked": not self.auto_close_enabled,
                     }
+                    if self.auto_close_enabled:
+                        close_result = self._close_position(
+                            symbol=symbol,
+                            qty=abs(safe_float(pos.get("qty"), 0)),
+                            side=pos.get("side", "long"),
+                            reason=action["reason"],
+                        )
+                        detail["close_result"] = close_result
+                        result["actions_taken"] += 1
+                        result["actions_executed"] += 1
+                    else:
+                        detail["close_result"] = None
+                        result["proposed_close_count"] += 1
                     result["close_details"].append(detail)
-                    result["actions_taken"] += 1
 
                     if action["reason"] == "take_profit":
                         result["profits_taken"] += 1
@@ -229,20 +277,55 @@ class PositionManager:
                     # Send instant Telegram notification
                     if self._notifier:
                         try:
-                            self._notifier.notify_position_closed(
-                                symbol=symbol,
-                                reason=action["reason"],
-                                pnl_pct=pnl_pct,
-                                pnl_usd=pnl_usd,
-                                strategy_name=strategy_name,
-                            )
+                            if self.auto_close_enabled:
+                                self._notifier.notify_position_closed(
+                                    symbol=symbol,
+                                    reason=action["reason"],
+                                    pnl_pct=pnl_pct,
+                                    pnl_usd=pnl_usd,
+                                    strategy_name=strategy_name,
+                                )
+                            else:
+                                self._notifier.send_message(
+                                    (
+                                        f"POSITION CLOSE REVIEW REQUIRED: {symbol} "
+                                        f"would trigger {action['reason']} for {strategy_name}. "
+                                        f"P&L {pnl_pct:+.2f}% / ${pnl_usd:+,.2f}. "
+                                        "No auto-close was sent."
+                                    ),
+                                    bot_name="mo2darkbot",
+                                )
                         except Exception:
                             pass  # Don't let notification failure block position management
 
             except Exception as e:
                 result["errors"].append(f"{symbol}: {e}")
 
+        if result["proposed_close_count"] > 0:
+            result["manual_approval_required"] = True
+        else:
+            result["manual_approval_required"] = False
         return result
+
+    def _rate_limited_request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Make a rate-limited request to Alpaca API with retry on 429."""
+        if self._rate_limiter:
+            self._rate_limiter.acquire(timeout=30.0)
+        resp = self.session.request(method, url, **kwargs)
+        if resp.status_code == 429:
+            # Retry with backoff
+            try:
+                from src.utils.rate_limiter import retry_with_backoff
+                def _retry():
+                    if self._rate_limiter:
+                        self._rate_limiter.acquire(timeout=30.0)
+                    r = self.session.request(method, url, **kwargs)
+                    r.raise_for_status()
+                    return r
+                return retry_with_backoff(_retry, max_retries=3, base_delay=2.0)
+            except Exception:
+                pass
+        return resp
 
     def _check_portfolio_drawdown(self, positions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -251,7 +334,7 @@ class PositionManager:
         """
         try:
             url = f"{self.base_url}/v2/account"
-            resp = self.session.get(url, timeout=10)
+            resp = self._rate_limited_request("GET", url, timeout=10)
             resp.raise_for_status()
             acct = resp.json()
 
@@ -282,7 +365,7 @@ class PositionManager:
     def _get_open_positions(self) -> List[Dict[str, Any]]:
         """Fetch all open positions from Alpaca (raw, with all fields)."""
         url = f"{self.base_url}/v2/positions"
-        resp = self.session.get(url, timeout=15)
+        resp = self._rate_limited_request("GET", url, timeout=15)
         resp.raise_for_status()
         positions = resp.json()
         if not isinstance(positions, list):
@@ -299,24 +382,38 @@ class PositionManager:
         except Exception:
             return {}
 
-    def _get_strategy_params(self, holding_period: str) -> Dict[str, Any]:
+    def _load_live_guardrails(self) -> Dict[str, Any]:
+        """Load live trading guardrails for close approval policy."""
+        guardrails_path = self.repo_root / "config" / "live_trading_guardrails.yaml"
+        if not guardrails_path.exists() or yaml is None:
+            return {}
+        try:
+            return yaml.safe_load(guardrails_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+
+    def _get_strategy_params(
+        self,
+        holding_period: str,
+        strategy_family: Optional[str] = None,
+        strategy_style: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Return strategy parameters based on holding_period.
         If swing/medium/long/macro → medium_long config.
         Otherwise → day_trade config (default).
         """
         strategies = self.strategy_config.get("strategies", {})
-
-        if holding_period in ("swing", "medium", "long", "macro"):
-            cfg = strategies.get("medium_long", {})
-            return {
-                "strategy_name": "medium_long",
-                "profit_target_pct": cfg.get("profit_target_pct", 8.0),
-                "stop_loss_pct": cfg.get("stop_loss_pct", 4.0),
-                "trailing_stop_activation_pct": cfg.get("trailing_stop_activation_pct", 5.0),
-                "eod_flatten": cfg.get("eod_flatten", False),
+        normalized = str(holding_period or "").strip().lower()
+        inferred_family = infer_strategy_family(
+            {
+                "holding_period": normalized,
+                "strategy_family": strategy_family,
+                "strategy_style": strategy_style,
             }
-        elif holding_period == "intraday_scalp":
+        )
+
+        if normalized == "intraday_scalp":
             # Opening range / amateur hour: tight stops, quick profits, always flat EOD
             return {
                 "strategy_name": "intraday_scalp",
@@ -325,7 +422,7 @@ class PositionManager:
                 "trailing_stop_activation_pct": 0.8,
                 "eod_flatten": True,
             }
-        elif holding_period == "intraday_momentum":
+        elif normalized == "intraday_momentum":
             # Power hour: slightly wider stops, ride momentum, flat EOD
             return {
                 "strategy_name": "intraday_momentum",
@@ -334,6 +431,24 @@ class PositionManager:
                 "trailing_stop_activation_pct": 1.5,
                 "eod_flatten": True,
             }
+        elif inferred_family == "medium_long" or normalized in (
+            "swing",
+            "medium",
+            "long",
+            "macro",
+            "weekly",
+            "monthly",
+            "multi_day",
+            "overnight",
+        ):
+            cfg = strategies.get("medium_long", {})
+            return {
+                "strategy_name": "medium_long",
+                "profit_target_pct": cfg.get("profit_target_pct", 8.0),
+                "stop_loss_pct": cfg.get("stop_loss_pct", 4.0),
+                "trailing_stop_activation_pct": cfg.get("trailing_stop_activation_pct", 5.0),
+                "eod_flatten": cfg.get("eod_flatten", False),
+            }
         else:
             cfg = strategies.get("day_trade", {})
             return {
@@ -341,6 +456,7 @@ class PositionManager:
                 "profit_target_pct": cfg.get("profit_target_pct", self.profit_target_pct),
                 "stop_loss_pct": cfg.get("stop_loss_pct", self.stop_loss_pct),
                 "trailing_stop_activation_pct": cfg.get("trailing_stop_activation_pct", self.trailing_stop_activation_pct),
+                "trailing_stop_distance_pct": cfg.get("trailing_stop_distance_pct", 0.4),
                 "eod_flatten": cfg.get("eod_flatten", True),
             }
 
@@ -358,7 +474,11 @@ class PositionManager:
         # Determine strategy from order history
         entry = order_history.get(symbol, {})
         holding_period = entry.get("holding_period", "day")  # default to day (conservative)
-        params = self._get_strategy_params(holding_period)
+        params = self._get_strategy_params(
+            holding_period,
+            strategy_family=entry.get("strategy_family"),
+            strategy_style=entry.get("strategy_style"),
+        )
         strategy_name = params["strategy_name"]
 
         # Get unrealized P&L percentage from Alpaca raw response
@@ -368,14 +488,21 @@ class PositionManager:
         if unrealized_plpc >= params["profit_target_pct"]:
             return {"reason": "take_profit", "strategy": strategy_name}
 
-        # Trailing stop logic: if up > trailing activation, move stop to breakeven (0%)
+        # Trailing stop logic: once activated, trail behind peak P&L
         effective_stop = params["stop_loss_pct"]
-        if unrealized_plpc >= params["trailing_stop_activation_pct"]:
-            # Trailing stop activated: stop at breakeven (0% loss)
-            self._trailing_stops[symbol] = 0.0
-            effective_stop = 0.0
+        trail_distance = params.get("trailing_stop_distance_pct", 0.4)  # Default 40bps trail
+        trailing_activation = params["trailing_stop_activation_pct"]
+
+        if unrealized_plpc >= trailing_activation:
+            # Trail the stop behind current P&L (lock in gains)
+            new_stop = unrealized_plpc - trail_distance
+            prev_stop = self._trailing_stops.get(symbol, 0.0)
+            # Only ratchet up, never down
+            trailing_stop_level = max(new_stop, prev_stop, 0.0)
+            self._trailing_stops[symbol] = trailing_stop_level
+            effective_stop = trailing_stop_level
         elif symbol in self._trailing_stops:
-            # Already activated previously, use breakeven stop
+            # Already activated previously, use last trailing level
             effective_stop = self._trailing_stops[symbol]
 
         # Check stop loss (with trailing adjustment)
@@ -425,7 +552,7 @@ class PositionManager:
         """
         url = f"{self.base_url}/v2/positions/{symbol}"
         try:
-            resp = self.session.delete(url, timeout=15)
+            resp = self._rate_limited_request("DELETE", url, timeout=15)
             if resp.status_code == 204:
                 return {
                     "status": "closed",
@@ -484,7 +611,10 @@ class PositionManager:
                             sym = cand.get("symbol")
                             if sym:
                                 history[sym] = {
+                                    "strategy": cand.get("strategy"),
                                     "strategy_style": cand.get("strategy_style"),
+                                    "strategy_family": cand.get("strategy_family"),
+                                    "underlying_strategy": cand.get("underlying_strategy"),
                                     "direction": cand.get("direction"),
                                     "confidence_score": cand.get("confidence_score"),
                                     "template_key": cand.get("template_key"),
@@ -500,11 +630,14 @@ class PositionManager:
         return history
 
     def _log_close(self, detail: Dict[str, Any]):
-        """Append close action to position_manager.jsonl."""
+        """Append close proposal or executed close to position_manager.jsonl."""
+        event_type = detail.get("event") or (
+            "position_closed" if detail.get("status") == "executed" else "position_close_proposed"
+        )
         row = {
             "schema_version": "position_manager_close.v1",
             "timestamp_utc": iso_now(),
-            "event_type": "position_closed",
+            "event_type": event_type,
             **detail,
         }
         try:
@@ -518,7 +651,7 @@ class PositionManager:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Position Manager - check and close positions")
+    parser = argparse.ArgumentParser(description="Position Manager - check and propose position closes")
     parser.add_argument("--repo-root", default=".", help="Repository root path")
     parser.add_argument("--profit-target", type=float, default=2.0, help="Profit target %% (default 2)")
     parser.add_argument("--stop-loss", type=float, default=1.0, help="Stop loss %% (default 1)")

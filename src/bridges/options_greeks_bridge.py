@@ -35,6 +35,9 @@ except ImportError:
     print("Missing dependency: pyyaml", file=sys.stderr)
     sys.exit(1)
 
+from src.core.structured_logger import get_logger
+from src.core.telemetry import record_metric, start_span
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,14 +62,35 @@ def load_yaml(path: Path) -> Dict[str, Any]:
 
 def safe_get_json(url: str, headers: Optional[Dict[str, str]] = None,
                   timeout: int = 15) -> Any:
-    """HTTP GET returning parsed JSON or None on any error."""
+    """HTTP GET returning parsed JSON or None on any error. Rate-limited for Alpaca calls."""
     try:
         hdrs = {"User-Agent": "GlobalSentinel-OptionsGreeksBridge/1.0"}
         if headers:
             hdrs.update(headers)
-        req = urllib.request.Request(url, headers=hdrs)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+        # Apply rate limiting for Alpaca API calls
+        alpaca_key = hdrs.get("APCA-API-KEY-ID")
+        if alpaca_key:
+            try:
+                from src.utils.rate_limiter import get_limiter
+                get_limiter(alpaca_key, max_rpm=180).acquire(timeout=30.0)
+            except ImportError:
+                pass
+
+        def _do():
+            req = urllib.request.Request(url, headers=hdrs)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+        # Retry with backoff for Alpaca calls
+        if alpaca_key:
+            try:
+                from src.utils.rate_limiter import retry_with_backoff
+                return retry_with_backoff(_do, max_retries=2, base_delay=1.0)
+            except ImportError:
+                pass
+
+        return _do()
     except Exception:
         return None
 
@@ -76,6 +100,12 @@ def safe_get_json(url: str, headers: Optional[Dict[str, str]] = None,
 # ---------------------------------------------------------------------------
 OPTIONS_FOCUS_SYMBOLS = ["SPY", "QQQ", "IWM"]
 VIX_SYMBOL = "VIX"
+DEFAULT_SOURCE_TIER = "tier_3_research"
+DEFAULT_TRUST_WEIGHT = 0.5
+DEFAULT_CACHE_TTL_MINUTES = 15
+
+
+logger = get_logger("options_greeks_bridge")
 
 
 class OptionsGreeksBridge:
@@ -89,6 +119,8 @@ class OptionsGreeksBridge:
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.watchlist = load_yaml(repo_root / "config" / "assets_watchlist.yaml")
+        self.trust_hierarchy = load_yaml(repo_root / "config" / "data_trust_hierarchy.yaml")
+        self.freshness_policy = load_yaml(repo_root / "config" / "freshness_policy.yaml")
 
         # Alpaca credentials
         self.api_key = os.getenv("ALPACA_API_KEY", "")
@@ -101,6 +133,7 @@ class OptionsGreeksBridge:
         # Cache directory
         self.cache_dir = repo_root / "logs" / "bridge_cache" / "options_greeks"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.source_tier, self.trust_weight = self._resolve_trust_metadata()
 
     # ------------------------------------------------------------------
     # Alpaca auth header
@@ -114,6 +147,56 @@ class OptionsGreeksBridge:
 
     def _has_alpaca_creds(self) -> bool:
         return bool(self.api_key and self.secret_key)
+
+    def _resolve_trust_metadata(self) -> tuple[str, float]:
+        tiers = (self.trust_hierarchy or {}).get("tiers") or {}
+        for tier_name, tier_config in tiers.items():
+            sources = {str(item) for item in (tier_config.get("sources") or [])}
+            if {"options_greeks", "options_greeks_bridge"} & sources:
+                return tier_name, safe_float(tier_config.get("weight"), DEFAULT_TRUST_WEIGHT)
+        return DEFAULT_SOURCE_TIER, DEFAULT_TRUST_WEIGHT
+
+    def _cache_ttl_minutes(self) -> int:
+        sources = (self.freshness_policy or {}).get("sources") or {}
+        for source_key in ("options_greeks_bridge", "options_greeks"):
+            policy = sources.get(source_key)
+            if isinstance(policy, dict) and policy.get("freshness_ttl_minutes"):
+                return int(policy["freshness_ttl_minutes"])
+        return DEFAULT_CACHE_TTL_MINUTES
+
+    def _load_latest_cached_result(self) -> Optional[Dict[str, Any]]:
+        cache_files = sorted(self.cache_dir.glob("options_greeks_*.json"), reverse=True)
+        if not cache_files:
+            return None
+
+        max_age_minutes = self._cache_ttl_minutes()
+        now = datetime.now(timezone.utc)
+        for cache_file in cache_files:
+            try:
+                payload = json.loads(cache_file.read_text(encoding="utf-8"))
+                ts_raw = payload.get("timestamp_utc")
+                if not ts_raw:
+                    continue
+                ts = datetime.fromisoformat(str(ts_raw))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age_minutes = (now - ts).total_seconds() / 60.0
+                if age_minutes > max_age_minutes:
+                    continue
+                symbols = payload.get("symbols") or {}
+                if not any(
+                    isinstance(item, dict) and item.get("fresh")
+                    for item in symbols.values()
+                ):
+                    continue
+                payload = dict(payload)
+                payload["cache_used"] = True
+                payload["cache_file"] = str(cache_file)
+                payload["cache_age_minutes"] = round(age_minutes, 2)
+                return payload
+            except Exception:
+                continue
+        return None
 
     # ------------------------------------------------------------------
     # Fetch underlying last price (needed to find ATM strikes)
@@ -363,6 +446,13 @@ class OptionsGreeksBridge:
         )
         result["put_call_signal"] = self._interpret_put_call_ratio(pc_ratio)
 
+        if not self._has_substantive_options_data(result):
+            fallback = self._build_fallback_metrics(symbol, underlying_price, dict(result))
+            fallback["note"] = "alpaca_snapshot_empty_using_vix_heuristic"
+            fallback["source_detail"] = "alpaca_snapshot_empty"
+            fallback["contracts_analyzed"] = len(snapshots)
+            return fallback
+
         return result
 
     def _parse_option_contracts(
@@ -402,6 +492,13 @@ class OptionsGreeksBridge:
         )
         result["put_call_signal"] = self._interpret_put_call_ratio(pc_ratio)
 
+        if not self._has_substantive_options_data(result):
+            fallback = self._build_fallback_metrics(symbol, underlying_price, dict(result))
+            fallback["note"] = "alpaca_contracts_empty_using_vix_heuristic"
+            fallback["source_detail"] = "alpaca_contracts_empty"
+            fallback["contracts_analyzed"] = len(contracts)
+            return fallback
+
         return result
 
     def _build_fallback_metrics(
@@ -414,14 +511,21 @@ class OptionsGreeksBridge:
         """
         vix = self._fetch_vix_price()
 
-        result.update({
-            "source": "fallback_heuristic",
-            "fresh": False,
-            "note": "options_api_unavailable_using_vix_heuristics",
-        })
+        if vix is not None:
+            result.update({
+                "source": "vix_heuristic",
+                "fresh": True,
+                "note": "options_api_unavailable_using_vix_heuristics",
+                "vix_proxy": round(vix, 2),
+            })
+        else:
+            result.update({
+                "source": "fallback_heuristic",
+                "fresh": False,
+                "note": "no_options_or_vix_data_available",
+            })
 
         if vix is not None:
-            result["vix_proxy"] = round(vix, 2)
 
             # Heuristic put/call ratio from VIX
             # Higher VIX => more put buying => higher P/C ratio
@@ -562,6 +666,22 @@ class OptionsGreeksBridge:
             ),
         }
 
+    @staticmethod
+    def _has_substantive_options_data(result: Dict[str, Any]) -> bool:
+        """Treat all-zero option snapshots as degraded rather than meaningful live data."""
+        return any(
+            safe_float(result.get(field), 0.0) > 0.0
+            for field in (
+                "total_call_oi",
+                "total_put_oi",
+                "total_open_interest",
+                "put_call_ratio",
+                "net_gamma_exposure",
+                "net_delta_exposure",
+                "avg_implied_volatility_pct",
+            )
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -578,42 +698,72 @@ class OptionsGreeksBridge:
             "source_priority": "alpaca | fallback_heuristic",
         }
         """
-        target_symbols = symbols or OPTIONS_FOCUS_SYMBOLS
-        symbol_data: Dict[str, Any] = {}
+        with start_span("bridge.fetch.options_greeks", bridge_name="options_greeks_bridge"):
+            target_symbols = symbols or OPTIONS_FOCUS_SYMBOLS
+            symbol_data: Dict[str, Any] = {}
 
-        for sym in target_symbols:
-            symbol_data[sym] = self._analyze_symbol_options(sym)
+            for sym in target_symbols:
+                symbol_data[sym] = self._analyze_symbol_options(sym)
 
-        # VIX term structure
-        vix_term = self._fetch_vix_term_structure()
+            vix_term = self._fetch_vix_term_structure()
+            iv_rank = self._compute_iv_rank()
+            aggregate = self._compute_aggregate_signals(symbol_data, vix_term, iv_rank)
 
-        # IV rank
-        iv_rank = self._compute_iv_rank()
+            sources = {d.get("source", "unknown") for d in symbol_data.values()}
+            if "alpaca_options_snapshot" in sources:
+                primary_source = "alpaca_options_snapshot"
+            elif "alpaca_options_contracts" in sources:
+                primary_source = "alpaca_options_contracts"
+            elif "vix_heuristic" in sources:
+                primary_source = "vix_heuristic"
+            else:
+                primary_source = "fallback_heuristic"
 
-        # Aggregate signals across all symbols
-        aggregate = self._compute_aggregate_signals(symbol_data, vix_term, iv_rank)
+            result = {
+                "timestamp_utc": iso_now(),
+                "source_priority": primary_source,
+                "bridge_name": "options_greeks_bridge",
+                "source_tier": self.source_tier,
+                "trust_weight": self.trust_weight,
+                "symbols": symbol_data,
+                "vix_term_structure": vix_term,
+                "implied_vol_rank": iv_rank,
+                "aggregate_signals": aggregate,
+            }
 
-        # Determine primary source
-        sources = {d.get("source", "unknown") for d in symbol_data.values()}
-        if "alpaca_options_snapshot" in sources:
-            primary_source = "alpaca_options_snapshot"
-        elif "alpaca_options_contracts" in sources:
-            primary_source = "alpaca_options_contracts"
-        else:
-            primary_source = "fallback_heuristic"
+            fresh_symbols = sum(1 for item in symbol_data.values() if item.get("fresh"))
+            if fresh_symbols == 0:
+                cached = self._load_latest_cached_result()
+                if cached is not None:
+                    record_metric("bridge_fetch_success_total", 1, bridge_name="options_greeks_bridge", mode="cache")
+                    record_metric("bridge_packet_throughput_total", 1, bridge_name="options_greeks_bridge", mode="cache")
+                    logger.warning(
+                        "options_greeks_live_unavailable_using_cache",
+                        bridge_name="options_greeks_bridge",
+                        cache_file=cached.get("cache_file"),
+                        cache_age_minutes=cached.get("cache_age_minutes"),
+                    )
+                    return cached
 
-        result = {
-            "timestamp_utc": iso_now(),
-            "source_priority": primary_source,
-            "symbols": symbol_data,
-            "vix_term_structure": vix_term,
-            "implied_vol_rank": iv_rank,
-            "aggregate_signals": aggregate,
-        }
+                record_metric("bridge_fetch_failure_total", 1, bridge_name="options_greeks_bridge", mode="live")
+                logger.warning(
+                    "options_greeks_poll_degraded",
+                    bridge_name="options_greeks_bridge",
+                    primary_source=primary_source,
+                    fresh_symbols=fresh_symbols,
+                )
+            else:
+                record_metric("bridge_fetch_success_total", 1, bridge_name="options_greeks_bridge", mode="live")
+                record_metric("bridge_packet_throughput_total", 1, bridge_name="options_greeks_bridge", mode="live")
+                logger.info(
+                    "bridge_poll_success",
+                    bridge_name="options_greeks_bridge",
+                    primary_source=primary_source,
+                    fresh_symbols=fresh_symbols,
+                )
 
-        # Cache
-        self._cache_results(result)
-        return result
+            self._cache_results(result)
+            return result
 
     def build_snapshot_section(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -621,15 +771,74 @@ class OptionsGreeksBridge:
         for the crisis monitor.
         """
         data = self.poll(symbols)
+        snapshot = self._build_snapshot_from_poll_data(data)
+        if snapshot.get("fresh"):
+            return snapshot
+
+        cached_snapshot = self.load_latest_cached_snapshot()
+        if cached_snapshot and cached_snapshot.get("fresh"):
+            cached_snapshot = dict(cached_snapshot)
+            cached_snapshot["source"] = cached_snapshot.get("source", data.get("source_priority", "cache"))
+            cached_snapshot["source_detail"] = "cached_snapshot_fallback"
+            return cached_snapshot
+
+        return snapshot
+
+    def _build_snapshot_from_poll_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        per_symbol = data["symbols"]
+        aggregate = data["aggregate_signals"]
+        any_fresh = any(
+            s.get("fresh", False) for s in per_symbol.values()
+        )
+        aggregate_gamma = round(
+            sum(safe_float(entry.get("net_gamma_exposure"), 0.0) for entry in per_symbol.values()),
+            2,
+        )
+        avg_iv = [
+            safe_float(entry.get("avg_implied_volatility_pct"), 0.0)
+            for entry in per_symbol.values()
+            if safe_float(entry.get("avg_implied_volatility_pct"), 0.0) > 0
+        ]
         return {
             "timestamp_utc": data["timestamp_utc"],
             "source": data["source_priority"],
+            "primary_source": data["source_priority"],
+            "bridge_name": "options_greeks_bridge",
+            "source_tier": data.get("source_tier", self.source_tier),
+            "trust_weight": data.get("trust_weight", self.trust_weight),
+            "fresh": any_fresh,
             "symbol_count": len(data["symbols"]),
-            "symbols": data["symbols"],
-            "vix_term_structure": data["vix_term_structure"],
+            "symbols": per_symbol,
+            "per_symbol": per_symbol,
+            "put_call_ratio": aggregate.get("avg_put_call_ratio", 0.0),
+            "gamma_squeeze_risk": aggregate.get("max_gamma_squeeze_risk", "unknown"),
+            "aggregate_gamma_exposure": aggregate_gamma,
+            "net_gamma_exposure": aggregate_gamma,
+            "avg_implied_volatility_pct": round(sum(avg_iv) / len(avg_iv), 2) if avg_iv else 0.0,
+            "open_interest": {
+                symbol: int(safe_float(metrics.get("total_open_interest"), 0))
+                for symbol, metrics in per_symbol.items()
+            },
+            "vix_term_structure": (data["vix_term_structure"] or {}).get("structure", "unknown"),
+            "vix_term_structure_detail": data["vix_term_structure"],
             "implied_vol_rank": data["implied_vol_rank"],
-            "aggregate_signals": data["aggregate_signals"],
+            "aggregate_signals": aggregate,
+            "cache_used": bool(data.get("cache_used")),
+            "cache_age_minutes": data.get("cache_age_minutes"),
         }
+
+    def fetch(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Compatibility alias used by some bridge health checks."""
+        return self.build_snapshot_section(symbols=symbols)
+
+    def load_latest_cached_snapshot(self) -> Optional[Dict[str, Any]]:
+        cached = self._load_latest_cached_result()
+        if not cached:
+            return None
+        try:
+            return self._build_snapshot_from_poll_data(cached)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Aggregate signals

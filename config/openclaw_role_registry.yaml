@@ -1,0 +1,58 @@
+schema_version: openclaw_role_registry.v1
+default_backend: openclaw
+roles:
+  coo:
+    title: Chief Operating Officer
+    bot: ops
+    backend: openclaw
+    prompt_path: prompts/cowork-coo.md
+    output_dir: reports/openclaw_ops
+    artifact_prefix: coo_brief
+    every_n_seeds: 45
+    enabled: true
+    telegram_updates: false
+    paper_only: true
+  cio:
+    title: Chief Investment Officer
+    bot: research
+    backend: openclaw
+    prompt_path: prompts/cowork-cio.md
+    output_dir: reports/openclaw_research
+    artifact_prefix: cio_brief
+    every_n_seeds: 45
+    enabled: true
+    telegram_updates: false
+    paper_only: true
+  cfo:
+    title: Chief Financial Officer
+    bot: research
+    backend: openclaw
+    prompt_path: prompts/cowork-cfo.md
+    output_dir: reports/openclaw_research
+    artifact_prefix: cfo_brief
+    every_n_seeds: 45
+    enabled: true
+    telegram_updates: false
+    paper_only: true
+  chief_of_staff:
+    title: Chief of Staff
+    bot: research
+    backend: openclaw
+    prompt_path: prompts/cowork-chief-of-staff.md
+    output_dir: reports/openclaw_research
+    artifact_prefix: chief_of_staff_brief
+    every_n_seeds: 45
+    enabled: true
+    telegram_updates: true
+    paper_only: true
+  volatility_researcher:
+    title: Volatility Researcher
+    bot: research
+    backend: openclaw
+    prompt_path: prompts/cowork-volatility-researcher.md
+    output_dir: reports/openclaw_research
+    artifact_prefix: volatility_research_brief
+    every_n_seeds: 45
+    enabled: true
+    telegram_updates: false
+    paper_only: true
