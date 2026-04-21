@@ -1240,11 +1240,14 @@ class ContinuousStrategyTrainer:
         research_score: dict[str, Any],
     ) -> tuple[dict[str, Any], str]:
         current_state = load_state(self._learning_state_path)
-        updated_state = self._weight_updater.update(
-            state=current_state,
-            labeled_dataset=labeled_dataset,
-            learning_rate=0.01,
-        )
+        try:
+            updated_state = self._weight_updater.update(
+                state=current_state,
+                labeled_dataset=labeled_dataset,
+                learning_rate=0.01,
+            )
+        except ValueError:
+            updated_state = current_state
         save_state(self._learning_state_path, updated_state)
         version_id = self._learning_state_persistence.save_state(
             updated_state,

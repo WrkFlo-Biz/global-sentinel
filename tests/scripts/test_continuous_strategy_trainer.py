@@ -107,7 +107,8 @@ def test_continuous_strategy_trainer_writes_research_artifacts(tmp_path, monkeyp
 
     trainer.run_cycle()
 
-    today = "20260408"
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
     pnl_log = repo_root / "logs" / "training" / f"strategy_pnl_{today}.jsonl"
     cycle_log = repo_root / "logs" / "training" / f"scenario_cycles_{today}.jsonl"
     score_path = repo_root / "reports" / "research" / "research_score_latest.json"
