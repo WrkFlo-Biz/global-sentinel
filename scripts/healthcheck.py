@@ -18,7 +18,7 @@ except ImportError:
     psutil = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", "/tmp/global-sentinel-heartbeat")
+HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", str(PROJECT_ROOT / "logs" / "heartbeat.json"))
 MAX_HEARTBEAT_AGE_SECONDS = 1800  # 30 minutes
 
 
@@ -27,7 +27,12 @@ def check_heartbeat() -> dict:
     if not hb.exists():
         return {"status": "critical", "message": "No heartbeat file found"}
     try:
-        ts = hb.read_text().strip()
+        raw = hb.read_text().strip()
+        try:
+            data = json.loads(raw)
+            ts = data.get("timestamp_utc", raw)
+        except (json.JSONDecodeError, TypeError):
+            ts = raw
         last_beat = datetime.fromisoformat(ts)
         age = (datetime.now(timezone.utc) - last_beat).total_seconds()
         if age > MAX_HEARTBEAT_AGE_SECONDS:
