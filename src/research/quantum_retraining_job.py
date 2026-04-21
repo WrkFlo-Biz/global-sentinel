@@ -309,11 +309,14 @@ class QuantumRetrainingJob:
             "row_count": len(labeled_rows),
             "rows": labeled_rows[-500:],
         }
-        updated_state = updater.update(
-            state=state,
-            labeled_dataset=labeled_dataset,
-            learning_rate=0.01,
-        )
+        try:
+            updated_state = updater.update(
+                state=state,
+                labeled_dataset=labeled_dataset,
+                learning_rate=0.01,
+            )
+        except ValueError:
+            return {"status": "skipped", "reason": "labeled_dataset_failed_validation"}
         save_state(self.learning_state_path, updated_state)
 
         persistence = LearningStatePersistence(
