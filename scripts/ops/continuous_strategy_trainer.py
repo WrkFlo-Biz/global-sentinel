@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import random
 import signal
 import sys
@@ -517,7 +516,6 @@ class KellyCalculator:
             half_kelly = max(0, min(kelly / 2, 0.25))  # Cap at 25%
 
             # Approximate Sharpe from trade data
-            trades_list = []  # Would track individual returns for real Sharpe
             expectancy = (win_rate * avg_win) - (q * avg_loss)
 
             s["win_rate"] = round(win_rate, 4)
@@ -876,11 +874,13 @@ class ContinuousStrategyTrainer:
             "UAL": -0.3, "JETS": -0.3,             # Airlines — bearish on commodity shock
             "SOXL": -0.15, "NVDA": -0.15,          # Tech — mixed
         }
-        composite_signal = (geo * 0.25 + commodity * 0.2 +
-                           (vix / 60.0) * 0.2 +
-                           sc["component_scores"].get("currency_stress", 0) * 0.1 +
-                           sc.get("chokepoint_risk", {}).get("hormuz", 0) * 0.15 +
-                           sc["component_scores"].get("policy_signals", 0) * 0.1)
+        composite_signal = (
+            geo * 0.25 + commodity * 0.2
+            + (vix / 60.0) * 0.2
+            + sc["component_scores"].get("currency_stress", 0) * 0.1
+            + sc.get("chokepoint_risk", {}).get("hormuz", 0) * 0.15
+            + sc["component_scores"].get("policy_signals", 0) * 0.1
+        )
 
         for sym, sensitivity in simons_tickers.items():
             sym_data = mkt.get(sym, {})
