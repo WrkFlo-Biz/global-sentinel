@@ -109,21 +109,24 @@ class CDSSovereignBridge:
 
     def _fetch_fred(self, series_id: str) -> Optional[float]:
         import requests
-        resp = requests.get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params={
-                "series_id": series_id,
-                "api_key": self._fred_key,
-                "file_type": "json",
-                "sort_order": "desc",
-                "limit": 1,
-            },
-            timeout=10,
-        )
-        if resp.status_code == 200:
+        try:
+            resp = requests.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": series_id,
+                    "api_key": self._fred_key,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": 1,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
             obs = resp.json().get("observations", [])
             if obs and obs[0].get("value", ".") != ".":
-                return float(obs[0]["value"]) * 100  # Convert to bps
+                return float(obs[0]["value"]) * 100
+        except requests.RequestException:
+            pass
         return None
 
     @staticmethod

@@ -34,12 +34,12 @@ def detect_tapo_phase():
     latest = {}
     try:
         latest = json.loads((REPO_ROOT / "data/quantum_feed/latest_signal.json").read_text())
-    except: pass
+    except Exception: pass
 
     polymarket = {}
     try:
         polymarket = json.loads((REPO_ROOT / "data/quantum_feed/polymarket_geopolitical.json").read_text())
-    except: pass
+    except Exception: pass
 
     # Key thresholds (from historical TAPO pattern)
     oil_price = latest.get("wti_price", 92)

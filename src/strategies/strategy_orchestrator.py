@@ -42,7 +42,7 @@ def log(msg):
 
 def load_json(path):
     try: return json.loads(Path(path).read_text())
-    except: return {}
+    except Exception: return {}
 
 def save_json(path, data):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ def get_shared_context():
     ctx = {}
     for f in QF.glob("*.json"):
         try: ctx[f.stem] = json.loads(f.read_text())
-        except: pass
+        except Exception: pass
     return ctx
 
 # === 1. STOCKS STRATEGY ===

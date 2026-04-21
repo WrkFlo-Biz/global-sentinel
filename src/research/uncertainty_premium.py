@@ -20,7 +20,7 @@ def iso_now():
 def load_json(path):
     try:
         return json.loads(Path(path).read_text())
-    except:
+    except Exception:
         return {}
 
 def compute_uncertainty_premium():
@@ -73,7 +73,7 @@ def compute_uncertainty_premium():
             uvxy = (data["quotes"]["UVXY"]["bp"] + data["quotes"]["UVXY"]["ap"]) / 2
             # UVXY ~50 corresponds to VIX ~25-27
             vix = uvxy * 0.52  # Rough approximation
-    except:
+    except Exception:
         pass
 
     # === CORE CALCULATION: Uncertainty Premium ===

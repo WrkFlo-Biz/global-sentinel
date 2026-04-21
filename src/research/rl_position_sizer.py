@@ -41,7 +41,7 @@ class TradeSizingEnv(gym.Env):
                     positions = data.get("positions", [])
                     if positions:
                         episodes.append(positions)
-                except:
+                except Exception:
                     continue
         if not episodes:
             # Generate synthetic episodes for initial training
