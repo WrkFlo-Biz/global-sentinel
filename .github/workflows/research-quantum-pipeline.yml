@@ -1,0 +1,100 @@
+name: research-quantum-pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: "Target environment"
+        required: false
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod-shadow
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  research-pipeline:
+    runs-on: ubuntu-latest
+    env:
+      ENV_NAME: ${{ inputs.env_name }}
+      AZ_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      STORAGE_ACCOUNT_NAME: ${{ secrets.STORAGE_ACCOUNT_NAME }}
+      REPORTS_CONTAINER: reports
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZ_SUBSCRIPTION_ID }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml azure-identity azure-storage-blob
+
+      - name: Run research tests
+        run: |
+          PYTHONPATH=. pytest -q \
+            tests/research/test_build_quantum_request.py \
+            tests/research/test_quantum_vs_classical_job.py \
+            tests/research/test_evaluate_trade_outcomes.py \
+            tests/research/test_research_score_writer.py \
+            tests/research/test_attach_research_score_to_snapshot.py
+
+      - name: Run local research pipeline
+        run: |
+          mkdir -p artifacts/incoming reports/research
+          if [ -f artifacts/incoming/request.json ] && [ -f artifacts/incoming/trade_outcomes.json ]; then
+            PYTHONPATH=. python src/research/run_research_score_pipeline.py \
+              --request-json artifacts/incoming/request.json \
+              --trade-outcomes-json artifacts/incoming/trade_outcomes.json \
+              --snapshot-json artifacts/incoming/research_snapshot.json \
+              --quantum-artifact-dir artifacts/quantum \
+              --classical-artifact-dir artifacts/classical \
+              --evaluation-out reports/research/evaluation_latest.json \
+              --research-score-out reports/research/research_score_latest.json \
+              --snapshot-out reports/research/snapshot_with_research_score.json
+          else
+            echo "No staged research inputs found; skipping pipeline execution."
+          fi
+
+      - name: Build summaries
+        run: |
+          PYTHONPATH=. python src/reports/research_quantum_summary.py || true
+          PYTHONPATH=. python src/reports/research_quantum_markdown_summary.py || true
+
+      - name: Upload research artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-quantum-artifacts-${{ inputs.env_name }}
+          path: |
+            artifacts/quantum/
+            artifacts/classical/
+            reports/research/
+          if-no-files-found: warn
+
+      - name: Append markdown summary
+        run: |
+          if [ -f reports/research/research_quantum_summary.md ]; then
+            cat reports/research/research_quantum_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi

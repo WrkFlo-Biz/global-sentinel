@@ -1,0 +1,21 @@
+[Unit]
+Description=Global Sentinel Fama-French Factor Decomposition
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/src/research/factor_decomposition.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-factor-decomp
+NoNewPrivileges=true
+TimeoutStartSec=600
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+{
+  "request_id": "qreq-e2e-test-001-1772893206",
+  "package_id": "e2e-test-001",
+  "solver": "classical_baseline",
+  "success": true,
+  "ranked_solutions": [
+    {
+      "symbol": "XOM",
+      "score": 0.85,
+      "sector": "Energy"
+    },
+    {
+      "symbol": "CVX",
+      "score": 0.78,
+      "sector": "Energy"
+    },
+    {
+      "symbol": "LMT",
+      "score": 0.72,
+      "sector": "Defense"
+    },
+    {
+      "symbol": "GLD",
+      "score": 0.68,
+      "sector": "Commodities"
+    },
+    {
+      "symbol": "TLT",
+      "score": 0.65,
+      "sector": "Bonds"
+    }
+  ],
+  "objective_value": 3.6799999999999997,
+  "feasibility": 1.0,
+  "diagnostics": {
+    "baseline": true,
+    "selection_count": 5,
+    "sector_cap_count": 2
+  },
+  "provenance": {
+    "test": true
+  }
+}

@@ -1,60 +1,115 @@
 # Global Sentinel V6 — Market Calendar
 schema_version: "market_calendar.v1"
 
-# Week of March 9-14, 2026
+# Week of April 20-24, 2026
 week_events:
-  "2026-03-09":
+  "2026-04-19":
     - type: weekend
       note: "Sunday - crypto only"
-  "2026-03-10":
+  "2026-04-20":
     - type: market_open
       time: "09:30 ET"
     - type: data_release
-      name: "Treasury Budget Statement"
-      time: "14:00 ET"
-      impact: medium
-      affected: [TLT, TIP, UUP]
-  "2026-03-11":
-    - type: data_release
-      name: "CPI (Feb)"
+      name: "Chicago Fed National Activity Index"
       time: "08:30 ET"
-      impact: high
-      affected: [TIP, GLD, TLT, SPY]
-      note: "Key inflation data - could move gold and bonds significantly"
-    - type: data_release
-      name: "NFIB Small Business Index"
-      time: "06:00 ET"
       impact: low
-  "2026-03-12":
+  "2026-04-21":
     - type: data_release
-      name: "PPI (Feb)"
-      time: "08:30 ET"
+      name: "Existing Home Sales (Mar)"
+      time: "10:00 ET"
       impact: medium
-      affected: [TIP, MOS, CF]
+      affected: [XHB, ITB, DHI, LEN]
+    - type: data_release
+      name: "Richmond Fed Manufacturing Index"
+      time: "10:00 ET"
+      impact: low
+  "2026-04-22":
+    - type: data_release
+      name: "New Home Sales (Mar)"
+      time: "10:00 ET"
+      impact: medium
+      affected: [XHB, ITB, DHI, LEN]
     - type: data_release
       name: "EIA Petroleum Status"
       time: "10:30 ET"
       impact: high
       affected: [USO, XOP, OXY, MPC, VLO, STNG]
       note: "Key oil inventory data"
-  "2026-03-13":
+  "2026-04-23":
     - type: data_release
       name: "Initial Jobless Claims"
       time: "08:30 ET"
       impact: medium
     - type: data_release
-      name: "Import/Export Prices"
+      name: "Durable Goods Orders (Mar)"
       time: "08:30 ET"
-      impact: low
-  "2026-03-14":
+      impact: high
+      affected: [SPY, XLI, BA, CAT, DE]
+      note: "Key manufacturing indicator"
+  "2026-04-24":
     - type: data_release
-      name: "Michigan Consumer Sentiment (Prelim)"
+      name: "Michigan Consumer Sentiment (Final Apr)"
       time: "10:00 ET"
       impact: medium
       affected: [SPY, XLP]
     - type: options
       name: "Weekly options expiration"
       impact: medium
+
+# Upcoming key dates
+upcoming:
+  - name: "FOMC Meeting Day 1"
+    date: "2026-05-05"
+    impact: high
+    affected: [SPY, QQQ, TLT, GLD, UUP]
+    note: "Federal Reserve policy decision meeting begins"
+  - name: "FOMC Meeting Day 2 + Rate Decision"
+    date: "2026-05-06"
+    impact: high
+    affected: [SPY, QQQ, TLT, GLD, UUP]
+    note: "Rate decision at 14:00 ET, press conference at 14:30 ET"
+  - name: "Monthly OPEX (May)"
+    date: "2026-05-15"
+    impact: high
+    affected: [SPY, QQQ, IWM]
+    note: "Monthly options expiration - expect elevated volume and pinning"
+  - name: "Memorial Day"
+    date: "2026-05-25"
+    impact: high
+    note: "US market holiday - all equity markets closed, crypto only"
+  - name: "Monthly OPEX (June)"
+    date: "2026-06-19"
+    impact: high
+    affected: [SPY, QQQ, IWM]
+    note: "Quarterly OPEX (quad witching) - major expiration event"
+
+# Earnings season (Q1 2026 reporting)
+earnings_watch:
+  - name: "TSLA"
+    date: "2026-04-22"
+    timing: after_close
+    impact: high
+    affected: [TSLA, ARKK, QQQ]
+  - name: "MSFT"
+    date: "2026-04-28"
+    timing: after_close
+    impact: high
+    affected: [MSFT, QQQ, XLK]
+  - name: "META"
+    date: "2026-04-29"
+    timing: after_close
+    impact: high
+    affected: [META, QQQ, XLC]
+  - name: "AAPL"
+    date: "2026-04-30"
+    timing: after_close
+    impact: high
+    affected: [AAPL, QQQ, XLK]
+  - name: "AMZN"
+    date: "2026-04-30"
+    timing: after_close
+    impact: high
+    affected: [AMZN, QQQ, XLY]
 
 # Regular schedule awareness
 regular_schedule:
@@ -66,13 +121,13 @@ regular_schedule:
 
 # OPEC and geopolitical calendar
 geopolitical_watch:
-  - name: "OPEC+ monitoring meeting"
-    date: "2026-03-15"
+  - name: "OPEC+ JMMC Meeting"
+    date: "2026-05-04"
     impact: high
     affected: [USO, XOP, OXY, STNG, FRO]
   - name: "UN Security Council session"
     frequency: ongoing
     impact: variable
-  - name: "G7 foreign ministers meeting"
-    date: "2026-03-17"
+  - name: "G7 Summit"
+    date: "2026-06-21"
     impact: medium

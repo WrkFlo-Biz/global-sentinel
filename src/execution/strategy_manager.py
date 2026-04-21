@@ -23,6 +23,8 @@ try:
 except ImportError:
     yaml = None
 
+from src.execution.strategy_learning import infer_strategy_family
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -64,8 +66,13 @@ class StrategyManager:
 
     def classify_trade_idea(self, idea: Dict[str, Any]) -> str:
         """Classify a trade idea into day_trade or medium_long strategy."""
+        family = infer_strategy_family(idea)
+        if family in ("day_trade", "medium_long"):
+            return family
+
         holding = idea.get("holding_period", "day")
-        if holding in ("swing", "medium", "long", "macro"):
+        normalized = str(holding or "").strip().lower()
+        if normalized in ("swing", "medium", "long", "macro", "weekly", "monthly", "multi_day", "overnight"):
             return "medium_long"
         return "day_trade"
 

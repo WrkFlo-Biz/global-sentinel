@@ -49,7 +49,6 @@ Usage:
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import signal
@@ -119,13 +118,7 @@ load_dotenv(ENV_PATH)
 # API keys
 SERP_API_KEY = os.getenv("SERP_API_KEY", "")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
-EXA_API_KEY = os.getenv("EXA_API_KEY", "")
 
-# Reddit OAuth
-REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
-REDDIT_USERNAME = os.getenv("REDDIT_USERNAME", "")
-REDDIT_PASSWORD = os.getenv("REDDIT_PASSWORD", "")
 # Telegram (daily summary only)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_ROLE_UPDATES_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")
@@ -308,67 +301,48 @@ def send_telegram(text: str, bot_token: str, chat_id: str,
 # ---------------------------------------------------------------------------
 
 def fetch_serp_news() -> List[Dict[str, Any]]:
-    """Fetch news via DuckDuckGo search (replaced Exa 2026-03-27)."""
-    from duckduckgo_search import DDGS
+    """Fetch Google News via SerpAPI for all war-related queries."""
+    if not SERP_API_KEY:
+        print("  [SERP] No API key, skipping")
+        return []
 
-    all_results: List[Dict[str, Any]] = []
-    ddg_queries = [
-        "Iran war latest geopolitical",
-        "Strait of Hormuz oil shipping disruption",
-        "crude oil price surge supply shock",
-        "defense military spending contract",
-        "Houthi Red Sea shipping attack",
-        "gold safe haven demand",
-        "energy crisis natural gas LNG",
-    ]
-    for query in ddg_queries:
+    all_results = []
+    for query in SERP_QUERIES:
         if _shutdown:
             break
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.news(query, max_results=10))
-            for r in results:
-                all_results.append({
-                    "source": "ddg_news",
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "snippet": (r.get("body") or "")[:300],
-                    "published": r.get("date", ""),
-                    "score": 0,
-                })
-            print(f"  [DDG] \'{query[:40]}\' => {len(results)} results")
-        except Exception as exc:
-            print(f"  [DDG] \'{query[:40]}\' failed: {exc}")
+        encoded = urllib.parse.quote(query)
+        url = f"https://serpapi.com/search.json?engine=google_news&q={encoded}&api_key={SERP_API_KEY}"
+        data = http_get(url, timeout=20)
+        if not data:
+            continue
+
+        articles = data.get("news_results", []) or data.get("organic_results", [])
+        for art in articles[:10]:
+            item = {
+                "source": "serp_google_news",
+                "query": query,
+                "title": art.get("title", ""),
+                "link": art.get("link", ""),
+                "snippet": art.get("snippet", art.get("description", ""))[:300],
+                "date": art.get("date", ""),
+            }
+            all_results.append(item)
+        print(f"  [SERP] '{query}' => {len(articles)} results")
         time.sleep(0.5)
-    print(f"  [DDG] Total => {len(all_results)} articles")
+
     return all_results
 
 
-# GDELT 30-minute cache
-_gdelt_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
-_GDELT_CACHE_TTL = 1800  # 30 minutes
-
 def fetch_gdelt() -> List[Dict[str, Any]]:
-    """Fetch articles from GDELT DOC API with exponential backoff and 30min cache."""
-    now = time.time()
-    if _gdelt_cache["data"] and (now - _gdelt_cache["ts"]) < _GDELT_CACHE_TTL:
-        print(f"  [GDELT] Returning cached {len(_gdelt_cache['data'])} articles (age {int(now - _gdelt_cache['ts'])}s)")
-        return list(_gdelt_cache["data"])
-
+    """Fetch articles from GDELT DOC API (free, no key). Retry once on 429."""
     url = "https://api.gdeltproject.org/api/v2/doc/doc?query=iran%20war%20oil&mode=ArtList&maxrecords=20&format=json"
-    data = None
-    max_retries = 4
-    for attempt in range(max_retries):
-        data = http_get(url, timeout=20)
-        if data:
-            break
-        backoff = min(10 * (2 ** attempt), 120)  # 10s, 20s, 40s, 80s
-        print(f"  [GDELT] Attempt {attempt + 1}/{max_retries} failed, backing off {backoff}s...")
-        time.sleep(backoff)
-
+    data = http_get(url, timeout=20)
     if not data:
-        print("  [GDELT] All retries exhausted, returning stale cache or empty")
-        return list(_gdelt_cache["data"])
+        print("  [GDELT] First attempt failed, retrying in 10s...")
+        time.sleep(10)
+        data = http_get(url, timeout=20)
+    if not data:
+        return []
 
     articles = data.get("articles", [])
     results = []
@@ -382,9 +356,7 @@ def fetch_gdelt() -> List[Dict[str, Any]]:
             "tone": art.get("tone", 0),
         }
         results.append(item)
-    _gdelt_cache["ts"] = now
-    _gdelt_cache["data"] = list(results)
-    print(f"  [GDELT] => {len(results)} articles (cached for {_GDELT_CACHE_TTL}s)")
+    print(f"  [GDELT] => {len(results)} articles")
     return results
 
 
@@ -421,46 +393,6 @@ def fetch_yahoo_quotes() -> Dict[str, Dict[str, Any]]:
     return quotes
 
 
-
-def _get_reddit_oauth_token():
-    """Get Reddit OAuth token using script-type app credentials."""
-    client_id = os.getenv("REDDIT_CLIENT_ID", "")
-    client_secret = os.getenv("REDDIT_CLIENT_SECRET", "")
-    username = os.getenv("REDDIT_USERNAME", "")
-    password = os.getenv("REDDIT_PASSWORD", "")
-    if not all([client_id, client_secret, username, password]):
-        return None
-    auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "username": username,
-        "password": password,
-    }).encode()
-    req = urllib.request.Request("https://www.reddit.com/api/v1/access_token",
-        data=data,
-        headers={
-            "Authorization": f"Basic {auth}",
-            "User-Agent": "GlobalSentinel/1.0",
-        })
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read()).get("access_token")
-    except Exception as e:
-        print(f"  [REDDIT OAuth] Token error: {e}")
-        return None
-
-
-def _fetch_reddit_oauth(subreddit, token, limit=10):
-    """Fetch subreddit posts via Reddit OAuth API."""
-    url = f"https://oauth.reddit.com/r/{subreddit}/hot?limit={limit}"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "GlobalSentinel/1.0",
-    })
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read())
-    return [child["data"] for child in data["data"]["children"]]
-
 def fetch_reddit() -> List[Dict[str, Any]]:
     """Fetch hot posts from relevant subreddits. Falls back to SerpAPI if blocked."""
     all_results = []
@@ -468,14 +400,15 @@ def fetch_reddit() -> List[Dict[str, Any]]:
     for sub in REDDIT_SUBS:
         if _shutdown:
             break
-        url = f"https://api.pullpush.io/reddit/search/submission/?subreddit={sub}&size=10&sort=desc&sort_type=score"
-        data = http_get(url, timeout=20)
-        if not data or "data" not in data:
+        url = f"https://old.reddit.com/r/{sub}/hot.json?limit=10"
+        data = http_get(url, headers={"User-Agent": "GlobalSentinel/1.0"})
+        if not data:
             blocked = True
             continue
 
-        children = data.get("data", [])
-        for d in children:
+        children = data.get("data", {}).get("children", [])
+        for child in children:
+            d = child.get("data", {})
             if d.get("stickied"):
                 continue
             item = {
@@ -489,12 +422,12 @@ def fetch_reddit() -> List[Dict[str, Any]]:
                 "created_utc": d.get("created_utc", 0),
             }
             all_results.append(item)
-        print(f"  [REDDIT] r/{sub} => {len(children)} posts (via PullPush)")
+        print(f"  [REDDIT] r/{sub} => {len(children)} posts")
         time.sleep(1.0)
 
     # Fallback: SerpAPI Reddit search if direct access blocked
     if blocked and not all_results and SERP_API_KEY:
-        print("  [REDDIT] PullPush unavailable — falling back to SerpAPI Reddit search")
+        print("  [REDDIT] Direct access blocked — falling back to SerpAPI Reddit search")
         reddit_queries = [
             "Iran war oil site:reddit.com",
             "Hormuz shipping disruption site:reddit.com",
@@ -554,59 +487,6 @@ def fetch_finnhub_news() -> List[Dict[str, Any]]:
 
 # ---------------------------------------------------------------------------
 # Intelligence analysis
-
-def fetch_google_news_rss() -> List[Dict[str, Any]]:
-    """Fetch news from Google News RSS feeds (free, no API key, no rate limits)."""
-    import xml.etree.ElementTree as ET_xml
-    
-    rss_queries = [
-        "iran+war", "oil+price+surge", "strait+of+hormuz",
-        "energy+crisis", "oil+supply+disruption", "gold+safe+haven",
-        "defense+stocks", "shipping+disruption", "inflation+oil",
-        "geopolitical+risk",
-    ]
-    all_results = []
-    
-    for query in rss_queries:
-        if _shutdown:
-            break
-        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; GlobalSentinel/5.1)"
-            })
-            with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx) as resp:
-                xml_data = resp.read().decode("utf-8")
-            
-            root = ET_xml.fromstring(xml_data)
-            items = root.findall(".//item")
-            for item in items[:8]:
-                title = (item.findtext("title") or "").strip()
-                link = (item.findtext("link") or "").strip()
-                pub_date = (item.findtext("pubDate") or "").strip()
-                source_el = item.find("source")
-                source_name = source_el.text if source_el is not None else ""
-                
-                if title:
-                    all_results.append({
-                        "source": "google_news_rss",
-                        "query": query.replace("+", " "),
-                        "title": title,
-                        "link": link,
-                        "date": pub_date,
-                        "publisher": source_name,
-                    })
-            count = min(len(items), 8)
-            if count > 0:
-                print(f"  [GNEWS RSS] \'{query.replace('+', ' ')}\' => {count} results")
-        except Exception as exc:
-            print(f"  [GNEWS RSS] \'{query.replace('+', ' ')}\' failed: {exc}")
-        time.sleep(0.3)  # gentle rate limiting
-    
-    print(f"  [GNEWS RSS] Total: {len(all_results)} articles")
-    return all_results
-
-
 # ---------------------------------------------------------------------------
 
 def classify_item(text: str) -> List[Tuple[str, str]]:
@@ -626,7 +506,6 @@ def analyze_intelligence(
     reddit_posts: List[Dict],
     finnhub_news: List[Dict],
     gdelt_articles: List[Dict],
-    google_rss_news: Optional[List[Dict]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Score all impact buckets based on intelligence gathered."""
     buckets: Dict[str, Dict[str, Any]] = {}
@@ -660,12 +539,6 @@ def analyze_intelligence(
         if title and title not in seen_titles:
             seen_titles.add(title)
             all_items.append(("GDELT", item.get("title", ""), item))
-
-    for item in (google_rss_news or []):
-        title = item.get("title", "").strip().lower()[:80]
-        if title and title not in seen_titles:
-            seen_titles.add(title)
-            all_items.append(("GNEWS", item.get("title", ""), item))
 
     for source_tag, text, item in all_items:
         matches = classify_item(text)
@@ -895,7 +768,7 @@ def run_collection_cycle(cycle_num: int) -> None:
     yahoo_quotes: Dict[str, Dict[str, Any]] = {}
 
     try:
-        print("[1/6] Fetching SerpAPI news...")
+        print("[1/5] Fetching SerpAPI news...")
         serp_news = fetch_serp_news()
     except Exception as exc:
         print(f"  [ERR] SerpAPI failed: {exc}")
@@ -905,7 +778,7 @@ def run_collection_cycle(cycle_num: int) -> None:
         return
 
     try:
-        print("[2/6] Fetching GDELT articles...")
+        print("[2/5] Fetching GDELT articles...")
         gdelt_articles = fetch_gdelt()
     except Exception as exc:
         print(f"  [ERR] GDELT failed: {exc}")
@@ -915,7 +788,7 @@ def run_collection_cycle(cycle_num: int) -> None:
         return
 
     try:
-        print("[3/6] Fetching Yahoo Finance quotes...")
+        print("[3/5] Fetching Yahoo Finance quotes...")
         yahoo_quotes = fetch_yahoo_quotes()
     except Exception as exc:
         print(f"  [ERR] Yahoo Finance failed: {exc}")
@@ -925,7 +798,7 @@ def run_collection_cycle(cycle_num: int) -> None:
         return
 
     try:
-        print("[4/6] Fetching Reddit posts...")
+        print("[4/5] Fetching Reddit posts...")
         reddit_posts = fetch_reddit()
     except Exception as exc:
         print(f"  [ERR] Reddit failed: {exc}")
@@ -935,26 +808,15 @@ def run_collection_cycle(cycle_num: int) -> None:
         return
 
     try:
-        print("[5/6] Fetching Finnhub news...")
+        print("[5/5] Fetching Finnhub news...")
         finnhub_news = fetch_finnhub_news()
     except Exception as exc:
         print(f"  [ERR] Finnhub failed: {exc}")
         traceback.print_exc()
 
-    if _shutdown:
-        return
-
-    google_rss_news: List[Dict] = []
-    try:
-        print("[6/6] Fetching Google News RSS...")
-        google_rss_news = fetch_google_news_rss()
-    except Exception as exc:
-        print(f"  [ERR] Google News RSS failed: {exc}")
-        traceback.print_exc()
-
     # --- Analyze ---
     print("\n[ANALYSIS] Classifying intelligence into buckets...")
-    buckets = analyze_intelligence(serp_news, reddit_posts, finnhub_news, gdelt_articles, google_rss_news)
+    buckets = analyze_intelligence(serp_news, reddit_posts, finnhub_news, gdelt_articles)
     war_intensity = compute_war_intensity(buckets)
 
     article_counts = {
@@ -962,8 +824,7 @@ def run_collection_cycle(cycle_num: int) -> None:
         "reddit": len(reddit_posts),
         "finnhub": len(finnhub_news),
         "gdelt": len(gdelt_articles),
-        "google_rss": len(google_rss_news),
-        "total": len(serp_news) + len(reddit_posts) + len(finnhub_news) + len(gdelt_articles) + len(google_rss_news),
+        "total": len(serp_news) + len(reddit_posts) + len(finnhub_news) + len(gdelt_articles),
     }
 
     # Print bucket summary
@@ -977,18 +838,6 @@ def run_collection_cycle(cycle_num: int) -> None:
         write_quantum_signal(buckets, yahoo_quotes, war_intensity, article_counts)
     except Exception as exc:
         print(f"  [ERR] Quantum feed write failed: {exc}")
-        traceback.print_exc()
-
-    # --- Refresh news impact bridge (scores headlines into quantum_feed) ---
-    try:
-        from src.bridges.news_impact_bridge import NewsImpactBridge
-        nib = NewsImpactBridge()
-        nib_result = nib.poll()
-        nib_data = nib_result.get("data", {})
-        print(f"  [NEWS IMPACT] {nib_data.get('headlines_analyzed', 0)} headlines, "
-              f"{nib_data.get('tickers_mentioned', 0)} tickers scored")
-    except Exception as exc:
-        print(f"  [ERR] News impact bridge failed: {exc}")
         traceback.print_exc()
 
     # --- Log to JSONL ---

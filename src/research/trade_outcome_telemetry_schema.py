@@ -11,9 +11,33 @@ class TradeOutcomeRecord:
     trade_executed: bool
     direction: str  # long | short
     realized_return_bps: float
+    timestamp_utc: Optional[str] = None
+    event_novelty_score: Optional[float] = None
+    expected_edge_bps: Optional[float] = None
+    expected_cost_bps: Optional[float] = None
+    net_expected_value_bps: Optional[float] = None
     expected_impact_bps: Optional[float] = None
     realized_slippage_bps: Optional[float] = None
     fill_rate: Optional[float] = None
+    max_favorable_excursion_bps: Optional[float] = None
+    max_adverse_excursion_bps: Optional[float] = None
+    time_to_edge_minutes: Optional[float] = None
+    time_to_edge_score: Optional[float] = None
+    time_to_edge_bucket: Optional[str] = None
+    time_to_edge_label: Optional[str] = None
+    fill_quality_score: Optional[float] = None
+    fill_quality_label: Optional[str] = None
+    execution_quality_label: Optional[str] = None
+    alpha_label: Optional[str] = None
+    realized_edge_capture_ratio: Optional[float] = None
+    adverse_excursion_ratio: Optional[float] = None
+    post_event_drift_bps: Optional[float] = None
+    post_event_drift_score: Optional[float] = None
+    post_event_drift_label: Optional[str] = None
+    edge_decay_score: Optional[float] = None
+    edge_decay_weight: Optional[float] = None
+    edge_decay_label: Optional[str] = None
+    sample_weight: Optional[float] = None
     time_window: Optional[str] = None
     incident_mode: Optional[bool] = None
     research_score_used: Optional[float] = None

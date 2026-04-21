@@ -2,17 +2,20 @@
 """
 Global Sentinel V5.1 - Position Manager
 
-Monitors open positions and closes them when:
+Monitors open positions and identifies when they would normally be closed:
 1. Profit target is hit (default 2%)
 2. Stop loss is hit (default 1%)
 3. Trailing stop: if position is up >1.5%, stop moves to breakeven
 4. End-of-day flatten: all day-trade positions closed after 3:45 PM ET
 
+These are approval-required proposals only. Auto-close is hard-blocked in
+code so no position can be closed without manual approval.
+
 Runs every cycle from crisis_monitor._run_cycle().
 
 Safety:
 - Paper/shadow mode only (uses Alpaca paper API)
-- All close actions logged with reason, P&L, hold duration
+- Close signals are logged as proposals unless auto close is explicitly enabled
 """
 
 from __future__ import annotations
@@ -20,12 +23,13 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
+
+from src.execution.strategy_learning import infer_strategy_family
 
 try:
     import yaml
@@ -60,15 +64,8 @@ def safe_float(v: Any, default: float = 0.0) -> float:
         return default
 
 
-# Maximum number of close retries per position per session before giving up
-_MAX_CLOSE_RETRIES = 3
-
-# Exponential backoff delays in seconds: 1 min, 5 min, 15 min
-_RETRY_BACKOFF_SECONDS = [60, 300, 900]
-
-
 class PositionManager:
-    """Monitors open positions and closes at profit targets or stop losses."""
+    """Monitors open positions and proposes closes at profit targets or stop losses."""
 
     def __init__(
         self,
@@ -77,12 +74,19 @@ class PositionManager:
         stop_loss_pct: float = 1.0,
         trailing_stop_activation_pct: float = 1.5,
         eod_flatten_time: str = "15:45",  # ET, 24h format
+        auto_close_enabled: bool = False,
     ):
         self.repo_root = repo_root
         self.profit_target_pct = profit_target_pct
         self.stop_loss_pct = stop_loss_pct
         self.trailing_stop_activation_pct = trailing_stop_activation_pct
         self.eod_flatten_time = eod_flatten_time
+        self.live_guardrails = self._load_live_guardrails()
+        # Hard safety policy: this monitor is proposal-only unless the code is
+        # intentionally changed in a future review. Constructor overrides do not
+        # enable automatic closes.
+        self.require_human_approval_for_closures = True
+        self.auto_close_enabled = False
 
         # Alpaca API credentials
         self.base_url = os.getenv(
@@ -129,32 +133,17 @@ class PositionManager:
         # Persisted in memory per cycle; resets on restart (conservative)
         self._trailing_stops: Dict[str, float] = {}
 
-        # Take-profit tier state: tracks which trim tiers have fired per symbol
-        # {symbol: {"tier1_done": bool, "tier2_done": bool, "tier3_trailing": bool,
-        #           "original_qty": float, "stop_at_breakeven": bool}}
-        self._tp_state: Dict[str, Dict[str, Any]] = {}
-
-        # Close retry tracking: {(symbol, reason): {"count": int, "last_attempt": float,
-        #   "last_error": str, "alerted": bool}}
-        # Persists across cycles within a single process session.
-        # Keyed by (symbol, reason) tuple so each close-reason is tracked independently.
-        self._close_retries: Dict[Tuple[str, str], Dict[str, Any]] = {}
-
-        # Log dedup tracker for current cycle: set of (symbol, reason, error_string)
-        # Reset at the start of each run_check() call to allow one log per unique event per cycle
-        self._logged_this_cycle: set = set()
-
     def run_check(self) -> Dict[str, Any]:
         """
         Main entry point. Check all open positions against targets.
-        Returns summary of actions taken.
+        Returns a summary of proposal signals and any executed actions.
         """
-        # Reset per-cycle log dedup tracker
-        self._logged_this_cycle = set()
-
         result = {
             "timestamp_utc": iso_now(),
             "actions_taken": 0,
+            "actions_executed": 0,
+            "proposed_close_count": 0,
+            "manual_approval_required": True,
             "profits_taken": 0,
             "stops_hit": 0,
             "eod_flattened": 0,
@@ -183,38 +172,57 @@ class PositionManager:
         result["portfolio_drawdown_pct"] = portfolio_drawdown.get("drawdown_pct", 0)
         if portfolio_drawdown.get("emergency_liquidate"):
             result["emergency_liquidation"] = True
+            result["emergency_liquidation_blocked"] = not self.auto_close_enabled
             for pos in positions:
                 symbol = pos.get("symbol", "")
                 try:
-                    close_result = self._close_position(
-                        symbol=symbol,
-                        qty=abs(safe_float(pos.get("qty"), 0)),
-                        side=pos.get("side", "long"),
-                        reason="emergency_portfolio_drawdown_25pct",
-                    )
-                    result["close_details"].append({
+                    detail = {
                         "symbol": symbol,
                         "reason": "emergency_portfolio_drawdown_25pct",
                         "unrealized_pl": safe_float(pos.get("unrealized_pl"), 0),
-                        "close_result": close_result,
-                    })
-                    result["actions_taken"] += 1
+                        "unrealized_plpc": safe_float(pos.get("unrealized_plpc"), 0),
+                        "qty": abs(safe_float(pos.get("qty"), 0)),
+                        "status": "pending_manual_approval",
+                        "auto_close_blocked": not self.auto_close_enabled,
+                        "close_result": None,
+                    }
+                    result["close_details"].append(detail)
+                    result["proposed_close_count"] += 1
+                    if self.auto_close_enabled:
+                        close_result = self._close_position(
+                            symbol=symbol,
+                            qty=abs(safe_float(pos.get("qty"), 0)),
+                            side=pos.get("side", "long"),
+                            reason="emergency_portfolio_drawdown_25pct",
+                        )
+                        detail["close_result"] = close_result
+                        detail["status"] = "executed"
+                        result["actions_taken"] += 1
+                        result["actions_executed"] += 1
                 except Exception as e:
                     result["errors"].append(f"Emergency close {symbol}: {e}")
             # Notify
             if self._notifier:
                 try:
-                    self._notifier.send_message(
-                        f"EMERGENCY LIQUIDATION: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
-                        f"exceeded 25% threshold. All positions closed.",
-                        bot_name="mo2darkbot",
-                    )
+                    if self.auto_close_enabled:
+                        self._notifier.send_message(
+                            f"EMERGENCY LIQUIDATION: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
+                            f"exceeded 25% threshold. All positions closed.",
+                            bot_name="mo2darkbot",
+                        )
+                    else:
+                        self._notifier.send_message(
+                            f"EMERGENCY LIQUIDATION REVIEW REQUIRED: Portfolio drawdown {portfolio_drawdown['drawdown_pct']:.1f}% "
+                            f"exceeded 25% threshold. Close-out is blocked until manual approval.",
+                            bot_name="mo2darkbot",
+                        )
                 except Exception:
                     pass
             self._log_close({
                 "event": "emergency_portfolio_liquidation",
                 "drawdown_pct": portfolio_drawdown["drawdown_pct"],
-                "positions_closed": len(positions),
+                "positions_affected": len(positions),
+                "auto_close_blocked": not self.auto_close_enabled,
             })
             return result
 
@@ -224,149 +232,44 @@ class PositionManager:
         for pos in positions:
             symbol = pos.get("symbol", "")
             try:
-                # --- Tiered take-profit check (runs before full-close evaluation) ---
-                tp_action = self._evaluate_take_profit_tiers(pos, order_history)
-                if tp_action and tp_action.get("trim_qty", 0) > 0:
-                    trim_result = self._reduce_position(
-                        symbol=symbol,
-                        qty_to_sell=tp_action["trim_qty"],
-                        side=tp_action.get("side", "long"),
-                        reason=tp_action["reason"],
-                    )
-                    pnl_usd = safe_float(pos.get("unrealized_pl"), 0)
-                    trim_detail = {
-                        "symbol": symbol,
-                        "reason": tp_action["reason"],
-                        "strategy": tp_action.get("strategy", "day_trade"),
-                        "trim_qty": tp_action["trim_qty"],
-                        "remaining_qty": abs(safe_float(pos.get("qty"), 0)) - tp_action["trim_qty"],
-                        "pct_gain_at_trim": tp_action.get("pct_gain", 0),
-                        "unrealized_pl": pnl_usd,
-                        "avg_entry_price": safe_float(pos.get("avg_entry_price"), 0),
-                        "current_price": safe_float(pos.get("current_price"), 0),
-                        "stop_moved_to_breakeven": tp_action.get("stop_moved_to_breakeven", False),
-                        "trailing_stop_set": tp_action.get("trailing_stop_set", False),
-                        "close_result": trim_result,
-                    }
-                    result["close_details"].append(trim_detail)
-                    result["actions_taken"] += 1
-                    result["profits_taken"] += 1
-                    self._log_trim(trim_detail)
-                    if self._notifier:
-                        try:
-                            self._notifier.send_message(
-                                f"TRIM {symbol}: {tp_action['reason']} | "
-                                f"Sold {tp_action['trim_qty']} at +{tp_action.get('pct_gain', 0):.1f}%",
-                                bot_name="mo2darkbot",
-                            )
-                        except Exception:
-                            pass
-                    continue  # Let next cycle re-evaluate the reduced position
-                elif tp_action and tp_action.get("action") == "trailing_activated":
-                    self._log_trim({
-                        "symbol": symbol,
-                        "reason": tp_action["reason"],
-                        "strategy": tp_action.get("strategy", "day_trade"),
-                        "trim_qty": 0,
-                        "pct_gain_at_activation": tp_action.get("pct_gain", 0),
-                        "trailing_stop_set": True,
-                        "trail_distance_pct": tp_action.get("trail_distance_pct", 2.0),
-                    })
-                # --- End tiered take-profit check ---
-
                 action = self._evaluate_position(pos, order_history)
                 if action:
-                    reason = action["reason"]
-
-                    # --- Retry gate: check if we should skip this close attempt ---
-                    retry_key = (symbol, reason)
-                    retry_state = self._close_retries.get(retry_key)
-
-                    if retry_state:
-                        # Already exhausted max retries -- skip (alert already sent)
-                        if retry_state["count"] >= _MAX_CLOSE_RETRIES:
-                            continue
-
-                        # Check exponential backoff: don't retry until enough time has passed
-                        backoff_idx = min(retry_state["count"], len(_RETRY_BACKOFF_SECONDS) - 1)
-                        required_wait = _RETRY_BACKOFF_SECONDS[backoff_idx]
-                        elapsed = time.monotonic() - retry_state["last_attempt"]
-                        if elapsed < required_wait:
-                            continue
-
-                    close_result = self._close_position(
-                        symbol=symbol,
-                        qty=abs(safe_float(pos.get("qty"), 0)),
-                        side=pos.get("side", "long"),
-                        reason=reason,
-                    )
                     strategy_name = action.get("strategy", "day_trade")
                     pnl_pct = safe_float(pos.get("unrealized_plpc"), 0) * 100
                     pnl_usd = safe_float(pos.get("unrealized_pl"), 0)
 
                     detail = {
                         "symbol": symbol,
-                        "reason": reason,
+                        "reason": action["reason"],
                         "strategy": strategy_name,
                         "unrealized_plpc": safe_float(pos.get("unrealized_plpc"), 0),
                         "unrealized_pl": pnl_usd,
                         "qty": safe_float(pos.get("qty"), 0),
                         "avg_entry_price": safe_float(pos.get("avg_entry_price"), 0),
                         "current_price": safe_float(pos.get("current_price"), 0),
-                        "close_result": close_result,
+                        "status": "pending_manual_approval" if not self.auto_close_enabled else "executed",
+                        "auto_close_blocked": not self.auto_close_enabled,
                     }
-
-                    # --- Handle close failure with retry tracking and dedup ---
-                    if close_result.get("status") == "error":
-                        error_str = close_result.get("error", "unknown")
-                        retry_count = (retry_state["count"] if retry_state else 0) + 1
-
-                        # Update retry tracker
-                        self._close_retries[retry_key] = {
-                            "count": retry_count,
-                            "last_attempt": time.monotonic(),
-                            "last_error": error_str,
-                            "alerted": retry_state["alerted"] if retry_state else False,
-                        }
-
-                        detail["retry_count"] = retry_count
-
-                        # Dedup: only log if we haven't logged this exact event this cycle
-                        dedup_key = (symbol, reason, error_str)
-                        if dedup_key not in self._logged_this_cycle:
-                            self._logged_this_cycle.add(dedup_key)
-                            self._log_close(detail)
-
-                        # If max retries reached, send a one-time Telegram alert
-                        if retry_count >= _MAX_CLOSE_RETRIES and not self._close_retries[retry_key]["alerted"]:
-                            self._close_retries[retry_key]["alerted"] = True
-                            if self._notifier:
-                                try:
-                                    self._notifier.send_message(
-                                        f"CLOSE FAILED after {retry_count} retries: {symbol} "
-                                        f"(reason={reason}, error={error_str}). "
-                                        f"Manual intervention required.",
-                                        bot_name="mo2darkbot",
-                                    )
-                                except Exception:
-                                    pass
-
-                        result["errors"].append(
-                            f"{symbol}: close failed (retry {retry_count}/{_MAX_CLOSE_RETRIES}): {error_str}"
+                    if self.auto_close_enabled:
+                        close_result = self._close_position(
+                            symbol=symbol,
+                            qty=abs(safe_float(pos.get("qty"), 0)),
+                            side=pos.get("side", "long"),
+                            reason=action["reason"],
                         )
-                        continue  # Don't count failed close as action taken
-
-                    # --- Success path: clear retry state and proceed normally ---
-                    self._close_retries.pop(retry_key, None)
-
+                        detail["close_result"] = close_result
+                        result["actions_taken"] += 1
+                        result["actions_executed"] += 1
+                    else:
+                        detail["close_result"] = None
+                        result["proposed_close_count"] += 1
                     result["close_details"].append(detail)
-                    result["actions_taken"] += 1
 
-                    if reason == "take_profit":
+                    if action["reason"] == "take_profit":
                         result["profits_taken"] += 1
-                    elif reason == "stop_loss":
+                    elif action["reason"] == "stop_loss":
                         result["stops_hit"] += 1
-                    elif reason == "eod_flatten":
+                    elif action["reason"] == "eod_flatten":
                         result["eod_flattened"] += 1
 
                     self._log_close(detail)
@@ -374,29 +277,34 @@ class PositionManager:
                     # Send instant Telegram notification
                     if self._notifier:
                         try:
-                            self._notifier.notify_position_closed(
-                                symbol=symbol,
-                                reason=reason,
-                                pnl_pct=pnl_pct,
-                                pnl_usd=pnl_usd,
-                                strategy_name=strategy_name,
-                            )
+                            if self.auto_close_enabled:
+                                self._notifier.notify_position_closed(
+                                    symbol=symbol,
+                                    reason=action["reason"],
+                                    pnl_pct=pnl_pct,
+                                    pnl_usd=pnl_usd,
+                                    strategy_name=strategy_name,
+                                )
+                            else:
+                                self._notifier.send_message(
+                                    (
+                                        f"POSITION CLOSE REVIEW REQUIRED: {symbol} "
+                                        f"would trigger {action['reason']} for {strategy_name}. "
+                                        f"P&L {pnl_pct:+.2f}% / ${pnl_usd:+,.2f}. "
+                                        "No auto-close was sent."
+                                    ),
+                                    bot_name="mo2darkbot",
+                                )
                         except Exception:
                             pass  # Don't let notification failure block position management
 
             except Exception as e:
                 result["errors"].append(f"{symbol}: {e}")
 
-        # Clean up take-profit state for symbols no longer in open positions
-        open_symbols = {pos.get("symbol", "") for pos in positions}
-        stale_tp = [s for s in self._tp_state if s not in open_symbols]
-        for s in stale_tp:
-            del self._tp_state[s]
-        # Clean up close retry state for symbols no longer in open positions
-        stale_retries = [k for k in self._close_retries if k[0] not in open_symbols]
-        for k in stale_retries:
-            del self._close_retries[k]
-
+        if result["proposed_close_count"] > 0:
+            result["manual_approval_required"] = True
+        else:
+            result["manual_approval_required"] = False
         return result
 
     def _rate_limited_request(self, method: str, url: str, **kwargs) -> requests.Response:
@@ -462,15 +370,6 @@ class PositionManager:
         positions = resp.json()
         if not isinstance(positions, list):
             return []
-
-        acct = "paper" if "paper-api" in self.base_url else "live"
-        label = f"Alpaca {acct.upper()}"
-        for p in positions:
-            if isinstance(p, dict):
-                p["_broker"] = "alpaca"
-                p["_account"] = acct
-                p["_account_label"] = label
-
         return positions
 
     def _load_strategy_config(self) -> Dict[str, Any]:
@@ -483,25 +382,38 @@ class PositionManager:
         except Exception:
             return {}
 
-    def _get_strategy_params(self, holding_period: str) -> Dict[str, Any]:
+    def _load_live_guardrails(self) -> Dict[str, Any]:
+        """Load live trading guardrails for close approval policy."""
+        guardrails_path = self.repo_root / "config" / "live_trading_guardrails.yaml"
+        if not guardrails_path.exists() or yaml is None:
+            return {}
+        try:
+            return yaml.safe_load(guardrails_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+
+    def _get_strategy_params(
+        self,
+        holding_period: str,
+        strategy_family: Optional[str] = None,
+        strategy_style: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Return strategy parameters based on holding_period.
-        If swing/medium/long/macro -> medium_long config.
-        Otherwise -> day_trade config (default).
+        If swing/medium/long/macro → medium_long config.
+        Otherwise → day_trade config (default).
         """
         strategies = self.strategy_config.get("strategies", {})
-
-        if holding_period in ("swing", "medium", "long", "macro"):
-            cfg = strategies.get("medium_long", {})
-            return {
-                "strategy_name": "medium_long",
-                "profit_target_pct": cfg.get("profit_target_pct", 8.0),
-                "stop_loss_pct": cfg.get("stop_loss_pct", 4.0),
-                "trailing_stop_activation_pct": cfg.get("trailing_stop_activation_pct", 5.0),
-                "trailing_stop_distance_pct": cfg.get("trailing_stop_distance_pct", 1.5),
-                "eod_flatten": cfg.get("eod_flatten", False),
+        normalized = str(holding_period or "").strip().lower()
+        inferred_family = infer_strategy_family(
+            {
+                "holding_period": normalized,
+                "strategy_family": strategy_family,
+                "strategy_style": strategy_style,
             }
-        elif holding_period == "intraday_scalp":
+        )
+
+        if normalized == "intraday_scalp":
             # Opening range / amateur hour: tight stops, quick profits, always flat EOD
             return {
                 "strategy_name": "intraday_scalp",
@@ -510,7 +422,7 @@ class PositionManager:
                 "trailing_stop_activation_pct": 0.8,
                 "eod_flatten": True,
             }
-        elif holding_period == "intraday_momentum":
+        elif normalized == "intraday_momentum":
             # Power hour: slightly wider stops, ride momentum, flat EOD
             return {
                 "strategy_name": "intraday_momentum",
@@ -518,6 +430,24 @@ class PositionManager:
                 "stop_loss_pct": 1.0,
                 "trailing_stop_activation_pct": 1.5,
                 "eod_flatten": True,
+            }
+        elif inferred_family == "medium_long" or normalized in (
+            "swing",
+            "medium",
+            "long",
+            "macro",
+            "weekly",
+            "monthly",
+            "multi_day",
+            "overnight",
+        ):
+            cfg = strategies.get("medium_long", {})
+            return {
+                "strategy_name": "medium_long",
+                "profit_target_pct": cfg.get("profit_target_pct", 8.0),
+                "stop_loss_pct": cfg.get("stop_loss_pct", 4.0),
+                "trailing_stop_activation_pct": cfg.get("trailing_stop_activation_pct", 5.0),
+                "eod_flatten": cfg.get("eod_flatten", False),
             }
         else:
             cfg = strategies.get("day_trade", {})
@@ -544,7 +474,11 @@ class PositionManager:
         # Determine strategy from order history
         entry = order_history.get(symbol, {})
         holding_period = entry.get("holding_period", "day")  # default to day (conservative)
-        params = self._get_strategy_params(holding_period)
+        params = self._get_strategy_params(
+            holding_period,
+            strategy_family=entry.get("strategy_family"),
+            strategy_style=entry.get("strategy_style"),
+        )
         strategy_name = params["strategy_name"]
 
         # Get unrealized P&L percentage from Alpaca raw response
@@ -575,7 +509,7 @@ class PositionManager:
         if self._should_stop_loss(unrealized_plpc, effective_stop):
             return {"reason": "stop_loss", "strategy": strategy_name}
 
-        # Check EOD flatten -- only for strategies with eod_flatten enabled
+        # Check EOD flatten — only for strategies with eod_flatten enabled
         if params["eod_flatten"] and self._should_eod_flatten():
             return {"reason": "eod_flatten", "strategy": strategy_name}
 
@@ -602,9 +536,8 @@ class PositionManager:
         hour, minute = map(int, self.eod_flatten_time.split(":"))
         flatten_time = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
         market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-        market_close_ext = now_et.replace(hour=16, minute=15, second=0, microsecond=0)
 
-        return flatten_time <= now_et <= market_close_ext
+        return flatten_time <= now_et <= market_close
 
     def _close_position(
         self,
@@ -614,46 +547,45 @@ class PositionManager:
         reason: str,
     ) -> Dict[str, Any]:
         """
-        Close a position via Alpaca API with retry limits (max 3 per symbol).
+        Close a position via Alpaca API.
         Uses DELETE /v2/positions/{symbol} which closes the entire position.
         """
-        # Retry guard: max 3 attempts per symbol per session
-        retry_info = self._close_retries.get(symbol, {"count": 0, "last_attempt": ""})
-        if retry_info["count"] >= 3:
-            if self._notifier and retry_info["count"] == 3:
-                try:
-                    self._notifier.send_message(
-                        f"ALERT: Failed to close {symbol} after 3 attempts ({reason}). Manual intervention needed.",
-                        bot_name="mo2darkbot",
-                    )
-                except Exception:
-                    pass
-            retry_info["count"] += 1
-            self._close_retries[symbol] = retry_info
-            return {"status": "max_retries_exceeded", "symbol": symbol, "reason": reason,
-                    "retry_count": retry_info["count"], "timestamp_utc": iso_now()}
-
-        retry_info["count"] += 1
-        retry_info["last_attempt"] = iso_now()
-        self._close_retries[symbol] = retry_info
-
         url = f"{self.base_url}/v2/positions/{symbol}"
         try:
             resp = self._rate_limited_request("DELETE", url, timeout=15)
             if resp.status_code == 204:
-                return {"status": "closed", "symbol": symbol, "reason": reason,
-                        "retry_count": retry_info["count"], "timestamp_utc": iso_now()}
+                return {
+                    "status": "closed",
+                    "symbol": symbol,
+                    "reason": reason,
+                    "timestamp_utc": iso_now(),
+                }
             resp.raise_for_status()
             data = resp.json()
-            return {"status": "closed", "symbol": symbol, "reason": reason,
-                    "order_id": data.get("id"), "retry_count": retry_info["count"], "timestamp_utc": iso_now()}
+            return {
+                "status": "closed",
+                "symbol": symbol,
+                "reason": reason,
+                "order_id": data.get("id"),
+                "timestamp_utc": iso_now(),
+            }
         except requests.HTTPError as e:
-            return {"status": "error", "symbol": symbol, "reason": reason,
-                    "error": str(e), "http_status": getattr(e.response, "status_code", None),
-                    "retry_count": retry_info["count"], "timestamp_utc": iso_now()}
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "reason": reason,
+                "error": str(e),
+                "http_status": getattr(e.response, "status_code", None),
+                "timestamp_utc": iso_now(),
+            }
         except Exception as e:
-            return {"status": "error", "symbol": symbol, "reason": reason,
-                    "error": str(e), "retry_count": retry_info["count"], "timestamp_utc": iso_now()}
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "reason": reason,
+                "error": str(e),
+                "timestamp_utc": iso_now(),
+            }
 
     def _load_order_history(self) -> Dict[str, Dict]:
         """
@@ -679,13 +611,16 @@ class PositionManager:
                             sym = cand.get("symbol")
                             if sym:
                                 history[sym] = {
+                                    "strategy": cand.get("strategy"),
                                     "strategy_style": cand.get("strategy_style"),
+                                    "strategy_family": cand.get("strategy_family"),
+                                    "underlying_strategy": cand.get("underlying_strategy"),
                                     "direction": cand.get("direction"),
                                     "confidence_score": cand.get("confidence_score"),
                                     "template_key": cand.get("template_key"),
                                     "timestamp_utc": row.get("timestamp_utc"),
                                     # Infer holding period from time_in_force
-                                    "holding_period": "swing" if payload.get("time_window_name", "") in ("asia_session", "europe_premarket", "after_hours_global", "premarket_signal_prep") else "day",
+                                    "holding_period": "day" if payload.get("time_window_name") == "us_regular_hours" else "swing",
                                 }
                     except json.JSONDecodeError:
                         continue
@@ -694,157 +629,15 @@ class PositionManager:
 
         return history
 
-    def _reduce_position(
-        self, symbol: str, qty_to_sell: float, side: str, reason: str,
-    ) -> Dict[str, Any]:
-        """Partially close a position by submitting a market order for qty_to_sell."""
-        if qty_to_sell <= 0:
-            return {"status": "skipped", "symbol": symbol, "reason": "zero_qty"}
-        order_side = "sell" if side == "long" else "buy"
-        url = f"{self.base_url}/v2/orders"
-        payload = {
-            "symbol": symbol,
-            "qty": str(round(qty_to_sell, 6)),
-            "side": order_side,
-            "type": "market",
-            "time_in_force": "day",
-        }
-        try:
-            resp = self._rate_limited_request("POST", url, json=payload, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            return {
-                "status": "trimmed", "symbol": symbol, "qty_sold": qty_to_sell,
-                "reason": reason, "order_id": data.get("id"), "timestamp_utc": iso_now(),
-            }
-        except Exception as e:
-            return {
-                "status": "error", "symbol": symbol, "reason": reason,
-                "error": str(e), "timestamp_utc": iso_now(),
-            }
-
-    def _evaluate_take_profit_tiers(
-        self, position: Dict[str, Any], order_history: Dict[str, Dict],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Tiered take-profit logic.
-        Medium/long: Tier1 +3% trim 50% + breakeven stop, Tier2 +5% trim 25%, Tier3 +8% 2% trail.
-        Day trade: Tier1 +2% trim 50% + 1% trail on rest.
-        """
-        symbol = position.get("symbol", "")
-        unrealized_plpc = safe_float(position.get("unrealized_plpc"), 0) * 100
-        total_qty = abs(safe_float(position.get("qty"), 0))
-        side = position.get("side", "long")
-
-        if total_qty <= 0 or unrealized_plpc <= 0:
-            return None
-
-        entry = order_history.get(symbol, {})
-        holding_period = entry.get("holding_period", "day")
-        params = self._get_strategy_params(holding_period)
-        strategy_name = params["strategy_name"]
-
-        if symbol not in self._tp_state:
-            self._tp_state[symbol] = {
-                "tier1_done": False, "tier2_done": False, "tier3_trailing": False,
-                "original_qty": total_qty, "stop_at_breakeven": False,
-            }
-        state = self._tp_state[symbol]
-        original_qty = state["original_qty"]
-
-        # Day trade: Tier1 +50% -> trim 50%, Tier2 +75% -> trim 25%, Tier3 +100% -> close all
-        if strategy_name in ("day_trade", "intraday_scalp", "intraday_momentum"):
-            if not state["tier1_done"] and unrealized_plpc >= 50.0:
-                trim_qty = round(total_qty * 0.5, 6)
-                if trim_qty >= 1:
-                    state["tier1_done"] = True
-                    self._trailing_stops[symbol] = max(
-                        unrealized_plpc * 0.5, self._trailing_stops.get(symbol, 0.0), 0.0)
-                    return {
-                        "action": "trim", "reason": "take_profit_50pct",
-                        "strategy": strategy_name, "trim_qty": trim_qty, "side": side,
-                        "pct_gain": unrealized_plpc, "trailing_stop_set": True, "trail_distance_pct": 10.0,
-                    }
-            if state["tier1_done"] and not state["tier2_done"] and unrealized_plpc >= 75.0:
-                trim_qty = min(round(original_qty * 0.25, 6), total_qty)
-                if trim_qty >= 1:
-                    state["tier2_done"] = True
-                    return {
-                        "action": "trim", "reason": "take_profit_75pct",
-                        "strategy": strategy_name, "trim_qty": trim_qty, "side": side,
-                        "pct_gain": unrealized_plpc,
-                    }
-            if state["tier2_done"] and not state["tier3_trailing"] and unrealized_plpc >= 100.0:
-                state["tier3_trailing"] = True
-                # Close remaining -- 100%+ gain = strong sell signal
-                return {
-                    "action": "trim", "reason": "take_profit_100pct_close_all",
-                    "strategy": strategy_name, "trim_qty": total_qty, "side": side,
-                    "pct_gain": unrealized_plpc,
-                }
-            return None
-
-        # Medium/long: Tier1 +50% -> trim 50%, Tier2 +75% -> trim 25%, Tier3 +100% -> close all
-        if not state["tier1_done"] and unrealized_plpc >= 50.0:
-            trim_qty = round(total_qty * 0.5, 6)
-            if trim_qty >= 1:
-                state["tier1_done"] = True
-                state["stop_at_breakeven"] = True
-                self._trailing_stops[symbol] = max(0.0, self._trailing_stops.get(symbol, 0.0))
-                return {
-                    "action": "trim", "reason": "take_profit_50pct",
-                    "strategy": strategy_name, "trim_qty": trim_qty, "side": side,
-                    "pct_gain": unrealized_plpc, "stop_moved_to_breakeven": True,
-                }
-
-        # Tier2 +75% -> trim 25% of original
-        if state["tier1_done"] and not state["tier2_done"] and unrealized_plpc >= 75.0:
-            trim_qty = min(round(original_qty * 0.25, 6), total_qty)
-            if trim_qty >= 1:
-                state["tier2_done"] = True
-                return {
-                    "action": "trim", "reason": "take_profit_75pct",
-                    "strategy": strategy_name, "trim_qty": trim_qty, "side": side,
-                    "pct_gain": unrealized_plpc,
-                }
-
-        # Tier3 +100% -> close all remaining -- strong sell signal
-        if state["tier2_done"] and not state["tier3_trailing"] and unrealized_plpc >= 100.0:
-            state["tier3_trailing"] = True
-            return {
-                "action": "trim", "reason": "take_profit_100pct_close_all",
-                "strategy": strategy_name, "trim_qty": total_qty, "side": side,
-                "pct_gain": unrealized_plpc,
-            }
-
-        # If past tier2 but not 100% yet, enable trailing stop at 15% distance
-        if state["tier2_done"] and unrealized_plpc >= 75.0:
-            new_stop = unrealized_plpc - 15.0
-            self._trailing_stops[symbol] = max(new_stop, self._trailing_stops.get(symbol, 0.0), 0.0)
-
-        return None
-
-    def _log_trim(self, detail: Dict[str, Any]):
-        """Append trim/take-profit action to position_manager.jsonl."""
-        event_type = "position_trimmed" if detail.get("trim_qty", 0) > 0 else "take_profit_triggered"
+    def _log_close(self, detail: Dict[str, Any]):
+        """Append close proposal or executed close to position_manager.jsonl."""
+        event_type = detail.get("event") or (
+            "position_closed" if detail.get("status") == "executed" else "position_close_proposed"
+        )
         row = {
             "schema_version": "position_manager_close.v1",
             "timestamp_utc": iso_now(),
             "event_type": event_type,
-            **detail,
-        }
-        try:
-            with self.position_log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        except Exception as e:
-            print(f"[{iso_now()}] Failed to log position trim: {e}", file=sys.stderr)
-
-    def _log_close(self, detail: Dict[str, Any]):
-        """Append close action to position_manager.jsonl."""
-        row = {
-            "schema_version": "position_manager_close.v1",
-            "timestamp_utc": iso_now(),
-            "event_type": "position_closed",
             **detail,
         }
         try:
@@ -858,7 +651,7 @@ class PositionManager:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Position Manager - check and close positions")
+    parser = argparse.ArgumentParser(description="Position Manager - check and propose position closes")
     parser.add_argument("--repo-root", default=".", help="Repository root path")
     parser.add_argument("--profit-target", type=float, default=2.0, help="Profit target %% (default 2)")
     parser.add_argument("--stop-loss", type=float, default=1.0, help="Stop loss %% (default 1)")

@@ -207,3 +207,48 @@ def test_feature_freshness_ignores_advisory_staleness(tmp_path: Path):
     assert result["active_degraded_groups"] == 0
     assert result["max_confidence_penalty"] == 0
     assert result["overall_max_confidence_penalty"] > 0
+
+
+def test_position_alert_marks_manual_approval_required(tmp_path: Path):
+    class DummyAlerter:
+        def __init__(self):
+            self.calls = []
+
+        def _dispatch(self, title, body, level="info", extra=None):
+            self.calls.append({
+                "title": title,
+                "body": body,
+                "level": level,
+                "extra": extra or {},
+            })
+
+    monitor = CrisisMonitor.__new__(CrisisMonitor)
+    monitor.repo_root = tmp_path
+    monitor.alerter = DummyAlerter()
+
+    monitor._send_position_alert(
+        {
+            "actions_taken": 0,
+            "proposed_close_count": 1,
+            "manual_approval_required": True,
+            "profits_taken": 1,
+            "stops_hit": 0,
+            "eod_flattened": 0,
+            "close_details": [
+                {
+                    "symbol": "TEST",
+                    "reason": "take_profit",
+                    "unrealized_plpc": 0.05,
+                    "unrealized_pl": 500.0,
+                    "status": "pending_manual_approval",
+                }
+            ],
+        }
+    )
+
+    assert len(monitor.alerter.calls) == 1
+    call = monitor.alerter.calls[0]
+    assert call["title"] == "Position Manager: 1 close(s) require approval"
+    assert "Auto-close is blocked" in call["body"]
+    assert call["extra"]["event"] == "position_management_review_required"
+    assert call["extra"]["manual_approval_required"] is True

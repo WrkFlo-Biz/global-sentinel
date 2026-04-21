@@ -93,14 +93,6 @@ class MultiBackendOrchestrator:
             logger.info("Classical greedy baseline unavailable: %s", exc)
             self.backends["classical_greedy"] = {"status": "unavailable", "reason": str(exc)}
 
-        # Quantum Reservoir regime detection (6-qubit PennyLane reservoir computing)
-        try:
-            from src.research.quantum_reservoir import QuantumRegimeClassifier
-            self.backends["quantum_reservoir"] = QuantumRegimeClassifier()
-        except Exception as exc:
-            logger.info("Quantum reservoir backend unavailable: %s", exc)
-            self.backends["quantum_reservoir"] = {"status": "unavailable", "reason": str(exc)}
-
     def _load_screening_pipeline(self) -> None:
         try:
             from src.research.backends.anomaly_screening_pipeline import (
@@ -186,31 +178,6 @@ class MultiBackendOrchestrator:
                         },
                     })
                     succeeded.append(name)
-                elif name == "quantum_reservoir":
-                    # Quantum reservoir regime detection -- runs independently
-                    market_data = optimization_request.get("market_microstructure", {})
-                    if not market_data:
-                        market_data = optimization_request.get("regime_state", {})
-                    reservoir_result = backend.predict(market_data=market_data or None)
-                    results[name] = self._ensure_result_guardrails(name, {
-                        "backend": "quantum_reservoir",
-                        "status": reservoir_result.get("status", "error"),
-                        "regime_prediction": reservoir_result.get("quantum_prediction"),
-                        "classical_comparison": reservoir_result.get("classical_prediction"),
-                        "agreement": reservoir_result.get("agreement"),
-                        "ensemble_probabilities": reservoir_result.get("ensemble_probabilities"),
-                        "execution_metadata": {
-                            "not_for_direct_execution": True,
-                            "quantum_direct_execution_forbidden": True,
-                            "bounded_secondary_signal_only": True,
-                            "backend": "quantum_reservoir",
-                            "n_qubits": 6,
-                        },
-                    })
-                    if reservoir_result.get("status") == "success":
-                        succeeded.append(name)
-                    else:
-                        failed.append(name)
                 elif hasattr(backend, "run"):
                     r = backend.run(
                         self._build_quantum_request(optimization_request, request_hash)
@@ -448,25 +415,12 @@ class MultiBackendOrchestrator:
 
         best = max(objective_values, key=objective_values.get) if objective_values else None
 
-        # Quantum reservoir regime detection summary
-        regime_summary = None
-        reservoir_result = results.get("quantum_reservoir")
-        if isinstance(reservoir_result, dict) and reservoir_result.get("status") == "success":
-            regime_summary = {
-                "quantum_regime": (reservoir_result.get("regime_prediction") or {}).get("regime"),
-                "quantum_confidence": (reservoir_result.get("regime_prediction") or {}).get("confidence"),
-                "classical_regime": (reservoir_result.get("classical_comparison") or {}).get("regime"),
-                "agreement": reservoir_result.get("agreement"),
-                "ensemble_probabilities": reservoir_result.get("ensemble_probabilities"),
-            }
-
         return {
             "objective_values": objective_values,
             "runtime_seconds": runtimes,
             "selection_overlap": overlap,
             "best_objective_backend": best,
             "quantum_vs_strong_classical_delta": q_delta,
-            "quantum_reservoir_regime": regime_summary,
         }
 
 

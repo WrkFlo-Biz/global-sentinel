@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Factor Decomposition weekly on Saturdays at 10:00 UTC
+
+[Timer]
+OnCalendar=Sat *-*-* 10:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

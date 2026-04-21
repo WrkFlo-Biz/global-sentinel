@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=gsadmin
-Group=gsadmin
-WorkingDirectory=/home/gsadmin/global-sentinel
-EnvironmentFile=/home/gsadmin/global-sentinel/.env
-ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/self_improvement_loop.py
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/opt/global-sentinel/.venv/bin/python scripts/self_improvement_loop.py
 Restart=on-failure
 RestartSec=60
 StartLimitIntervalSec=600
@@ -21,9 +22,9 @@ SyslogIdentifier=openclaw-research
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/gsadmin/global-sentinel/logs
-ReadWritePaths=/home/gsadmin/global-sentinel/reports
-ReadWritePaths=/home/gsadmin/global-sentinel/config/staging
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/opt/global-sentinel/config/staging
 ReadWritePaths=/tmp
 
 [Install]

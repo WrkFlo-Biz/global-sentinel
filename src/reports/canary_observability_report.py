@@ -323,18 +323,16 @@ class CanaryObservabilityReportBuilder:
 
     def _is_canary_artifact(self, path: Path, payload: Dict[str, Any]) -> bool:
         name = path.name.lower()
-        schema_version = str(payload.get("schema_version", "")) if isinstance(payload, dict) else ""
+        schema_version = str(payload.get("schema_version", ""))
         if name in {"canary_readiness_report.json", "canary_observability_report.json"}:
             return False
         if schema_version == "canary_comparison.v1":
             return True
-        if isinstance(payload, dict) and bool(payload.get("canary_evidence_only")):
+        if bool(payload.get("canary_evidence_only")):
             return True
-        return isinstance(payload, dict) and "canary_vs_baseline_divergence" in payload
+        return "canary_vs_baseline_divergence" in payload
 
     def _artifact_timestamp(self, payload: Dict[str, Any], path: Path) -> str:
-        if not isinstance(payload, dict):
-            return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
         for key in ("timestamp", "timestamp_utc", "generated_at"):
             value = payload.get(key)
             if isinstance(value, str) and value:

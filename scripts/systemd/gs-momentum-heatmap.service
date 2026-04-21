@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel: Intraday Momentum Heatmap (weekdays every 15min 13:30-20:00 UTC)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/bin/bash -c "set -a && source /opt/global-sentinel/.env 2>/dev/null && set +a && /usr/bin/python3 /opt/global-sentinel/src/bridges/momentum_heatmap.py >> /opt/global-sentinel/logs/momentum_heatmap.log 2>&1"
+User=openclaw
+Group=openclaw

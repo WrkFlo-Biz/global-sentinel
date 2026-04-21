@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel: Sector Relative Performance (weekdays every 30min 13:30-20:00 UTC)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/bin/bash -c '/usr/bin/python3 -m src.research.sector_relative >> /opt/global-sentinel/logs/sector_relative.log 2>&1'
+User=openclaw
+Group=openclaw

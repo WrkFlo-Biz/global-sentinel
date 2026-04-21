@@ -1,0 +1,25 @@
+[Unit]
+Description=Global Sentinel Quantum Continuous Learning System
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/quantum_continuous_learner.py
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+CPUQuota=200%
+MemoryMax=1536M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-quantum-learner
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

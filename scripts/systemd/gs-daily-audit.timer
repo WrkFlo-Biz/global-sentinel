@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily comprehensive system audit at 6 AM UTC (1 AM ET)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

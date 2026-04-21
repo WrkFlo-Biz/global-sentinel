@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel Daily Thesis Generator
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/daily_thesis_generator.py
+StandardOutput=journal
+StandardError=journal

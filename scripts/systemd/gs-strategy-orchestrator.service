@@ -1,0 +1,10 @@
+[Unit]
+Description=Global Sentinel Multi-Asset Strategy Orchestrator
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/strategies/strategy_orchestrator.py
+StandardOutput=journal
+StandardError=journal

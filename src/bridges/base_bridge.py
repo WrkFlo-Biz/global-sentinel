@@ -49,9 +49,10 @@ class BaseBridge(ABC):
 
     def _mark_success(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._last_fetch_time = datetime.now(timezone.utc)
-        self._last_fetch_result = payload
+        normalized = self._attach_canonical_ledger(payload)
+        self._last_fetch_result = normalized
         self._consecutive_failures = 0
-        return payload
+        return normalized
 
     def _mark_failure(self, error: Any) -> Dict[str, Any]:
         self._consecutive_failures += 1
@@ -66,3 +67,55 @@ class BaseBridge(ABC):
         }
         self._last_fetch_result = payload
         return payload
+
+    def _attach_canonical_ledger(self, payload: Any) -> Any:
+        """Attach canonical event metadata to any event-like payloads.
+
+        The bridge fleet emits a mix of direct packets, lists of packets,
+        and wrapper dicts that carry packet lists under keys like ``data``
+        or ``packets``. This helper walks those common shapes and uses the
+        shared research ledger normalizer when a value looks event-like.
+        """
+        try:
+            from src.research.event_ledger import attach_event_ledger
+        except Exception:
+            return payload
+
+        def looks_like_event_packet(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            event_keys = (
+                "event_type",
+                "event_id",
+                "packet_id",
+                "headline",
+                "title",
+                "summary",
+                "published_time_utc",
+                "published_date",
+                "source_url",
+                "source_domain",
+                "category",
+                "tags",
+            )
+            return any(value.get(key) not in (None, "", [], {}) for key in event_keys)
+
+        def recurse(value: Any) -> Any:
+            if isinstance(value, list):
+                return [recurse(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+
+            updated = dict(value)
+            for key in ("data", "packets", "events", "items", "results"):
+                nested = updated.get(key)
+                if isinstance(nested, list):
+                    updated[key] = [recurse(item) for item in nested]
+                elif isinstance(nested, dict):
+                    updated[key] = recurse(nested)
+
+            if looks_like_event_packet(updated):
+                return attach_event_ledger(updated, bridge_name=self.source)
+            return updated
+
+        return recurse(payload)

@@ -318,12 +318,6 @@ class OriginProviderConfig:
             return "origin-pilot"
         if parse_bool(os.getenv("ORIGINQ_ENABLE_LOCAL_SIM"), False):
             return "origin-local"
-        if parse_bool(os.getenv("QISKIT_AER_ENABLED"), False):
-            return "qiskit-aer"
-        # FIXED: Prefer Qiskit Aer over classical fallback
-        import os as _os
-        if _os.getenv("QISKIT_AER_ENABLED", "").lower() == "true":
-            return "qiskit-aer"
         return "classical"
 
     def redacted(self) -> Dict[str, Any]:
@@ -509,9 +503,7 @@ class QuantumOptimizerBridge:
         config = self.provider_config
         quantum_weight = parse_float(objective.get("quantum_weight"), config.quantum_weight)
         resolved = config.resolved_provider()
-        sdk = None
-        if resolved != "qiskit-aer":
-            sdk = self._import_origin_sdk()
+        sdk = self._import_origin_sdk()
         algorithm_family = str(objective.get("algorithm_family") or "qaoa")
         formulation_id = str(objective.get("formulation_id") or objective.get("type") or "unregistered")
 
@@ -524,10 +516,8 @@ class QuantumOptimizerBridge:
         if not evaluated:
             return candidates, "classical_fallback", {"provider_skipped": "no_feasible_candidates"}
 
-        # Build QPanda circuits (skip for qiskit-aer which uses its own circuit construction)
-        programs, originirs, thetas = [], [], []
-        if resolved != "qiskit-aer":
-            programs, originirs, thetas = self._build_program_batch(sdk, evaluated)
+        # Build QPanda circuits
+        programs, originirs, thetas = self._build_program_batch(sdk, evaluated)
 
         # Dispatch to appropriate backend
         if resolved == "origin-local":
@@ -556,13 +546,6 @@ class QuantumOptimizerBridge:
                 formulation_id=formulation_id,
             )
             provider_name = f"origin_pilot:{config.pilot_chip_id}"
-        elif resolved == "qiskit-aer":
-            quantum_scores, provider_diag = self._run_qiskit_aer(
-                evaluated,
-                algorithm_family=algorithm_family,
-                formulation_id=formulation_id,
-            )
-            provider_name = "qiskit_aer_simulator"
         else:
             raise RuntimeError(f"Unsupported provider resolution: {resolved}")
 
@@ -733,11 +716,8 @@ class QuantumOptimizerBridge:
                 counts = run_rotation_on_cpuqvm(sdk, theta=theta, shots=shots)
                 scores.append(self._measurement_probability(counts))
         else:
-            # QPanda3 path (fallback): try running pre-built programs
-            qvm = sdk["CPUQVM"]()
-            for prog in programs:
-                qvm.run(prog, shots)
-                counts = qvm.result().get_counts()
+            for theta in (thetas or []):
+                counts = run_rotation_on_cpuqvm(sdk, theta=theta, shots=shots)
                 scores.append(self._measurement_probability(counts))
         return scores, {
             "provider_mode": "origin-local",
@@ -773,7 +753,11 @@ class QuantumOptimizerBridge:
         if not config.api_key or not config.backend_name:
             raise RuntimeError("Origin QCloud requires ORIGINQ_API_KEY and ORIGINQ_BACKEND_NAME")
 
-        service = sdk["QCloudService"](config.api_key, config.cloud_url)
+        try:
+            service = sdk["QCloudService"](config.api_key, config.cloud_url)
+        except TypeError:
+            service = sdk["QCloudService"]()
+            service.init(config.api_key, config.cloud_url)
         available_backends = service.backends()
         if config.backend_name not in available_backends:
             raise RuntimeError(
@@ -900,66 +884,6 @@ class QuantumOptimizerBridge:
         }
 
     # ----- Scoring helpers -----
-
-
-    def _run_qiskit_aer(
-        self,
-        evaluated: List[Dict[str, Any]],
-        *,
-        algorithm_family: str,
-        formulation_id: str,
-    ) -> Tuple[List[float], Dict[str, Any]]:
-        """Run Qiskit Aer local simulator as fallback when Origin SDK is unavailable.
-
-        Uses single-qubit RY rotation circuits (same encoding as QPanda path)
-        to produce quantum probability scores for each candidate.
-        """
-        from qiskit import QuantumCircuit
-        from qiskit_aer import AerSimulator
-
-        shots = self.provider_config.shots
-        probabilities = self._normalize_probabilities(
-            item["classical_score"] for item in evaluated
-        )
-        scores: List[float] = []
-        sim = AerSimulator()
-
-        for candidate, probability in zip(evaluated, probabilities):
-            theta = 2.0 * math.asin(math.sqrt(probability))
-            candidate["origin_probability_target"] = probability
-            candidate["origin_rotation_theta"] = theta
-
-            qc = QuantumCircuit(1, 1)
-            qc.ry(theta, 0)
-            qc.measure(0, 0)
-
-            job = sim.run(qc, shots=shots)
-            counts = job.result().get_counts()
-            total = sum(counts.values())
-            excited = counts.get("1", 0)
-            scores.append(excited / total if total > 0 else 0.0)
-
-        return scores, {
-            "provider_mode": "qiskit-aer",
-            "provider_sdk_version": "qiskit-aer",
-            "provider_job_count": len(evaluated),
-            "algorithm_family": algorithm_family,
-            "formulation_id": formulation_id,
-            "execution_metadata": {
-                "not_for_direct_execution": True,
-                "quantum_direct_execution_forbidden": True,
-                "bounded_secondary_signal_only": True,
-                "backend": "qiskit_aer_simulator",
-                "provider_name": "qiskit-aer",
-                "shots": shots,
-                "algorithm_family": algorithm_family,
-                "formulation_id": formulation_id,
-                "async_submission": False,
-                "job_submission_mode": "synchronous_aer",
-                "bridge_version": VERSION,
-                "artifact_only": self.artifact_only,
-            },
-        }
 
     def _score_candidate(
         self,

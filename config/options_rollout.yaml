@@ -1,19 +1,15 @@
-version: "1.1"
-last_updated: "2026-03-26"
+version: "1.0"
+last_updated: "2026-03-06"
 
 options:
-  enabled: true
+  enabled: false
   kill_switch: true
-  phase: "guarded_live"  # disabled | paper_single_leg | guarded_live
+  phase: "disabled"  # disabled | paper_single_leg | guarded_live
 
   # Rollout policy
   allowed_strategies:
     - medium_long
-    - day_trade
   allow_naked_short: false
-  allowed_instruments:
-    - long_call
-    - long_put
 
   # Per-order guardrails
   max_contracts_per_order: 1

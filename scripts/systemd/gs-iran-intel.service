@@ -1,0 +1,29 @@
+[Unit]
+Description=Global Sentinel Iran War Intelligence Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u scripts/ops/iran_war_intelligence.py
+Restart=on-failure
+RestartSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-iran-intel
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/reports
+ReadWritePaths=/opt/global-sentinel/control
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

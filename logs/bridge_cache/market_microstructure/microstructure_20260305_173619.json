@@ -1,0 +1,20 @@
+{
+  "SPY": {
+    "adv_shares": 82138362.0,
+    "sigma_daily_pct": 0.8622,
+    "last_price": 677.32,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T17:36:19.088986+00:00",
+    "data_points": 21
+  },
+  "DAL": {
+    "adv_shares": 8810455.0,
+    "sigma_daily_pct": 3.6653,
+    "last_price": 59.28,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T17:36:19.357116+00:00",
+    "data_points": 21
+  }
+}

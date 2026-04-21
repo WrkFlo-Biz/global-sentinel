@@ -151,18 +151,39 @@ class ResearchEvalHarness:
     def _score_execution_realism(
         self, rc: Dict[str, Any], warnings: List[str]
     ) -> float:
-        """Check if slippage_adjusted_delta exists and is positive."""
+        """Check if execution survives slippage, fill-quality, and time-to-edge tests."""
+        scores: List[float] = []
         sad = rc.get("slippage_adjusted_delta")
         if sad is None:
             warnings.append("execution_realism: slippage_adjusted_delta missing")
-            return 0.0
-        if not isinstance(sad, (int, float)):
+        elif not isinstance(sad, (int, float)):
             warnings.append("execution_realism: slippage_adjusted_delta non-numeric")
+        elif sad > 0:
+            scores.append(min(1.0, float(sad) / 0.01))
+        else:
+            scores.append(0.0)
+
+        fill_quality = rc.get("fill_quality_score")
+        if fill_quality is not None and isinstance(fill_quality, (int, float)):
+            scores.append(max(0.0, min(1.0, float(fill_quality))))
+        else:
+            warnings.append("execution_realism: fill_quality_score missing or non-numeric")
+
+        fill_rate = rc.get("fill_rate")
+        if fill_rate is not None and isinstance(fill_rate, (int, float)):
+            scores.append(max(0.0, min(1.0, float(fill_rate))))
+
+        time_to_edge_score = rc.get("time_to_edge_score")
+        if time_to_edge_score is not None and isinstance(time_to_edge_score, (int, float)):
+            scores.append(max(0.0, min(1.0, float(time_to_edge_score))))
+        else:
+            time_to_edge_minutes = rc.get("time_to_edge_minutes")
+            if time_to_edge_minutes is not None and isinstance(time_to_edge_minutes, (int, float)):
+                scores.append(max(0.0, min(1.0, 1.0 - min(float(time_to_edge_minutes) / 240.0, 1.0))))
+
+        if not scores:
             return 0.0
-        if sad <= 0:
-            return 0.0
-        # Positive delta: score scales linearly, 1.0 at delta >= 0.01
-        return min(1.0, float(sad) / 0.01)
+        return sum(scores) / len(scores)
 
     def _score_safety_compliance(
         self, rc: Dict[str, Any], warnings: List[str]
@@ -213,8 +234,8 @@ class ResearchEvalHarness:
     def _score_drift_sensitivity(
         self, rc: Dict[str, Any], warnings: List[str]
     ) -> float:
-        """Check if drift_score < max_drift."""
-        drift = rc.get("drift_score")
+        """Check if drift and edge decay remain bounded."""
+        drift = rc.get("decay_adjusted_drift", rc.get("drift_score"))
         if drift is None:
             warnings.append("drift_sensitivity: drift_score missing")
             return 0.0
@@ -226,8 +247,25 @@ class ResearchEvalHarness:
             return 0.0
         if drift >= self.max_drift:
             return 0.0
-        # Linear scale: 0 drift -> 1.0, max_drift -> 0.0
-        return 1.0 - (float(drift) / self.max_drift)
+        base_score = 1.0 - (float(drift) / self.max_drift)
+
+        decaying_edge_ratio = rc.get("decaying_edge_ratio")
+        if decaying_edge_ratio is not None:
+            if not isinstance(decaying_edge_ratio, (int, float)):
+                warnings.append("drift_sensitivity: decaying_edge_ratio non-numeric")
+                return 0.0
+            ratio = max(0.0, min(1.0, float(decaying_edge_ratio)))
+            base_score *= (1.0 - (ratio * 0.5))
+
+        edge_decay_score = rc.get("edge_decay_score")
+        if edge_decay_score is not None:
+            if not isinstance(edge_decay_score, (int, float)):
+                warnings.append("drift_sensitivity: edge_decay_score non-numeric")
+                return 0.0
+            decay = max(0.0, min(1.0, float(edge_decay_score)))
+            base_score *= (1.0 - (decay * 0.4))
+
+        return max(0.0, min(1.0, base_score))
 
     def _score_compute_cost(
         self, rc: Dict[str, Any], warnings: List[str]

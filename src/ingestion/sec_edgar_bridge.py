@@ -23,7 +23,7 @@ EDGAR_ATOM = (
 EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index"
 
 # SEC requires a descriptive User-Agent with contact info
-USER_AGENT = "GlobalSentinel research@wrk.flo"
+USER_AGENT = "GlobalSentinel research@wrkflo.biz"
 
 # Filing-type relevance weights (higher = more market-moving)
 FILING_RELEVANCE: Dict[str, float] = {

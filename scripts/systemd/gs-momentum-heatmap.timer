@@ -1,0 +1,10 @@
+[Unit]
+Description=Global Sentinel: Momentum Heatmap Timer (weekdays every 15min market hours)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13..19:00,15,30,45:00 UTC
+OnCalendar=Mon..Fri *-*-* 20:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

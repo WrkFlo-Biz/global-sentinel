@@ -20,11 +20,7 @@ from src.packets.geopolitical_event import make_geopolitical_event
 
 logger = get_logger("gpr_index_bridge")
 
-# 2026-03: CSV endpoint removed; site now only serves XLS.  We read the XLS
-# with pandas+xlrd and keep a CSV cache for offline fallback.
-GPR_DATA_URL_XLS = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
-# Legacy CSV URL (no longer served — kept for reference only)
-GPR_DATA_URL_CSV_LEGACY = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.csv"
+GPR_DATA_URL = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.csv"
 
 
 class GPRIndexBridge:
@@ -51,16 +47,11 @@ class GPRIndexBridge:
 
     def _poll_live(self) -> List[Dict[str, Any]]:
         import requests
-        import pandas as pd
-
-        resp = requests.get(GPR_DATA_URL_XLS, timeout=20)
+        resp = requests.get(GPR_DATA_URL, timeout=15)
         resp.raise_for_status()
+        text = resp.text
 
-        # Parse XLS into a DataFrame, then convert to CSV for caching/parsing
-        df = pd.read_excel(io.BytesIO(resp.content))
-        text = df.to_csv(index=False)
-
-        # Cache as CSV for offline use
+        # Cache for offline use
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(text, encoding="utf-8")
 
@@ -107,7 +98,7 @@ class GPRIndexBridge:
         # GPR severity mapping: historical mean ~100, spikes to 300+ in crises
         severity = self._map_severity(gpr_value)
 
-        row_date = latest.get("date", latest.get("Date", latest.get("DAY", "unknown")))
+        row_date = latest.get("date", latest.get("Date", "unknown"))
         packet = make_geopolitical_event(
             source="gpr_index",
             source_tier="tier_3_research",
@@ -122,7 +113,7 @@ class GPRIndexBridge:
             confidence=0.80,
             provenance={
                 "bridge": "gpr_index_bridge",
-                "data_url": GPR_DATA_URL_XLS,
+                "data_url": GPR_DATA_URL,
                 "row_date": row_date,
             },
         ).to_dict()

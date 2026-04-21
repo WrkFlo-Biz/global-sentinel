@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=openclaw
 WorkingDirectory=/opt/global-sentinel
 EnvironmentFile=-/opt/global-sentinel/.env
 ExecStart=/usr/bin/python3 -u scripts/ops/continuous_strategy_trainer.py --interval 30 --scenarios-per-cycle 10
@@ -21,8 +20,6 @@ CPUQuota=25%
 
 # Security hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/opt/global-sentinel/logs /opt/global-sentinel/data
 
 [Install]
 WantedBy=default.target

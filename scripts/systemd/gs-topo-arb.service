@@ -1,0 +1,12 @@
+[Unit]
+Description=Global Sentinel Topological Graph Arbitrage
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/research/topological_graph_arbitrage.py
+StandardOutput=journal
+StandardError=journal

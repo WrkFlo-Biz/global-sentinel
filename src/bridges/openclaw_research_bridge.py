@@ -179,7 +179,7 @@ class OpenClawResearchBridge(BaseBridge):
         payload = {
             "chat_id": self._chat_id,
             "text": query,
-            "parse_mode": "Markdown", "message_thread_id": 74,
+            "parse_mode": "Markdown",
         }
 
         try:

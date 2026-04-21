@@ -32,10 +32,10 @@ from fastapi.staticfiles import StaticFiles
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
-LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 15.0
+LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
 LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
-REST_QUOTE_REFRESH_INTERVAL_SECONDS = 45.0
-REST_QUOTE_COOLDOWN_SECONDS = 15.0
+REST_QUOTE_REFRESH_INTERVAL_SECONDS = 15.0
+REST_QUOTE_COOLDOWN_SECONDS = 5.0
 MARKET_DATA_CONNECTION_LIMIT_COOLDOWN_SECONDS = 120.0
 ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
 
@@ -287,6 +287,12 @@ ALPACA_HISTORY_CACHE_TTL_SECONDS = {
     "1H": 10.0,
     "1D": 30.0,
 }
+BROKER_ACCOUNT_CACHE_TTL_SECONDS = 15.0
+BROKER_DISCOVERY_CACHE_TTL_SECONDS = 300.0
+TASTYTRADE_SESSION_CACHE_TTL_SECONDS = 3600.0
+PORTFOLIO_SNAPSHOT_FILE = Path(os.getenv("BROKER_SNAPSHOT_FILE", str(REPO_ROOT / "data" / "broker_snapshots" / "portfolio.json")))
+TASTYTRADE_SNAPSHOT_FILE = Path(os.getenv("TASTYTRADE_SNAPSHOT_FILE", str(REPO_ROOT / "data" / "broker_snapshots" / "tastytrade.json")))
+TASTYTRADE_SESSION_CACHE_FILE = Path(os.getenv("TASTYTRADE_SESSION_CACHE_FILE", str(REPO_ROOT / ".tastytrade_session.json")))
 _ALPACA_RESPONSE_CACHE: Dict[str, Dict[str, Any]] = {}
 _ALPACA_RESPONSE_CACHE_LOCK = threading.Lock()
 
@@ -391,6 +397,757 @@ def _freshness_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "cache_age_ms": round(max(cache_ages), 1) if cache_ages else 0.0,
         "cache_status": _cache_status_from_items(items),
     }
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _dedupe_strings(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def _env_csv_values(*names: str) -> List[str]:
+    _load_env()
+    values: List[str] = []
+    for name in names:
+        raw = os.getenv(name, "")
+        if not raw:
+            continue
+        values.extend(part.strip() for part in raw.split(","))
+    return _dedupe_strings(values)
+
+
+def _env_sequential_values(prefix: str) -> List[str]:
+    _load_env()
+    values: List[tuple[int, str]] = []
+    for key, raw in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix):]
+        if not suffix.isdigit():
+            continue
+        cleaned = str(raw or "").strip()
+        if not cleaned:
+            continue
+        values.append((int(suffix), cleaned))
+    return _dedupe_strings([value for _, value in sorted(values)])
+
+
+def _json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    body: Optional[Dict[str, Any]] = None,
+    timeout: int = 15,
+    verify_ssl: bool = True,
+) -> Any:
+    import ssl
+    import urllib.request
+
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+    request_headers = dict(headers or {})
+    req = urllib.request.Request(url, data=payload, headers=request_headers, method=method)
+    context = None if verify_ssl else ssl._create_unverified_context()
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+        raw = resp.read().decode("utf-8")
+    if not raw:
+        return {}
+    return json.loads(raw)
+
+
+def _payload_object(payload: Any) -> Dict[str, Any]:
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return data
+        return payload
+    return {}
+
+
+def _payload_items(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("items", "positions", "accounts", "values"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        for key in ("items", "positions", "accounts", "values"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _account_public_metadata(acct: Dict[str, Any]) -> Dict[str, Any]:
+    broker = str(acct.get("broker") or "alpaca")
+    label = str(acct.get("label") or broker)
+    account_number = str(acct.get("account_number") or "")
+    display_label = str(acct.get("display_label") or label.replace("_", " "))
+    is_live = bool(acct.get("is_live"))
+    return {
+        "label": label,
+        "broker": broker,
+        "display_label": display_label,
+        "account_number": account_number,
+        "is_live": is_live,
+    }
+
+
+def _normalize_ibkr_base_url(base_url: Optional[str]) -> str:
+    normalized = (base_url or os.getenv("IBKR_CLIENT_PORTAL_BASE_URL") or os.getenv("IBKR_BASE_URL") or "https://localhost:5000/v1/api").rstrip("/")
+    if normalized.endswith("/v1/api"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/api"
+    if normalized.endswith("/api"):
+        return normalized
+    return f"{normalized}/v1/api"
+
+
+def _load_tastytrade_snapshot() -> Dict[str, Any]:
+    for snapshot_file in (PORTFOLIO_SNAPSHOT_FILE, TASTYTRADE_SNAPSHOT_FILE):
+        if not snapshot_file.exists():
+            continue
+        snapshot = load_json(snapshot_file)
+        if isinstance(snapshot, dict):
+            return snapshot
+    return {}
+
+
+def _load_tastytrade_session_cache() -> Dict[str, Any]:
+    if not TASTYTRADE_SESSION_CACHE_FILE.exists():
+        return {}
+    session = load_json(TASTYTRADE_SESSION_CACHE_FILE)
+    return session if isinstance(session, dict) else {}
+
+
+def _snapshot_accounts(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    accounts = snapshot.get("accounts")
+    if isinstance(accounts, list):
+        return [item for item in accounts if isinstance(item, dict)]
+    return []
+
+
+def _find_tastytrade_snapshot_account(account_number: str, label: str) -> Optional[Dict[str, Any]]:
+    snapshot = _load_tastytrade_snapshot()
+    if not snapshot:
+        return None
+
+    for item in _snapshot_accounts(snapshot):
+        item_account_number = str(_first_present(item.get("account_number"), item.get("account-number")) or "").strip()
+        item_label = str(item.get("label") or "").strip()
+        if account_number and item_account_number == account_number:
+            payload = copy.deepcopy(item)
+            payload["_snapshot_generated_at_utc"] = snapshot.get("generated_at_utc")
+            payload["_snapshot_source"] = snapshot.get("source")
+            return payload
+        if label and item_label == label:
+            payload = copy.deepcopy(item)
+            payload["_snapshot_generated_at_utc"] = snapshot.get("generated_at_utc")
+            payload["_snapshot_source"] = snapshot.get("source")
+            return payload
+
+    return None
+
+
+def _snapshot_account_fallback(metadata: Dict[str, Any], account_number: str, exc: Exception) -> Dict[str, Any]:
+    snapshot = _find_tastytrade_snapshot_account(account_number, str(metadata.get("label") or ""))
+    if snapshot is None:
+        raise exc
+
+    snapshot = copy.deepcopy(snapshot)
+    positions = snapshot.get("positions")
+    if not isinstance(positions, list):
+        positions = []
+    positions = [item for item in positions if isinstance(item, dict)]
+    timestamp_utc = str(
+        _first_present(
+            snapshot.get("timestamp_utc"),
+            snapshot.get("source_timestamp_utc"),
+            snapshot.get("_snapshot_generated_at_utc"),
+        )
+        or _utc_now_iso()
+    )
+    equity = _safe_float(snapshot.get("equity"))
+    cash = _safe_float(snapshot.get("cash"))
+    buying_power = _safe_float(snapshot.get("buying_power"))
+    portfolio_value = _safe_float(snapshot.get("portfolio_value") or equity or sum(position.get("market_value", 0.0) for position in positions))
+    return {
+        **metadata,
+        **{k: v for k, v in snapshot.items() if k not in {"positions", "timestamp_utc", "source_timestamp_utc", "_snapshot_generated_at_utc", "_snapshot_source"}},
+        "account_number": account_number or str(snapshot.get("account_number") or ""),
+        "equity": equity,
+        "cash": cash,
+        "buying_power": buying_power,
+        "portfolio_value": portfolio_value,
+        "positions": positions,
+        "position_count": len(positions),
+        "status": "ok",
+        "timestamp_utc": timestamp_utc,
+        "source_timestamp_utc": snapshot.get("timestamp_utc") or snapshot.get("source_timestamp_utc") or snapshot.get("_snapshot_generated_at_utc") or timestamp_utc,
+        "fetched_at_utc": snapshot.get("fetched_at_utc") or timestamp_utc,
+        "cache_age_ms": snapshot.get("cache_age_ms", 0.0),
+        "cache_status": "snapshot",
+        "data_source": "snapshot",
+        "snapshot_error": str(exc),
+    }
+
+
+def _get_tastytrade_session(
+    *,
+    base_url: str,
+    username: Optional[str],
+    password: Optional[str],
+    force_refresh: bool = False,
+) -> str:
+    _load_env()
+    env_token = str(os.getenv("TASTYTRADE_SESSION_TOKEN", "")).strip()
+    if env_token and not force_refresh:
+        return env_token
+
+    cache_key = f"tastytrade_session:{base_url}:{username or 'default'}"
+    if not force_refresh:
+        cached = _cache_lookup(cache_key, ttl_seconds=TASTYTRADE_SESSION_CACHE_TTL_SECONDS)
+        if cached:
+            token = str((cached["value"] or {}).get("session_token") or "")
+            if token:
+                return token
+        session_cache = _load_tastytrade_session_cache()
+        cached_token = str(
+            _first_present(
+                session_cache.get("session_token"),
+                session_cache.get("session-token"),
+            )
+            or ""
+        ).strip()
+        if cached_token:
+            _cache_store(cache_key, {"session_token": cached_token})
+            return cached_token
+
+    if not username or not password:
+        raise RuntimeError("TastyTrade credentials not configured")
+
+    payload = _json_request(
+        f"{base_url}/sessions",
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        body={"login": username, "password": password, "remember-me": True},
+        timeout=20,
+    )
+    data = _payload_object(payload)
+    session_token = str(
+        _first_present(
+            data.get("session-token"),
+            data.get("session_token"),
+            data.get("sessionToken"),
+            payload.get("session-token") if isinstance(payload, dict) else None,
+            payload.get("session_token") if isinstance(payload, dict) else None,
+        )
+        or ""
+    ).strip()
+    if not session_token:
+        raise RuntimeError("TastyTrade session token missing from response")
+    _cache_store(cache_key, {"session_token": session_token})
+    return session_token
+
+
+def _tastytrade_request(
+    acct: Dict[str, Any],
+    path: str,
+    *,
+    method: str = "GET",
+    body: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
+) -> Any:
+    import urllib.error
+
+    token = _get_tastytrade_session(
+        base_url=acct["base_url"],
+        username=acct.get("username"),
+        password=acct.get("password"),
+        force_refresh=force_refresh,
+    )
+    headers = {
+        "Accept": "application/json",
+        "Authorization": token,
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    url = f"{acct['base_url']}{path}"
+    try:
+        return _json_request(url, method=method, headers=headers, body=body, timeout=20)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401 and not force_refresh:
+            return _tastytrade_request(acct, path, method=method, body=body, force_refresh=True)
+        raise
+
+
+def _discover_tastytrade_account_numbers(base_url: str, username: Optional[str], password: Optional[str]) -> List[str]:
+    cache_key = f"tastytrade_accounts:{base_url}:{username or 'default'}"
+    cached = _cache_lookup(cache_key, ttl_seconds=BROKER_DISCOVERY_CACHE_TTL_SECONDS)
+    if cached:
+        return _dedupe_strings(list((cached["value"] or {}).get("account_numbers") or []))
+
+    payload = _tastytrade_request(
+        {
+            "base_url": base_url,
+            "username": username,
+            "password": password,
+        },
+        "/customers/me/accounts",
+    )
+    account_numbers: List[str] = []
+    for item in _payload_items(payload):
+        account = item.get("account") if isinstance(item.get("account"), dict) else item
+        account_numbers.append(
+            str(
+                _first_present(
+                    account.get("account-number") if isinstance(account, dict) else None,
+                    account.get("account_number") if isinstance(account, dict) else None,
+                    item.get("account-number"),
+                    item.get("account_number"),
+                    item.get("accountNumber"),
+                    item.get("account-number-short"),
+                )
+                or ""
+            ).strip()
+        )
+    account_numbers = _dedupe_strings(account_numbers)
+    _cache_store(cache_key, {"account_numbers": account_numbers})
+    return account_numbers
+
+
+def _parse_tastytrade_positions(payload: Any) -> List[Dict[str, Any]]:
+    positions: List[Dict[str, Any]] = []
+    for item in _payload_items(payload):
+        quantity = abs(_safe_float(_first_present(item.get("quantity"), item.get("signed-quantity"), item.get("signed_quantity")), 0.0))
+        quantity_direction = str(_first_present(item.get("quantity-direction"), item.get("quantity_direction"), item.get("side"), item.get("direction"), "long")).lower()
+        side = "short" if "short" in quantity_direction else "long"
+        multiplier = _safe_float(_first_present(item.get("multiplier"), item.get("contract-multiplier")), 1.0)
+        if multiplier <= 0:
+            multiplier = 1.0
+        current_price = _safe_float(_first_present(item.get("mark-price"), item.get("mark_price"), item.get("mark"), item.get("last-price"), item.get("last_price")))
+        avg_entry_price = _safe_float(_first_present(item.get("average-open-price"), item.get("average_open_price"), item.get("average-price"), item.get("average_price")))
+        market_value = _safe_float(_first_present(item.get("market-value"), item.get("market_value")))
+        if not market_value and current_price and quantity:
+            market_value = current_price * quantity * multiplier
+        unrealized_pl = _safe_float(_first_present(item.get("unrealized-day-gain"), item.get("unrealized_day_gain"), item.get("unrealized-gain"), item.get("unrealized_gain")))
+        if not unrealized_pl and current_price and avg_entry_price and quantity:
+            signed_qty = -quantity if side == "short" else quantity
+            unrealized_pl = (current_price - avg_entry_price) * signed_qty * multiplier
+        cost_basis = avg_entry_price * quantity * multiplier
+        unrealized_plpc = (unrealized_pl / cost_basis) if cost_basis else 0.0
+        symbol = str(
+            _first_present(
+                item.get("symbol"),
+                item.get("underlying-symbol"),
+                item.get("underlying_symbol"),
+                ((item.get("instrument") or {}).get("symbol") if isinstance(item.get("instrument"), dict) else None),
+            )
+            or ""
+        ).strip()
+        asset_class = str(
+            _first_present(
+                item.get("instrument-type"),
+                item.get("instrument_type"),
+                ((item.get("instrument") or {}).get("instrument-type") if isinstance(item.get("instrument"), dict) else None),
+                "equity",
+            )
+            or "equity"
+        ).lower()
+        positions.append({
+            "symbol": symbol,
+            "qty": quantity,
+            "side": side,
+            "asset_class": asset_class,
+            "avg_entry_price": avg_entry_price,
+            "current_price": current_price,
+            "unrealized_pl": unrealized_pl,
+            "unrealized_plpc": unrealized_plpc,
+            "market_value": market_value,
+            "pricing_source": "tastytrade_rest",
+            "pricing_timestamp_utc": _utc_now_iso(),
+        })
+    return positions
+
+
+def _fetch_tastytrade_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+    account_number = str(acct.get("account_number") or "").strip()
+    if not account_number:
+        raise RuntimeError("TastyTrade account number missing")
+
+    metadata = _account_public_metadata(acct)
+    try:
+        balances_payload = _tastytrade_request(acct, f"/accounts/{account_number}/balances")
+        balances = _payload_object(balances_payload)
+        positions = _parse_tastytrade_positions(_tastytrade_request(acct, f"/accounts/{account_number}/positions"))
+
+        equity = _safe_float(
+            _first_present(
+                balances.get("net-liquidating-value"),
+                balances.get("net_liquidating_value"),
+                balances.get("liquidation-value"),
+                balances.get("liquidation_value"),
+                balances.get("equity"),
+            )
+        )
+        cash = _safe_float(
+            _first_present(
+                balances.get("cash-balance"),
+                balances.get("cash_balance"),
+                balances.get("cash-available-to-withdraw"),
+                balances.get("cash_available_to_withdraw"),
+                balances.get("settled-cash"),
+                balances.get("settled_cash"),
+            )
+        )
+        buying_power = _safe_float(
+            _first_present(
+                balances.get("derivative-buying-power"),
+                balances.get("derivative_buying_power"),
+                balances.get("equity-buying-power"),
+                balances.get("equity_buying_power"),
+                balances.get("buying-power"),
+                balances.get("buying_power"),
+                balances.get("day-trade-excess"),
+                balances.get("day_trade_excess"),
+                equity,
+            )
+        )
+        return {
+            **metadata,
+            "account_number": account_number,
+            "equity": equity,
+            "cash": cash,
+            "buying_power": buying_power,
+            "portfolio_value": equity or _safe_float(sum(position.get("market_value", 0.0) for position in positions)),
+            "positions": positions,
+            "position_count": len(positions),
+            "status": "ok",
+            "timestamp_utc": _utc_now_iso(),
+            "cache_status": "miss",
+        }
+    except Exception as exc:
+        return _snapshot_account_fallback(metadata, "", exc)
+
+
+def _discover_ibkr_account_numbers(base_url: str) -> List[str]:
+    cache_key = f"ibkr_accounts:{base_url}"
+    cached = _cache_lookup(cache_key, ttl_seconds=BROKER_DISCOVERY_CACHE_TTL_SECONDS)
+    if cached:
+        return _dedupe_strings(list((cached["value"] or {}).get("account_numbers") or []))
+
+    payload = _json_request(
+        f"{base_url}/portfolio/accounts",
+        headers={"Accept": "application/json"},
+        verify_ssl=False,
+        timeout=20,
+    )
+    account_numbers: List[str] = []
+    for item in _payload_items(payload):
+        account_numbers.append(
+            str(
+                _first_present(
+                    item.get("accountId"),
+                    item.get("account_id"),
+                    item.get("id"),
+                    item.get("accountIdKey"),
+                )
+                or ""
+            ).strip()
+        )
+    account_numbers = _dedupe_strings(account_numbers)
+    _cache_store(cache_key, {"account_numbers": account_numbers})
+    return account_numbers
+
+
+def _ibkr_summary_map(payload: Any) -> Dict[str, float]:
+    summary: Dict[str, float] = {}
+    for item in _payload_items(payload):
+        tag = str(_first_present(item.get("tag"), item.get("key"), item.get("name")) or "").strip().lower()
+        if not tag:
+            continue
+        summary[tag] = _safe_float(_first_present(item.get("amount"), item.get("value"), item.get("amt")))
+    if summary:
+        return summary
+
+    if isinstance(payload, dict):
+        candidate = payload.get("summary")
+        if isinstance(candidate, list):
+            for item in _payload_items(candidate):
+                tag = str(_first_present(item.get("tag"), item.get("key"), item.get("name")) or "").strip().lower()
+                if tag:
+                    summary[tag] = _safe_float(_first_present(item.get("amount"), item.get("value"), item.get("amt")))
+        else:
+            for key, value in payload.items():
+                normalized = str(key).strip().lower()
+                if isinstance(value, dict):
+                    summary[normalized] = _safe_float(_first_present(value.get("amount"), value.get("value"), value.get("amt")))
+                elif isinstance(value, (int, float, str)):
+                    summary[normalized] = _safe_float(value)
+    return summary
+
+
+def _ibkr_cash_from_ledger(payload: Any) -> float:
+    if not isinstance(payload, dict):
+        return 0.0
+    preferred_keys = ["BASE", "USD"]
+    for key in preferred_keys + [k for k in payload.keys() if k not in preferred_keys]:
+        bucket = payload.get(key)
+        if not isinstance(bucket, dict):
+            continue
+        cash = _safe_float(
+            _first_present(
+                bucket.get("cashbalance"),
+                bucket.get("cashBalance"),
+                bucket.get("totalcashvalue"),
+                bucket.get("settledcash"),
+            )
+        )
+        if cash:
+            return cash
+    return 0.0
+
+
+def _parse_ibkr_positions(payload: Any) -> List[Dict[str, Any]]:
+    positions: List[Dict[str, Any]] = []
+    for item in _payload_items(payload):
+        signed_qty = _safe_float(_first_present(item.get("position"), item.get("qty"), item.get("quantity")))
+        quantity = abs(signed_qty)
+        side = "short" if signed_qty < 0 else "long"
+        current_price = _safe_float(_first_present(item.get("mktPrice"), item.get("marketPrice"), item.get("price")))
+        market_value = _safe_float(_first_present(item.get("mktValue"), item.get("marketValue"), item.get("market_value")))
+        if not market_value and current_price and quantity:
+            market_value = current_price * quantity
+        avg_entry_price = _safe_float(_first_present(item.get("avgPrice"), item.get("avgCost"), item.get("avg_cost")))
+        unrealized_pl = _safe_float(_first_present(item.get("unrealizedPnl"), item.get("unrealized_pl")))
+        cost_basis = avg_entry_price * quantity
+        unrealized_plpc = (unrealized_pl / cost_basis) if cost_basis else 0.0
+        symbol = str(
+            _first_present(
+                item.get("ticker"),
+                item.get("symbol"),
+                item.get("contractDesc"),
+                item.get("description"),
+            )
+            or ""
+        ).strip()
+        positions.append({
+            "symbol": symbol,
+            "qty": quantity,
+            "side": side,
+            "asset_class": str(_first_present(item.get("assetClass"), item.get("asset_class"), item.get("type"), "equity") or "equity").lower(),
+            "avg_entry_price": avg_entry_price,
+            "current_price": current_price,
+            "unrealized_pl": unrealized_pl,
+            "unrealized_plpc": unrealized_plpc,
+            "market_value": market_value,
+            "pricing_source": "ibkr_rest",
+            "pricing_timestamp_utc": _utc_now_iso(),
+        })
+    return positions
+
+
+def _fetch_ibkr_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+    account_number = str(acct.get("account_number") or "").strip()
+    if not account_number:
+        raise RuntimeError("IBKR account number missing")
+
+    metadata = _account_public_metadata(acct)
+    base_url = _normalize_ibkr_base_url(acct.get("base_url"))
+    try:
+        summary_map = _ibkr_summary_map(
+            _json_request(
+                f"{base_url}/portfolio/{account_number}/summary",
+                headers={"Accept": "application/json"},
+                verify_ssl=False,
+                timeout=20,
+            )
+        )
+        ledger_payload = _json_request(
+            f"{base_url}/portfolio/{account_number}/ledger",
+            headers={"Accept": "application/json"},
+            verify_ssl=False,
+            timeout=20,
+        )
+        positions = _parse_ibkr_positions(
+            _json_request(
+                f"{base_url}/portfolio/{account_number}/positions/0",
+                headers={"Accept": "application/json"},
+                verify_ssl=False,
+                timeout=20,
+            )
+        )
+
+        equity = _safe_float(
+            _first_present(
+                summary_map.get("netliquidation"),
+                summary_map.get("net_liquidation"),
+                summary_map.get("equitywithloanvalue"),
+                summary_map.get("equity"),
+            )
+        )
+        cash = _safe_float(
+            _first_present(
+                _ibkr_cash_from_ledger(ledger_payload),
+                summary_map.get("totalcashvalue"),
+                summary_map.get("cashbalance"),
+            )
+        )
+        buying_power = _safe_float(
+            _first_present(
+                summary_map.get("buyingpower"),
+                summary_map.get("availablefunds"),
+                summary_map.get("availablefund"),
+                summary_map.get("excessliquidity"),
+                equity,
+            )
+        )
+        return {
+            **metadata,
+            "account_number": account_number,
+            "equity": equity,
+            "cash": cash,
+            "buying_power": buying_power,
+            "portfolio_value": equity or _safe_float(sum(position.get("market_value", 0.0) for position in positions)),
+            "positions": positions,
+            "position_count": len(positions),
+            "status": "ok",
+            "timestamp_utc": _utc_now_iso(),
+            "cache_status": "miss",
+        }
+    except Exception as exc:
+        return _snapshot_account_fallback(metadata, "", exc)
+
+
+def _get_tastytrade_accounts() -> List[Dict[str, Any]]:
+    _load_env()
+    username = str(_first_present(os.getenv("TASTYTRADE_USERNAME"), os.getenv("TASTYTRADE_LOGIN")) or "").strip()
+    password = str(os.getenv("TASTYTRADE_PASSWORD", "")).strip()
+    if not username or not password:
+        return []
+
+    base_url = str(os.getenv("TASTYTRADE_BASE_URL", "https://api.tastyworks.com")).rstrip("/")
+    account_numbers = _dedupe_strings(
+        _env_csv_values("TASTYTRADE_ACCOUNT_NUMBERS", "TASTYTRADE_ACCOUNTS")
+        + [
+            str(_first_present(os.getenv("TASTYTRADE_CASH_ACCOUNT"), os.getenv("TASTYTRADE_CASH_ACCOUNT_NUMBER")) or "").strip(),
+            str(_first_present(os.getenv("TASTYTRADE_MARGIN_ACCOUNT"), os.getenv("TASTYTRADE_MARGIN_ACCOUNT_NUMBER")) or "").strip(),
+        ]
+        + _env_sequential_values("TASTYTRADE_ACCOUNT_")
+    )
+    if not account_numbers:
+        try:
+            account_numbers = _discover_tastytrade_account_numbers(base_url, username, password)
+        except Exception:
+            account_numbers = []
+
+    return [
+        {
+            "label": f"tastytrade_{account_number}",
+            "broker": "tastytrade",
+            "display_label": f"TastyTrade {account_number}",
+            "account_number": account_number,
+            "username": username,
+            "password": password,
+            "base_url": base_url,
+            "is_live": True,
+        }
+        for account_number in account_numbers
+    ]
+
+
+def _get_ibkr_accounts() -> List[Dict[str, Any]]:
+    _load_env()
+    base_url = _normalize_ibkr_base_url(None)
+    account_numbers = _dedupe_strings(
+        _env_csv_values("IBKR_ACCOUNT_NUMBERS", "IBKR_ACCOUNT_IDS", "IBKR_ACCOUNTS")
+        + _env_sequential_values("IBKR_ACCOUNT_")
+    )
+    if not account_numbers:
+        try:
+            account_numbers = _discover_ibkr_account_numbers(base_url)
+        except Exception:
+            account_numbers = []
+
+    return [
+        {
+            "label": f"ibkr_{account_number}",
+            "broker": "ibkr",
+            "display_label": f"IBKR {account_number}",
+            "account_number": account_number,
+            "base_url": base_url,
+            "is_live": True,
+        }
+        for account_number in account_numbers
+    ]
+
+
+def _get_portfolio_accounts() -> List[Dict[str, Any]]:
+    accounts: List[Dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for source in (_get_alpaca_accounts(), _get_tastytrade_accounts(), _get_ibkr_accounts()):
+        for acct in source:
+            label = str(acct.get("label") or "")
+            if not label or label in seen_labels:
+                continue
+            seen_labels.add(label)
+            accounts.append(acct)
+    return accounts
+
+
+def _fetch_portfolio_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+    broker = str(acct.get("broker") or "alpaca")
+    if broker == "alpaca":
+        return _fetch_alpaca_account(acct)
+    if broker == "tastytrade":
+        return _fetch_tastytrade_account(acct)
+    if broker == "ibkr":
+        return _fetch_ibkr_account(acct)
+    raise RuntimeError(f"Unsupported broker '{broker}'")
+
+
+def _get_cached_portfolio_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+    broker = str(acct.get("broker") or "alpaca")
+    if broker == "alpaca":
+        return _get_cached_alpaca_account(acct)
+
+    cache_key = f"{broker}_account:{acct['label']}"
+    cached = _cache_lookup(cache_key, ttl_seconds=BROKER_ACCOUNT_CACHE_TTL_SECONDS)
+    if cached:
+        payload = cached["value"]
+        payload["source_timestamp_utc"] = payload.get("source_timestamp_utc") or payload.get("timestamp_utc") or cached["fetched_at_utc"]
+        payload["fetched_at_utc"] = cached["fetched_at_utc"]
+        payload["cache_age_ms"] = cached["cache_age_ms"]
+        payload["cache_status"] = cached["cache_status"]
+        return payload
+
+    payload = _fetch_portfolio_account(acct)
+    fetched_at_utc = _cache_store(cache_key, payload)
+    payload = copy.deepcopy(payload)
+    payload["source_timestamp_utc"] = payload.get("timestamp_utc") or fetched_at_utc
+    payload["fetched_at_utc"] = fetched_at_utc
+    payload["cache_age_ms"] = 0.0
+    payload["cache_status"] = "miss"
+    return payload
 
 
 def _freshness_metadata(
@@ -507,6 +1264,15 @@ def _load_env():
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+def _normalize_alpaca_base_url(base_url: Optional[str], default: str) -> str:
+    normalized = str(base_url or default).strip().rstrip("/")
+    if not normalized:
+        normalized = default
+    if normalized.endswith("/v2"):
+        return normalized
+    return f"{normalized}/v2"
+
+
 def _get_alpaca_accounts() -> List[Dict[str, Any]]:
     """Return credential dicts for all configured Alpaca paper accounts."""
     _load_env()
@@ -515,13 +1281,19 @@ def _get_alpaca_accounts() -> List[Dict[str, Any]]:
     # Primary account (day_trade)
     key1 = os.getenv("ALPACA_API_KEY")
     sec1 = os.getenv("ALPACA_SECRET_KEY")
-    url1 = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
+    url1 = _normalize_alpaca_base_url(
+        os.getenv("ALPACA_BASE_URL"),
+        "https://paper-api.alpaca.markets/v2",
+    )
     if key1 and sec1:
         accounts.append({
             "label": "day_trade",
+            "broker": "alpaca",
+            "display_label": "Alpaca Day Trade",
             "api_key": key1,
             "api_secret": sec1,
             "base_url": url1,
+            "is_live": "paper" not in url1,
         })
 
     # Also check DAYTRADE-specific keys (may be same as primary)
@@ -530,9 +1302,15 @@ def _get_alpaca_accounts() -> List[Dict[str, Any]]:
     if key_dt and sec_dt and key_dt != key1:
         accounts.append({
             "label": "day_trade_2",
+            "broker": "alpaca",
+            "display_label": "Alpaca Day Trade 2",
             "api_key": key_dt,
             "api_secret": sec_dt,
-            "base_url": os.getenv("ALPACA_BASE_URL_DAYTRADE", "https://paper-api.alpaca.markets/v2"),
+            "base_url": _normalize_alpaca_base_url(
+                os.getenv("ALPACA_BASE_URL_DAYTRADE"),
+                "https://paper-api.alpaca.markets/v2",
+            ),
+            "is_live": False,
         })
 
     # Medium/Long account
@@ -541,9 +1319,15 @@ def _get_alpaca_accounts() -> List[Dict[str, Any]]:
     if key_ml and sec_ml:
         accounts.append({
             "label": "medium_long",
+            "broker": "alpaca",
+            "display_label": "Alpaca Med/Long",
             "api_key": key_ml,
             "api_secret": sec_ml,
-            "base_url": os.getenv("ALPACA_BASE_URL_MEDLONG", "https://paper-api.alpaca.markets/v2"),
+            "base_url": _normalize_alpaca_base_url(
+                os.getenv("ALPACA_BASE_URL_MEDLONG"),
+                "https://paper-api.alpaca.markets/v2",
+            ),
+            "is_live": False,
         })
 
     # Live trading account ($125)
@@ -552,9 +1336,15 @@ def _get_alpaca_accounts() -> List[Dict[str, Any]]:
     if key_live and sec_live:
         accounts.append({
             "label": "live",
+            "broker": "alpaca",
+            "display_label": "Alpaca Live",
             "api_key": key_live,
             "api_secret": sec_live,
-            "base_url": "https://api.alpaca.markets/v2",
+            "base_url": _normalize_alpaca_base_url(
+                os.getenv("ALPACA_BASE_URL_LIVE"),
+                "https://api.alpaca.markets/v2",
+            ),
+            "is_live": True,
         })
 
     return accounts
@@ -564,6 +1354,7 @@ def _fetch_alpaca_account(acct: Dict[str, str]) -> Dict[str, Any]:
     """Fetch account info + positions for a single Alpaca account."""
     import urllib.request
     import urllib.error
+    metadata = _account_public_metadata(acct)
     headers = {
         "APCA-API-KEY-ID": acct["api_key"],
         "APCA-API-SECRET-KEY": acct["api_secret"],
@@ -590,35 +1381,40 @@ def _fetch_alpaca_account(acct: Dict[str, str]) -> Dict[str, Any]:
         except Exception:
             return _do()
 
-    account = _get("/account")
-    positions_raw = _get("/positions")
-    positions = []
-    for p in positions_raw:
-        positions.append({
-            "symbol": p.get("symbol"),
-            "qty": float(p.get("qty", 0)),
-            "side": p.get("side", "long"),
-            "asset_class": p.get("asset_class"),
-            "avg_entry_price": float(p.get("avg_entry_price", 0)),
-            "current_price": float(p.get("current_price", 0)),
-            "unrealized_pl": float(p.get("unrealized_pl", 0)),
-            "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
-            "market_value": float(p.get("market_value", 0)),
-            "pricing_source": "alpaca_rest_position",
-            "pricing_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        })
-    return {
-        "label": acct["label"],
-        "account_number": account.get("account_number", ""),
-        "equity": float(account.get("equity", 0)),
-        "cash": float(account.get("cash", 0)),
-        "buying_power": float(account.get("buying_power", 0)),
-        "portfolio_value": float(account.get("portfolio_value", 0)),
-        "positions": positions,
-        "position_count": len(positions),
-        "status": "ok",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
+    try:
+        account = _get("/account")
+        positions_raw = _get("/positions")
+        positions = []
+        for p in positions_raw:
+            positions.append({
+                "symbol": p.get("symbol"),
+                "qty": float(p.get("qty", 0)),
+                "side": p.get("side", "long"),
+                "asset_class": p.get("asset_class"),
+                "avg_entry_price": float(p.get("avg_entry_price", 0)),
+                "current_price": float(p.get("current_price", 0)),
+                "unrealized_pl": float(p.get("unrealized_pl", 0)),
+                "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
+                "market_value": float(p.get("market_value", 0)),
+                "pricing_source": "alpaca_rest_position",
+                "pricing_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "broker": metadata["broker"],
+            })
+        return {
+            **metadata,
+            "account_number": account.get("account_number", ""),
+            "equity": float(account.get("equity", 0)),
+            "cash": float(account.get("cash", 0)),
+            "buying_power": float(account.get("buying_power", 0)),
+            "portfolio_value": float(account.get("portfolio_value", 0)),
+            "positions": positions,
+            "position_count": len(positions),
+            "status": "ok",
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "cache_status": "miss",
+        }
+    except Exception as exc:
+        return _snapshot_account_fallback(metadata, "", exc)
 
 
 def _fetch_alpaca_history(acct: Dict[str, str], period: str, timeframe: str) -> Dict[str, Any]:
@@ -729,6 +1525,8 @@ def _slice_portfolio_payload(payload: Dict[str, Any], account: str) -> Dict[str,
     positions = list(selected.get("positions") or [])
     for position in positions:
         position["account"] = account
+        position["account_label"] = account
+        position["broker"] = selected.get("broker")
 
     sliced["accounts"] = accounts
     sliced["account_errors"] = [
@@ -1591,8 +2389,7 @@ def _build_portfolio_history_payload(period: str = "1M", timeframe: str = "1D", 
 
 @app.get("/api/portfolio")
 def portfolio(account: str = Query("all")):
-    """Fetch Alpaca paper account positions. Supports dual accounts.
-    account: all | day_trade | medium_long"""
+    """Fetch unified broker account positions and balances."""
     if dashboard_live_state_manager is not None:
         latest = dashboard_live_state_manager.get_latest_portfolio()
         if latest is not None:
@@ -1601,11 +2398,10 @@ def portfolio(account: str = Query("all")):
 
 
 def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
-    """Fetch Alpaca paper account positions. Supports dual accounts.
-    account: all | day_trade | medium_long"""
-    accounts = _get_alpaca_accounts()
+    """Fetch broker account positions and balances across all configured brokers."""
+    accounts = _get_portfolio_accounts()
     if not accounts:
-        return {"error": "Alpaca credentials not configured"}
+        return {"error": "No broker accounts configured"}
 
     if account != "all":
         accounts = [a for a in accounts if a["label"] == account]
@@ -1624,7 +2420,7 @@ def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
 
     for acct in accounts:
         try:
-            data = _get_cached_alpaca_account(acct)
+            data = _get_cached_portfolio_account(acct)
             total_equity += data["equity"]
             total_cash += data["cash"]
             total_buying_power += data["buying_power"]
@@ -1632,14 +2428,17 @@ def _build_portfolio_payload(account: str = "all") -> Dict[str, Any]:
             # Tag positions with account label
             for p in data["positions"]:
                 p["account"] = data["label"]
+                p["account_label"] = data["label"]
+                p["broker"] = data.get("broker")
             all_positions.extend(data["positions"])
             position_count_by_account[data["label"]] = data.get("position_count", len(data["positions"]))
             account_details.append(data)
         except Exception as e:
             position_count_by_account[acct["label"]] = 0
             account_errors.append({"label": acct["label"], "error": str(e)})
+            metadata = _account_public_metadata(acct)
             account_details.append({
-                "label": acct["label"],
+                **metadata,
                 "status": "error",
                 "error": str(e),
                 "equity": 0.0,
@@ -1790,13 +2589,6 @@ _TF_TO_YF = {
 }
 
 
-import re
-def _extract_underlying(symbol: str) -> str:
-    """Extract underlying ticker from OCC options symbol (e.g. SOXL260313C00059000 -> SOXL)."""
-    m = re.match(r'^([A-Z]{1,6})\d{6}[CP]\d{8}$', symbol)
-    return m.group(1) if m else ""
-
-
 @app.get("/api/bars/{symbol}")
 def stock_bars(
     symbol: str,
@@ -1809,25 +2601,18 @@ def stock_bars(
     import urllib.error
     _load_env()
 
-    # If this is an options symbol, use the underlying ticker for chart data
-    underlying = _extract_underlying(symbol)
-    chart_symbol = underlying if underlying else symbol
-
-    is_crypto = _is_crypto_symbol(chart_symbol)
+    is_crypto = _is_crypto_symbol(symbol)
 
     # --- Stocks: use Yahoo Finance (real-time, free) ---
     if not is_crypto:
         yf_map = _TF_TO_YF.get(timeframe, ("5m", "5d"))
         yf_interval, yf_range = yf_map
         try:
-            bars = _yahoo_bars(chart_symbol, yf_interval, yf_range)
-            if not bars:
-                raise ValueError("Yahoo returned empty bars")
+            bars = _yahoo_bars(symbol, yf_interval, yf_range)
             if limit and len(bars) > limit:
                 bars = bars[-limit:]
             return {
                 "symbol": symbol,
-                "underlying": chart_symbol if underlying else None,
                 "timeframe": timeframe,
                 "bars": bars,
                 "count": len(bars),
@@ -1868,7 +2653,7 @@ def stock_bars(
     else:
         params = {"timeframe": timeframe, "limit": str(limit), "sort": "asc", "feed": "iex", "start": start}
         qs = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{ALPACA_DATA_BASE_URL}/v2/stocks/{chart_symbol}/bars?{qs}"
+        url = f"{ALPACA_DATA_BASE_URL}/v2/stocks/{symbol}/bars?{qs}"
 
     try:
         req = urllib.request.Request(url, headers={
@@ -1899,15 +2684,14 @@ def stock_bars(
 
 @app.get("/api/accounts")
 def list_accounts():
-    """List all configured Alpaca accounts with basic info."""
-    accounts = _get_alpaca_accounts()
+    """List all configured broker accounts with basic info."""
+    accounts = _get_portfolio_accounts()
     result = []
     for acct in accounts:
-        is_live = "api.alpaca.markets/v2" in acct["base_url"] and "paper" not in acct["base_url"]
+        metadata = _account_public_metadata(acct)
         result.append({
-            "label": acct["label"],
-            "is_live": is_live,
-            "base_url": acct["base_url"],
+            **metadata,
+            "base_url": acct.get("base_url"),
         })
     return {"accounts": result, "count": len(result)}
 
@@ -2724,7 +3508,17 @@ class DashboardLiveStateManager:
         if accounts:
             self._tasks.append(asyncio.create_task(self._market_data_loop(accounts)))
             self._tasks.append(asyncio.create_task(self._rest_quote_refresh_loop(accounts)))
-        await self.refresh_and_broadcast(force=True, reason="startup")
+        # Warm the portfolio cache in the background so startup does not block
+        # on broker discovery or slow third-party auth/login paths.
+        async def _startup_refresh() -> None:
+            try:
+                await self.refresh_and_broadcast(force=True, reason="startup")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+        self._tasks.append(asyncio.create_task(_startup_refresh()))
 
     async def stop(self):
         self._stop_event.set()
@@ -4403,24 +5197,6 @@ def whatif_picks():
     import urllib.error
     _load_env()
 
-    # Fetch live account equity for hypothetical investment sizing
-    live_equity = 0.0
-    try:
-        live_key = os.getenv("ALPACA_API_KEY_LIVE", "")
-        live_secret = os.getenv("ALPACA_SECRET_KEY_LIVE", "")
-        if live_key and live_secret:
-            eq_req = urllib.request.Request(
-                "https://api.alpaca.markets/v2/account",
-                headers={"APCA-API-KEY-ID": live_key, "APCA-API-SECRET-KEY": live_secret},
-            )
-            eq_data = json.loads(urllib.request.urlopen(eq_req, timeout=6).read())
-            live_equity = float(eq_data.get("equity", 0))
-    except Exception:
-        pass
-    # Fall back to $100 if equity fetch fails
-    if live_equity <= 0:
-        live_equity = 100.0
-
     brief_path = REPO_ROOT / "reports" / "flash" / "iran_war_brief.json"
     if not brief_path.exists():
         return {"picks": [], "error": "No brief data", "timestamp_utc": _utc_now_iso()}
@@ -4481,12 +5257,12 @@ def whatif_picks():
             "confidence": idea.get("confidence", 0),
             "ev_pct": idea.get("ev_pct", 0),
             "bucket": idea.get("bucket", ""),
-            "hypothetical_investment": 0,  # set after we know pick count
+            "hypothetical_investment": 25.0,
             "current_price": 0,
             "open_price": 0,
             "change_pct": 0,
             "hypothetical_pnl": 0,
-            "hypothetical_value": 0,  # set after we know pick count
+            "hypothetical_value": 25.0,
         }
 
         # Fetch live price from Yahoo Finance (real-time, free, no subscription)
@@ -4519,13 +5295,11 @@ def whatif_picks():
             if current and open_price:
                 # Track change from today's open, not prev close
                 day_change = ((current - open_price) / open_price * 100) if open_price else 0
-                invest_amount = live_equity  # full portfolio in each pick
-                shares = invest_amount / open_price if open_price else 0
+                shares = 25.0 / open_price if open_price else 0
                 hyp_value = shares * current
-                hyp_pnl = hyp_value - invest_amount
+                hyp_pnl = hyp_value - 25.0
                 hyp_pnl_pct = ((current - open_price) / open_price * 100) if open_price else 0
 
-                pick["hypothetical_investment"] = round(invest_amount, 2)
                 pick["current_price"] = round(current, 2)
                 pick["open_price"] = round(open_price, 2)
                 pick["prev_close"] = round(prev_close, 2)
@@ -4598,8 +5372,6 @@ def whatif_picks():
     return {
         "picks": picks,
         "scenarios": scenarios,
-        "live_equity": round(live_equity, 2),
-        "per_pick_amount": round(live_equity, 2),
         "brief_timestamp": brief.get("timestamp_utc", ""),
         "signal_summary": {
             "oil_score": oil_score,

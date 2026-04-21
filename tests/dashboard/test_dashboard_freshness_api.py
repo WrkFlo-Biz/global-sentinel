@@ -98,6 +98,27 @@ def test_portfolio_payload_includes_pricing_summary(monkeypatch):
     assert payload["pricing_summary"]["market_data_health"] == "stale"
 
 
+def test_dashboard_live_state_manager_start_is_non_blocking(monkeypatch):
+    monkeypatch.setattr(server, "_get_alpaca_accounts", lambda: [])
+    manager = server.DashboardLiveStateManager()
+    started = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def slow_refresh(force: bool, reason: str):
+        started.set()
+        await gate.wait()
+
+    monkeypatch.setattr(manager, "refresh_and_broadcast", slow_refresh)
+
+    async def run() -> None:
+        await asyncio.wait_for(manager.start(), timeout=1.0)
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        gate.set()
+        await asyncio.wait_for(manager.stop(), timeout=1.0)
+
+    asyncio.run(run())
+
+
 def test_stock_market_data_symbol_filter_excludes_crypto_pairs():
     assert server._is_stock_market_data_symbol("AAPL") is True
     assert server._is_stock_market_data_symbol("SPY") is True

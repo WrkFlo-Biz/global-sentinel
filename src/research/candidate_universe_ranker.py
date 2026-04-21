@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Dict, Any, List
 
+from src.execution.slippage_model import compute_global_net_ev_ranking
+
 
 class CandidateUniverseRanker:
 
@@ -45,10 +47,47 @@ class CandidateUniverseRanker:
             if macro_state in {"growth", "de_escalation"} and theme in {"ai", "tech", "semis"}:
                 regime_alignment += 0.15
 
-            final_score = base_score + event_score + (regime_prob * 0.10) + liquidity_bonus + regime_alignment - impact_penalty
+            edge_basis_score = (
+                base_score
+                + event_score
+                + (regime_prob * 0.10)
+                + liquidity_bonus
+                + regime_alignment
+            )
+            micro_impact_cost_bps = impact_penalty * 100.0
+            explicit_cost_bps = float(row.get("expected_cost_bps", 0.0)) if row.get("expected_cost_bps") is not None else None
+            effective_cost_bps = (
+                micro_impact_cost_bps
+                if explicit_cost_bps is None
+                else explicit_cost_bps + micro_impact_cost_bps
+            )
+            net_profile = compute_global_net_ev_ranking(
+                expected_edge_bps=(
+                    row.get("expected_edge_bps")
+                    if row.get("expected_edge_bps") is not None
+                    else edge_basis_score * 100.0
+                ),
+                expected_cost_bps=effective_cost_bps,
+                confidence_score=row.get("confidence_score"),
+                size_multiplier=row.get("size_multiplier_suggestion", 1.0),
+                fill_feasibility_score=row.get("fill_feasibility_score"),
+                fill_quality_score=row.get("fill_quality_score"),
+                session_liquidity_score=(
+                    row.get("session_liquidity_score")
+                    if row.get("session_liquidity_score") is not None
+                    else micro.get("session_liquidity_score")
+                ),
+                reject_risk_probability=row.get("reject_risk_probability"),
+                do_not_route=row.get("do_not_route_even_in_shadow", False),
+            )
 
             new_row = dict(row)
-            new_row["preopt_score"] = final_score
+            new_row["preopt_score"] = net_profile["ranking_score"]
+            new_row["expected_edge_bps"] = net_profile["expected_edge_bps"]
+            new_row["expected_cost_bps"] = net_profile["expected_cost_bps"]
+            new_row["net_expected_value_bps"] = net_profile["net_expected_value_bps"]
+            new_row["net_ev_quality_multiplier"] = net_profile["quality_multiplier"]
+            new_row["net_ev_ranking_score"] = net_profile["ranking_score"]
             new_row["liquidity_bonus"] = liquidity_bonus
             new_row["impact_penalty"] = impact_penalty
             new_row["regime_alignment"] = regime_alignment

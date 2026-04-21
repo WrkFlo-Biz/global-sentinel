@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from src.execution.strategy_learning import apply_learning_adjustments_to_idea, load_learning_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,6 +134,9 @@ class StrategyEngine:
         take_profit_pct: float | None = None,
     ) -> dict[str, Any]:
         account = strat_cfg.get("account", "medium_long")
+        holding_period = strat_cfg.get("holding_period")
+        if not holding_period:
+            holding_period = "day" if account == "day_trade" else "swing"
         # Defaults from risk_controls
         default_stop = self._risk_controls.get("per_position_stop_pct", 3.0)
         return {
@@ -142,6 +147,9 @@ class StrategyEngine:
             "entry_signal": entry_signal,
             "confidence": round(confidence, 3),
             "account": account,
+            "strategy_family": account,
+            "strategy_style": strategy_name,
+            "holding_period": holding_period,
             "stop_loss_pct": stop_loss_pct if stop_loss_pct is not None else default_stop,
             "take_profit_pct": take_profit_pct if take_profit_pct is not None else default_stop * 2,
         }
@@ -993,6 +1001,16 @@ class StrategyEngine:
                 self._apply_shock_overrides(idea, oil_regime)
                 for idea in all_ideas
             ]
+
+        learning_context = load_learning_context(self._repo_root)
+        all_ideas = [
+            apply_learning_adjustments_to_idea(
+                idea,
+                learning_context,
+                default_family=idea.get("strategy_family") or idea.get("account"),
+            )
+            for idea in all_ideas
+        ]
 
         # Apply risk controls — check daily loss halt, max gross exposure
         kill_vix = self._safe_get(self._risk_controls, "kill_triggers", "vix_above")

@@ -1,0 +1,11 @@
+{
+  "SPY": {
+    "adv_shares": 82139878.0,
+    "sigma_daily_pct": 0.8611,
+    "last_price": 677.44,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T17:36:30.265487+00:00",
+    "data_points": 21
+  }
+}

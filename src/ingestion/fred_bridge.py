@@ -55,8 +55,11 @@ class FredBridge:
             f"&file_type=json&sort_order=desc&limit=1"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "GlobalSentinel/5.1"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
         observations = data.get("observations", [])
         return observations[0] if observations else None
 

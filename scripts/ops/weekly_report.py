@@ -2,14 +2,6 @@
 """Weekly System Performance Report — sent Sunday 8PM ET."""
 import json, os, datetime, glob, urllib.request
 from pathlib import Path
-import sys
-
-# --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
-try:
-    from src.monitoring.telegram_router import send as _send_topic
-except Exception:
-    _send_topic = None
 
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 QF = REPO_ROOT / "data/quantum_feed"
@@ -48,198 +40,12 @@ def get_paper_trades():
     return trades
 
 def send_telegram(msg):
-    if _send_topic:
-        try:
-            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="performance")
-            return
-        except Exception:
-            pass
     try:
         token = env.get("TELEGRAM_BOT_TOKEN", "")
-        payload = json.dumps({"chat_id": "7091381625", "text": msg[:4000], "parse_mode": "HTML", "message_thread_id": 74}).encode()
+        payload = json.dumps({"chat_id": "7091381625", "text": msg[:4000], "parse_mode": "HTML"}).encode()
         req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=10)
     except: pass
-
-# ---------- NEW: Enhanced report sections ----------
-
-# Known 2026 FOMC/CPI/Jobs dates
-FOMC_DATES_2026 = [
-    "2026-01-28", "2026-03-18", "2026-05-06", "2026-06-17",
-    "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
-]
-CPI_DATES_2026 = [
-    "2026-01-14", "2026-02-11", "2026-03-11", "2026-04-14",
-    "2026-05-12", "2026-06-10", "2026-07-14", "2026-08-12",
-    "2026-09-11", "2026-10-13", "2026-11-10", "2026-12-10",
-]
-JOBS_DATES_2026 = [
-    "2026-01-09", "2026-02-06", "2026-03-06", "2026-04-03",
-    "2026-05-08", "2026-06-05", "2026-07-02", "2026-08-07",
-    "2026-09-04", "2026-10-02", "2026-11-06", "2026-12-04",
-]
-
-def get_upcoming_macro_events():
-    """Check if FOMC, CPI, or Jobs report is within 7 days."""
-    today = datetime.date.today()
-    events = []
-    for label, dates in [("FOMC", FOMC_DATES_2026), ("CPI", CPI_DATES_2026), ("Jobs Report", JOBS_DATES_2026)]:
-        for ds in dates:
-            try:
-                d = datetime.date.fromisoformat(ds)
-                delta = (d - today).days
-                if 0 <= delta <= 7:
-                    events.append({"event": label, "date": ds, "days_away": delta})
-            except:
-                pass
-    return events
-
-def get_upcoming_earnings():
-    """Get upcoming earnings from earnings_calendar.json."""
-    cal = load_json(QF / "earnings_calendar.json")
-    entries = cal.get("earnings_calendar", [])
-    if not entries:
-        # Fall back to symbol_summary
-        summary = cal.get("symbol_summary", {})
-        if summary:
-            entries = [{"symbol": s, "date": v.get("date", ""), "timing": v.get("timing", "")}
-                       for s, v in summary.items()]
-    return entries[:10]
-
-def get_sector_rotation():
-    """Analyze sector rotation from technical_analysis.json."""
-    ta = load_json(QF / "technical_analysis.json")
-    bullish = ta.get("top_bullish", [])
-    bearish = ta.get("top_bearish", [])
-    return {
-        "top_bullish": [{"symbol": s.get("symbol", "?"), "score": s.get("technical_score", 0),
-                         "rsi": s.get("rsi_14", 0)} for s in bullish[:5]],
-        "top_bearish": [{"symbol": s.get("symbol", "?"), "score": s.get("technical_score", 0),
-                         "rsi": s.get("rsi_14", 0)} for s in bearish[:5]],
-    }
-
-def get_key_levels():
-    """Get support/resistance for SPY, QQQ, NVDA, TSLA from technical_analysis.json."""
-    ta = load_json(QF / "technical_analysis.json")
-    key_symbols = {"SPY", "QQQ", "NVDA", "TSLA"}
-    levels = {}
-    for section in ["top_bullish", "top_bearish", "neutral"]:
-        for item in ta.get(section, []):
-            sym = item.get("symbol", "")
-            if sym in key_symbols and sym not in levels:
-                sr = item.get("support_resistance", {})
-                levels[sym] = {
-                    "price": item.get("price", 0),
-                    "support": sr.get("support", 0),
-                    "resistance": sr.get("resistance", 0),
-                    "rsi": item.get("rsi_14", 0),
-                    "sma_20": item.get("sma", {}).get("sma_20", 0),
-                    "sma_50": item.get("sma", {}).get("sma_50", 0),
-                }
-    # Also check all_symbols if exists
-    for item in ta.get("all_symbols", []):
-        sym = item.get("symbol", "")
-        if sym in key_symbols and sym not in levels:
-            sr = item.get("support_resistance", {})
-            levels[sym] = {
-                "price": item.get("price", 0),
-                "support": sr.get("support", 0),
-                "resistance": sr.get("resistance", 0),
-                "rsi": item.get("rsi_14", 0),
-                "sma_20": item.get("sma", {}).get("sma_20", 0),
-                "sma_50": item.get("sma", {}).get("sma_50", 0),
-            }
-    return levels
-
-def get_strategy_health():
-    """Get walk-forward backtest strategy health."""
-    scores = load_json(QF / "strategy_backtest_scores.json")
-    result = {}
-    for strat, data in scores.get("scores", {}).items():
-        result[strat] = {
-            "sharpe": data.get("avg_oos_sharpe", 0),
-            "degraded": data.get("degraded", False),
-        }
-    return result
-
-def get_overnight_gap_setups():
-    """Get top overnight gap setups for Monday."""
-    gaps = load_json(QF / "overnight_gap_signals.json")
-    signals = gaps.get("signals", [])
-    # Get non-flat signals or top by absolute gap
-    actionable = [s for s in signals if s.get("signal") != "NO_TRADE"]
-    if not actionable:
-        # Sort by absolute gap_pct
-        actionable = sorted(signals, key=lambda x: abs(x.get("gap_pct", 0)), reverse=True)[:5]
-    return actionable[:5]
-
-def get_regime_forecast():
-    """Get regime info for next week forecast."""
-    hmm = load_json(QF / "hmm_regime.json")
-    quantum = load_json(QF / "quantum_regime_prediction.json")
-    regime = hmm.get("current_regime", "unknown")
-    duration = hmm.get("regime_duration_days", 0)
-    transition_matrix = hmm.get("transition_matrix", {})
-    crisis_prob = hmm.get("crisis_probability", 0)
-
-    q_pred = quantum.get("quantum_prediction", {})
-    q_probs = q_pred.get("probabilities", {})
-
-    # Predict next week regime from transition matrix
-    if regime in transition_matrix:
-        stay_prob = transition_matrix[regime].get(regime, 0)
-    else:
-        stay_prob = 0
-
-    return {
-        "current": regime,
-        "duration_days": duration,
-        "stay_probability": stay_prob,
-        "crisis_probability": crisis_prob,
-        "quantum_probs": q_probs,
-    }
-
-def get_congress_trades():
-    """Get recent notable congress trades."""
-    trades = load_json(QF / "congress_trades.json")
-    notable = trades.get("notable_trades", [])
-    return notable[:5]
-
-def build_action_items(regime_forecast, key_levels, strategy_health, macro_events, earnings):
-    """Build actionable items for the week."""
-    items = {"watch": [], "avoid": [], "key_levels": []}
-
-    regime = regime_forecast.get("current", "unknown")
-    crisis_prob = regime_forecast.get("crisis_probability", 0)
-
-    if crisis_prob > 0.1:
-        items["watch"].append("Crisis probability elevated — reduce position sizes")
-    if regime == "transition":
-        items["watch"].append("Transition regime: favor ICT/SMC + overnight gap over breakout")
-    elif regime == "crisis":
-        items["avoid"].append("Breakout strategies (ORB) — regime unfavorable")
-        items["watch"].append("Hold 35% cash buffer per crisis allocation")
-
-    for ev in macro_events:
-        items["watch"].append(f"{ev['event']} on {ev['date']} ({ev['days_away']}d away)")
-
-    if earnings:
-        items["watch"].append(f"{len(earnings)} earnings events this week — check positions")
-
-    for strat, data in strategy_health.items():
-        if data.get("degraded") and data.get("sharpe", 0) < -0.5:
-            items["avoid"].append(f"{strat} strategy (Sharpe {data['sharpe']:.2f}, degraded)")
-
-    for sym, lv in key_levels.items():
-        price = lv.get("price", 0)
-        support = lv.get("support", 0)
-        resistance = lv.get("resistance", 0)
-        if price and support and resistance:
-            items["key_levels"].append(f"{sym}: ${price:.2f} (S: ${support:.2f} / R: ${resistance:.2f})")
-
-    return items
-
-# ---------- Original + Enhanced run() ----------
 
 def run():
     print(f"[{iso_now()}] Generating weekly report...")
@@ -256,17 +62,6 @@ def run():
     paper_trades = sum(t.get("num_trades", 0) for t in paper)
     paper_winners = sum(t.get("winners", 0) for t in paper)
 
-    # Enhanced sections
-    macro_events = get_upcoming_macro_events()
-    earnings = get_upcoming_earnings()
-    sector_rot = get_sector_rotation()
-    key_levels = get_key_levels()
-    strat_health = get_strategy_health()
-    gap_setups = get_overnight_gap_setups()
-    regime_forecast = get_regime_forecast()
-    congress = get_congress_trades()
-    action_items = build_action_items(regime_forecast, key_levels, strat_health, macro_events, earnings)
-
     report = {
         "timestamp": iso_now(),
         "week": datetime.date.today().strftime("%Y-W%W"),
@@ -278,16 +73,6 @@ def run():
         "signal_quality": feedback.get("signal_scores", {}),
         "correlation_weights": corr.get("allocation_weights", {}),
         "optimized_params": params,
-        # Enhanced fields
-        "macro_events": macro_events,
-        "earnings_this_week": earnings,
-        "sector_rotation": sector_rot,
-        "key_levels": key_levels,
-        "strategy_health": strat_health,
-        "gap_setups_monday": gap_setups,
-        "regime_forecast": regime_forecast,
-        "congress_trades": congress,
-        "action_items": action_items,
     }
 
     out_dir = REPO_ROOT / "reports/weekly"
@@ -295,101 +80,15 @@ def run():
     out_path = out_dir / f"week_{report['week']}.json"
     out_path.write_text(json.dumps(report, indent=2, default=str))
 
-    # Build comprehensive Telegram message
-    win_rate = round(paper_winners / max(1, paper_trades) * 100)
     msg = f"<b>Weekly Report — {report['week']}</b>\n\n"
-
-    # Account
-    msg += f"<b>Account</b>\nLive Equity: ${equity:,.2f}\n"
-    msg += f"Paper P&L: ${paper_pnl:,.2f} ({paper_trades} trades, {win_rate}% win)\n\n"
-
-    # Regime Forecast
-    rf = regime_forecast
-    msg += f"<b>Regime Forecast</b>\n"
-    msg += f"Current: {rf['current']} ({rf['duration_days']}d)\n"
-    msg += f"Stay prob: {rf['stay_probability']:.1%} | Crisis: {rf['crisis_probability']:.1%}\n"
-    q = rf.get("quantum_probs", {})
-    if q:
-        msg += f"Quantum: calm={q.get('calm',0):.0%} trans={q.get('transition',0):.0%} crisis={q.get('crisis',0):.0%}\n"
-    msg += "\n"
-
-    # Macro Calendar
-    if macro_events:
-        msg += "<b>Macro This Week</b>\n"
-        for ev in macro_events:
-            msg += f"  {ev['event']}: {ev['date']} ({ev['days_away']}d)\n"
-        msg += "\n"
-
-    # Earnings
-    if earnings:
-        msg += "<b>Earnings This Week</b>\n"
-        for e in earnings[:5]:
-            sym = e.get("symbol", "?")
-            dt = e.get("date", "?")
-            timing = e.get("timing", "")
-            msg += f"  {sym}: {dt} {timing}\n"
-        if len(earnings) > 5:
-            msg += f"  +{len(earnings)-5} more\n"
-        msg += "\n"
-
-    # Key Levels
-    if key_levels:
-        msg += "<b>Key Levels</b>\n"
-        for sym in ["SPY", "QQQ", "NVDA", "TSLA"]:
-            lv = key_levels.get(sym)
-            if lv:
-                msg += f"  {sym}: ${lv['price']:.2f} (S:${lv['support']:.2f} R:${lv['resistance']:.2f} RSI:{lv['rsi']:.0f})\n"
-        msg += "\n"
-
-    # Strategy Health
-    msg += "<b>Strategy Health</b>\n"
-    for strat, data in sorted(strat_health.items(), key=lambda x: x[1].get("sharpe", 0), reverse=True):
-        status = "degraded" if data.get("degraded") else "ok"
-        msg += f"  {strat}: Sharpe {data['sharpe']:.2f} [{status}]\n"
-    msg += "\n"
-
-    # Sector Rotation
-    if sector_rot.get("top_bullish"):
-        msg += "<b>Sector Rotation</b>\n"
-        bulls = ", ".join(f"{s['symbol']}({s['score']:.1f})" for s in sector_rot["top_bullish"][:3])
-        msg += f"  Bullish: {bulls}\n"
-        if sector_rot.get("top_bearish"):
-            bears = ", ".join(f"{s['symbol']}({s['score']:.1f})" for s in sector_rot["top_bearish"][:3])
-            msg += f"  Bearish: {bears}\n"
-        msg += "\n"
-
-    # Monday Gap Setups
-    gap_actionable = [g for g in gap_setups if g.get("signal") != "NO_TRADE"]
-    if gap_actionable:
-        msg += "<b>Monday Gap Setups</b>\n"
-        for g in gap_actionable[:3]:
-            msg += f"  {g['symbol']}: {g.get('gap_pct',0):.2f}% gap ({g.get('signal','?')})\n"
-        msg += "\n"
-
-    # Congress Trades
-    if congress:
-        msg += "<b>Congress Trades</b>\n"
-        for c in congress[:3]:
-            msg += f"  {c.get('member','?')}: {c.get('type','?')} {c.get('symbol','?')} ({c.get('amount_range','?')})\n"
-        msg += "\n"
-
-    # Quantum + Optimized
-    msg += f"<b>Quantum</b>: weight={quantum.get('quantum_weight', '?')}, best={quantum.get('best_overall_strategy', '?')}\n"
+    msg += f"Live Equity: ${equity:.2f}\n"
+    msg += f"Paper P&L: ${paper_pnl:.2f} ({paper_trades} trades, {round(paper_winners/max(1,paper_trades)*100)}% win)\n"
+    msg += f"Quantum Weight: {quantum.get('quantum_weight', '?')}\n"
+    msg += f"Best Strategy: {quantum.get('best_overall_strategy', '?')}\n"
     if params:
-        msg += f"Optimized: stop={params.get('stop_loss_pct','?')}% take={params.get('take_profit_pct','?')}%\n"
-    msg += "\n"
-
-    # Action Items
-    msg += "<b>Action Items</b>\n"
-    for item in action_items.get("watch", []):
-        msg += f"  Watch: {item}\n"
-    for item in action_items.get("avoid", []):
-        msg += f"  Avoid: {item}\n"
-    for item in action_items.get("key_levels", [])[:4]:
-        msg += f"  Level: {item}\n"
-
+        msg += f"\nOptimized: stop={params.get('stop_loss_pct','?'):.1f}% take={params.get('take_profit_pct','?'):.0f}%"
     send_telegram(msg)
-    print(f"Report saved to {out_path} + Telegram sent")
+    print(f"Report saved + Telegram sent")
 
 if __name__ == "__main__":
     run()

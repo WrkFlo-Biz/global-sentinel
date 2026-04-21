@@ -1,0 +1,88 @@
+schema_version: paper_training_system.v1
+
+loop:
+  broker_adapter: mock
+  sleep_seconds: 300
+  max_orders_per_cycle: 12
+  min_route_confidence: 0.18
+  include_stale_signals: true
+  route_stale_signals: true
+  simulate_fills_on_route: true
+  simulate_exits_using_targets: true
+
+stale_training:
+  missing_source_weight: 0.25
+  expired_source_weight: 0.15
+  min_multiplier_floor: 0.10
+
+state:
+  path: logs/execution/continuous_paper_training_state.json
+
+logs:
+  cycle_log: logs/execution/paper_training_cycles.jsonl
+  inventory_log: logs/execution/paper_training_candidate_inventory.jsonl
+  status_report: reports/weekly/paper_training_status.json
+  replay_report: reports/weekly/paper_training_replay.json
+
+strategy_catalog:
+  war_engine:
+    enabled: true
+    source_keys:
+      - market_data
+      - gdelt
+      - maritime
+      - sentiment
+      - gpr_index
+      - cds_sovereign
+
+  commodity_regime_rotation:
+    enabled: true
+    source_keys:
+      - market_data
+      - eia
+
+  kronos_forecast_overlay:
+    enabled: true
+    source_keys:
+      - market_data
+      - sentiment
+
+  mgc_ai_optimized:
+    enabled: true
+    source_keys:
+      - market_data
+      - fed
+
+  hormuz_osint_geopolitical:
+    enabled: true
+    source_keys:
+      - market_data
+      - maritime
+      - gdelt
+      - gpr_index
+
+  options_flow_model:
+    enabled: true
+    source_keys:
+      - market_data
+      - options_greeks
+
+  parrondo_paradox:
+    enabled: true
+    source_keys:
+      - market_data
+
+  ict_candle_range_theory:
+    enabled: true
+    source_keys:
+      - market_data
+      - gdelt
+
+  quant_probability_pricing:
+    enabled: true
+    source_keys:
+      - market_data
+      - options_greeks
+
+replay:
+  enabled: true

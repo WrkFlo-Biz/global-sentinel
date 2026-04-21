@@ -5,12 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 from src.research.backends import classical_strong_baseline as csb
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 SAMPLE_REQUEST = {
@@ -60,7 +56,7 @@ def test_classical_strong_baseline_graceful_fallback_without_cvxpy(monkeypatch):
 def test_classical_strong_baseline_standalone_outputs_json():
     proc = subprocess.run(
         [sys.executable, "-m", "src.research.backends.classical_strong_baseline"],
-        cwd=REPO_ROOT,
+        cwd="/Users/mosestut/global-sentinel",
         capture_output=True,
         text=True,
         check=False,

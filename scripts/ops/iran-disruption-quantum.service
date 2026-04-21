@@ -1,0 +1,19 @@
+[Unit]
+Description=Iran Disruption Quantum Research Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/iran_disruption_quantum_overnight.py --repo-root /opt/global-sentinel --iterations 0 --sleep 900 --mode full --retrain-every 6
+Restart=always
+RestartSec=30
+TimeoutStopSec=30
+StandardOutput=append:/opt/global-sentinel/logs/iran_disruption_quantum_overnight.out
+StandardError=append:/opt/global-sentinel/logs/iran_disruption_quantum_overnight.err
+
+[Install]
+WantedBy=multi-user.target

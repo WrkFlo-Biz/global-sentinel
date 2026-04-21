@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel feedback-loop
+After=network-online.target
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/research/feedback_loop.py
+StandardOutput=journal
+StandardError=journal

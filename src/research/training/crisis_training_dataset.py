@@ -15,6 +15,413 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, Iterable, List
 
+CRISIS_TRAINING_DATASET_SCHEMA_VERSION = "crisis_training_dataset.v2"
+CRISIS_VALIDATION_ROWS_SCHEMA_VERSION = "crisis_training_validation_rows.v1"
+VALIDATION_LABEL_SCHEMA_VERSION = "validation_labels.v1"
+SOURCE_EVENT_METADATA_SCHEMA_VERSION = "source_event_metadata.v1"
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clip(value: float | None, low: float, high: float) -> float | None:
+    if value is None:
+        return None
+    return min(max(value, low), high)
+
+
+def _time_to_edge_bucket(time_to_edge_minutes: float | None) -> str | None:
+    if time_to_edge_minutes is None:
+        return None
+    if time_to_edge_minutes <= 15.0:
+        return "immediate"
+    if time_to_edge_minutes <= 60.0:
+        return "fast"
+    if time_to_edge_minutes <= 240.0:
+        return "moderate"
+    return "slow"
+
+
+def _time_to_edge_label(time_to_edge_bucket: str | None) -> str:
+    mapping = {
+        "immediate": "immediate_edge",
+        "fast": "fast_edge",
+        "moderate": "moderate_edge",
+        "slow": "slow_edge",
+    }
+    return mapping.get(str(time_to_edge_bucket or ""), "unknown")
+
+
+def _infer_fill_quality_label(
+    *,
+    fill_quality_score: float | None,
+    fill_rate: float | None,
+    fill_slippage_bps: float | None,
+) -> str:
+    if fill_quality_score is not None:
+        if fill_quality_score >= 0.85:
+            return "excellent_fill_quality"
+        if fill_quality_score >= 0.7:
+            return "strong_fill_quality"
+        if fill_quality_score >= 0.5:
+            return "adequate_fill_quality"
+        return "weak_fill_quality"
+    if fill_rate is not None:
+        if fill_rate >= 0.98:
+            return "excellent_fill_quality"
+        if fill_rate >= 0.85:
+            return "strong_fill_quality"
+        if fill_rate >= 0.7:
+            return "adequate_fill_quality"
+        return "weak_fill_quality"
+    if fill_slippage_bps is not None and fill_slippage_bps >= 20.0:
+        return "slippage_heavy_fill_quality"
+    return "unknown"
+
+
+def _infer_execution_quality_label(
+    *,
+    fill_quality_score: float | None,
+    fill_rate: float | None,
+    fill_slippage_bps: float | None,
+    time_to_edge_score: float | None,
+    edge_decay_score: float | None,
+) -> str:
+    if fill_slippage_bps is not None and fill_slippage_bps >= 20.0:
+        return "poor_execution_quality"
+    if edge_decay_score is not None and edge_decay_score >= 0.75:
+        return "decayed_execution_quality"
+    if fill_quality_score is not None:
+        if fill_quality_score >= 0.85 and (time_to_edge_score is None or time_to_edge_score >= 0.7):
+            return "good_execution_quality"
+        if fill_quality_score >= 0.6:
+            return "medium_fill_quality"
+        return "poor_execution_quality"
+    if fill_rate is not None:
+        if fill_rate >= 0.95:
+            return "high_fill_quality"
+        if fill_rate >= 0.7:
+            return "medium_fill_quality"
+        return "low_fill_quality"
+    return "unknown"
+
+
+def normalize_source_event_metadata(
+    source_event: Dict[str, Any] | None = None,
+    *,
+    source_event_id: str | None = None,
+    source_event_name: str | None = None,
+    source_event_category: str | None = None,
+    source_event_phase: str | None = None,
+) -> Dict[str, Any]:
+    payload = dict(source_event or {})
+    return {
+        "schema_version": SOURCE_EVENT_METADATA_SCHEMA_VERSION,
+        "source_type": payload.get("source_type", "research_event"),
+        "source_event_id": payload.get("source_event_id", payload.get("id", source_event_id)),
+        "source_event_name": payload.get("source_event_name", payload.get("name", source_event_name)),
+        "source_event_category": payload.get(
+            "source_event_category",
+            payload.get("category", source_event_category),
+        ),
+        "source_event_phase": payload.get(
+            "source_event_phase",
+            source_event_phase or "peak_impact",
+        ),
+        "date_start": payload.get("date_start"),
+        "date_peak_impact": payload.get("date_peak_impact"),
+        "date_recovery": payload.get("date_recovery"),
+        "regime_signature": dict(payload.get("regime_signature") or {}),
+        "winners": list(payload.get("winners") or []),
+        "losers": list(payload.get("losers") or []),
+    }
+
+
+def normalize_validation_labels(
+    labels: Dict[str, Any] | None = None,
+    *,
+    defaults: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    payload = dict(defaults or {})
+    payload.update(labels or {})
+
+    mfe_pct = _coerce_float(payload.get("mfe_pct"))
+    mae_pct = _coerce_float(payload.get("mae_pct"))
+    mfe_bps_input = _coerce_float(payload.get("max_favorable_excursion_bps"))
+    mae_bps_input = _coerce_float(payload.get("max_adverse_excursion_bps"))
+    if mfe_pct is None and mfe_bps_input is not None:
+        mfe_pct = mfe_bps_input / 100.0
+    if mae_pct is None and mae_bps_input is not None:
+        mae_pct = mae_bps_input / 100.0
+    time_to_edge_minutes = _coerce_float(payload.get("time_to_edge_minutes"))
+    fill_quality_score = _coerce_float(payload.get("fill_quality_score"))
+    fill_slippage_bps = _coerce_float(
+        payload.get("fill_slippage_bps", payload.get("realized_slippage_bps"))
+    )
+    fill_rate = _coerce_float(payload.get("fill_rate"))
+    realized_return_bps = _coerce_float(payload.get("realized_return_bps"))
+    edge_decay_score = _coerce_float(payload.get("edge_decay_score"))
+    edge_decay_weight = _coerce_float(payload.get("edge_decay_weight"))
+    post_event_drift_bps = _coerce_float(payload.get("post_event_drift_bps"))
+    post_event_drift_score = _coerce_float(payload.get("post_event_drift_score"))
+    realized_edge_capture_ratio = _coerce_float(payload.get("realized_edge_capture_ratio"))
+    adverse_excursion_ratio = _coerce_float(payload.get("adverse_excursion_ratio"))
+    time_to_edge_score = _coerce_float(payload.get("time_to_edge_score"))
+    if edge_decay_score is None and post_event_drift_score is not None:
+        edge_decay_score = post_event_drift_score
+
+    if mfe_pct is not None:
+        mfe_pct = round(abs(mfe_pct), 4)
+    if mae_pct is not None:
+        mae_pct = round(-abs(mae_pct), 4)
+    if time_to_edge_minutes is not None:
+        time_to_edge_minutes = round(max(time_to_edge_minutes, 0.0), 2)
+    fill_quality_score = _clip(fill_quality_score, 0.0, 1.0)
+    if fill_quality_score is not None:
+        fill_quality_score = round(fill_quality_score, 4)
+    if fill_slippage_bps is not None:
+        fill_slippage_bps = round(max(fill_slippage_bps, 0.0), 4)
+    if fill_rate is not None:
+        fill_rate = round(_clip(fill_rate, 0.0, 1.0) or 0.0, 4)
+    if realized_return_bps is not None:
+        realized_return_bps = round(realized_return_bps, 4)
+
+    mfe_bps = (mfe_pct * 100.0) if mfe_pct is not None else None
+    mae_bps = (abs(mae_pct) * 100.0) if mae_pct is not None else None
+
+    if fill_quality_score is None:
+        slippage_component = 1.0
+        if fill_slippage_bps is not None:
+            slippage_component = 1.0 - min(fill_slippage_bps / 60.0, 0.8)
+        fill_component = fill_rate if fill_rate is not None else 0.7
+        fill_quality_score = _clip(
+            (slippage_component * 0.55) + (fill_component * 0.45),
+            0.0,
+            1.0,
+        )
+    if fill_quality_score is not None:
+        fill_quality_score = round(fill_quality_score, 4)
+
+    if realized_edge_capture_ratio is None and mfe_bps is not None and mfe_bps > 0 and realized_return_bps is not None:
+        realized_edge_capture_ratio = _clip(realized_return_bps / mfe_bps, -1.0, 2.0)
+    if realized_edge_capture_ratio is not None:
+        realized_edge_capture_ratio = round(realized_edge_capture_ratio, 4)
+
+    if adverse_excursion_ratio is None and mae_bps is not None and mfe_bps is not None and mfe_bps > 0:
+        adverse_excursion_ratio = _clip(mae_bps / mfe_bps, 0.0, 4.0)
+    if adverse_excursion_ratio is not None:
+        adverse_excursion_ratio = round(adverse_excursion_ratio, 4)
+
+    if time_to_edge_score is None and time_to_edge_minutes is not None:
+        time_to_edge_score = _clip(1.0 - min(time_to_edge_minutes / 240.0, 1.0), 0.0, 1.0)
+    if time_to_edge_score is not None:
+        time_to_edge_score = round(time_to_edge_score, 4)
+
+    if edge_decay_score is None:
+        capture_penalty = 0.5
+        if realized_edge_capture_ratio is not None:
+            capture_penalty = 1.0 - min(max(realized_edge_capture_ratio, 0.0), 1.0)
+        time_penalty = 0.5 if time_to_edge_score is None else (1.0 - time_to_edge_score)
+        fill_penalty = 0.5 if fill_quality_score is None else (1.0 - fill_quality_score)
+        adverse_penalty = 0.5
+        if adverse_excursion_ratio is not None:
+            adverse_penalty = min(adverse_excursion_ratio / 1.5, 1.0)
+        edge_decay_score = _clip(
+            (capture_penalty * 0.4)
+            + (time_penalty * 0.2)
+            + (fill_penalty * 0.2)
+            + (adverse_penalty * 0.2),
+            0.0,
+            1.0,
+        )
+    if edge_decay_score is not None:
+        edge_decay_score = round(edge_decay_score, 4)
+
+    if edge_decay_weight is None and edge_decay_score is not None:
+        edge_decay_weight = _clip(1.0 - (edge_decay_score * 0.7), 0.2, 1.0)
+    if edge_decay_weight is not None:
+        edge_decay_weight = round(edge_decay_weight, 4)
+
+    edge_decay_label = payload.get("edge_decay_label") or payload.get("post_event_drift_label")
+    if edge_decay_label is None and edge_decay_score is not None:
+        if edge_decay_score < 0.25:
+            edge_decay_label = "durable_edge"
+        elif edge_decay_score < 0.5:
+            edge_decay_label = "mild_decay"
+        elif edge_decay_score < 0.75:
+            edge_decay_label = "decaying_edge"
+        else:
+            edge_decay_label = "broken_edge"
+
+    if post_event_drift_score is None and edge_decay_score is not None:
+        post_event_drift_score = edge_decay_score
+    if post_event_drift_score is not None:
+        post_event_drift_score = round(_clip(post_event_drift_score, 0.0, 1.0) or 0.0, 4)
+    if post_event_drift_bps is None:
+        if post_event_drift_score is not None and mfe_bps is not None:
+            post_event_drift_bps = mfe_bps * post_event_drift_score
+        elif post_event_drift_score is not None and realized_return_bps is not None:
+            post_event_drift_bps = abs(realized_return_bps) * post_event_drift_score
+    if post_event_drift_bps is not None:
+        post_event_drift_bps = round(max(post_event_drift_bps, 0.0), 4)
+    post_event_drift_label = payload.get("post_event_drift_label") or edge_decay_label
+
+    time_to_edge_bucket = _time_to_edge_bucket(time_to_edge_minutes)
+    return {
+        "schema_version": VALIDATION_LABEL_SCHEMA_VERSION,
+        "mfe_pct": mfe_pct,
+        "mae_pct": mae_pct,
+        "max_favorable_excursion_bps": mfe_bps,
+        "max_adverse_excursion_bps": mae_bps,
+        "time_to_edge_minutes": time_to_edge_minutes,
+        "time_to_edge_bucket": time_to_edge_bucket,
+        "time_to_edge_label": _time_to_edge_label(time_to_edge_bucket),
+        "time_to_edge_score": time_to_edge_score,
+        "fill_quality_score": fill_quality_score,
+        "fill_quality_label": _infer_fill_quality_label(
+            fill_quality_score=fill_quality_score,
+            fill_rate=fill_rate,
+            fill_slippage_bps=fill_slippage_bps,
+        ),
+        "execution_quality_label": _infer_execution_quality_label(
+            fill_quality_score=fill_quality_score,
+            fill_rate=fill_rate,
+            fill_slippage_bps=fill_slippage_bps,
+            time_to_edge_score=time_to_edge_score,
+            edge_decay_score=edge_decay_score,
+        ),
+        "fill_slippage_bps": fill_slippage_bps,
+        "fill_rate": fill_rate,
+        "realized_return_bps": realized_return_bps,
+        "realized_edge_capture_ratio": realized_edge_capture_ratio,
+        "adverse_excursion_ratio": adverse_excursion_ratio,
+        "post_event_drift_bps": post_event_drift_bps,
+        "post_event_drift_score": post_event_drift_score,
+        "post_event_drift_label": post_event_drift_label,
+        "edge_decay_score": edge_decay_score,
+        "edge_decay_weight": edge_decay_weight,
+        "edge_decay_label": edge_decay_label,
+        "label_source": payload.get("label_source", "research_enrichment"),
+        "label_confidence": round(
+            _clip(_coerce_float(payload.get("label_confidence")), 0.0, 1.0) or 0.0,
+            4,
+        ),
+    }
+
+
+def infer_event_validation_labels(event: Dict[str, Any]) -> Dict[str, Any]:
+    severity = _coerce_float(event.get("severity")) or 0.5
+    vix_peak = _coerce_float(event.get("vix_peak")) or 20.0
+    spx_drawdown = abs(_coerce_float(event.get("sp500_drawdown_pct")) or 0.0)
+    oil_move = abs(_coerce_float(event.get("oil_move_pct")) or 0.0)
+    gold_move = abs(_coerce_float(event.get("gold_move_pct")) or 0.0)
+    intraday_pattern = str(event.get("intraday_pattern", "")).lower()
+
+    mfe_pct = max(0.75, spx_drawdown * 0.55, oil_move * 0.18, gold_move * 0.35, severity * 9.0)
+    mae_pct = max(0.25, min(mfe_pct * 0.5, spx_drawdown * 0.4 + severity * 1.5))
+
+    time_to_edge_minutes = 90.0
+    if "limit" in intraday_pattern or "gap" in intraday_pattern:
+        time_to_edge_minutes = 20.0
+    elif "reversal" in intraday_pattern:
+        time_to_edge_minutes = 55.0
+    elif "grind" in intraday_pattern or "slow" in intraday_pattern:
+        time_to_edge_minutes = 180.0
+
+    fill_slippage_bps = 3.0 + severity * 12.0 + max(vix_peak - 20.0, 0.0) * 0.45
+    fill_quality_score = max(0.1, 1.0 - min(fill_slippage_bps / 100.0, 0.85))
+    fill_rate = max(0.3, min(0.99, 1.02 - fill_slippage_bps / 150.0))
+
+    return normalize_validation_labels(
+        {
+            "mfe_pct": mfe_pct,
+            "mae_pct": mae_pct,
+            "time_to_edge_minutes": time_to_edge_minutes,
+            "fill_quality_score": fill_quality_score,
+            "fill_slippage_bps": fill_slippage_bps,
+            "fill_rate": fill_rate,
+            "realized_return_bps": mfe_pct * 100.0,
+            "label_source": "heuristic_event_enrichment",
+            "label_confidence": min(0.95, 0.55 + severity * 0.3),
+        }
+    )
+
+
+def build_validation_row(
+    record: Dict[str, Any],
+    *,
+    validation_labels: Dict[str, Any] | None = None,
+    source_event_metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    labels = normalize_validation_labels(validation_labels)
+    source = normalize_source_event_metadata(source_event_metadata)
+    row = dict(record)
+    row.update(
+        {
+            "mfe_pct": labels["mfe_pct"],
+            "mae_pct": labels["mae_pct"],
+            "max_favorable_excursion_bps": labels["max_favorable_excursion_bps"],
+            "max_adverse_excursion_bps": labels["max_adverse_excursion_bps"],
+            "time_to_edge_minutes": labels["time_to_edge_minutes"],
+            "time_to_edge_bucket": labels["time_to_edge_bucket"],
+            "time_to_edge_label": labels["time_to_edge_label"],
+            "time_to_edge_score": labels["time_to_edge_score"],
+            "fill_quality_score": labels["fill_quality_score"],
+            "fill_quality_label": labels["fill_quality_label"],
+            "execution_quality_label": labels["execution_quality_label"],
+            "realized_slippage_bps": labels["fill_slippage_bps"],
+            "fill_rate": labels["fill_rate"],
+            "realized_return_bps": labels["realized_return_bps"],
+            "realized_edge_capture_ratio": labels["realized_edge_capture_ratio"],
+            "adverse_excursion_ratio": labels["adverse_excursion_ratio"],
+            "post_event_drift_bps": labels["post_event_drift_bps"],
+            "post_event_drift_score": labels["post_event_drift_score"],
+            "post_event_drift_label": labels["post_event_drift_label"],
+            "edge_decay_score": labels["edge_decay_score"],
+            "edge_decay_weight": labels["edge_decay_weight"],
+            "edge_decay_label": labels["edge_decay_label"],
+            "label_source": labels["label_source"],
+            "label_confidence": labels["label_confidence"],
+            "source_event_id": source["source_event_id"],
+            "source_event_name": source["source_event_name"],
+            "source_event_category": source["source_event_category"],
+            "source_event_phase": source["source_event_phase"],
+        }
+    )
+    return row
+
+
+def _self_test_validation_label_aliases() -> None:
+    labels = normalize_validation_labels(
+        {
+            "max_favorable_excursion_bps": 140.0,
+            "max_adverse_excursion_bps": 52.0,
+            "time_to_edge_minutes": 14.0,
+            "realized_slippage_bps": 6.0,
+            "fill_rate": 0.94,
+            "post_event_drift_score": 0.35,
+            "realized_return_bps": 60.0,
+        }
+    )
+    assert labels["mfe_pct"] == 1.4
+    assert labels["mae_pct"] == -0.52
+    assert labels["time_to_edge_label"] == "immediate_edge"
+    assert labels["fill_quality_label"] in {
+        "excellent_fill_quality",
+        "strong_fill_quality",
+        "adequate_fill_quality",
+        "weak_fill_quality",
+    }
+    assert labels["execution_quality_label"] is not None
+    assert labels["post_event_drift_score"] == 0.35
+    assert labels["post_event_drift_label"] is not None
+
 
 def _event(
     event_id: str,
@@ -37,9 +444,12 @@ def _event(
     regime_signature: dict[str, Any],
     recovery_shape: str,
     lesson: str,
+    validation_labels: dict[str, Any] | None = None,
+    source_event_metadata: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Normalize event creation and keep the dataset shape consistent."""
-    return {
+    base_event = {
+        "schema_version": CRISIS_TRAINING_DATASET_SCHEMA_VERSION,
         "id": event_id,
         "name": name,
         "category": category,
@@ -60,6 +470,19 @@ def _event(
         "regime_signature": regime_signature,
         "recovery_shape": recovery_shape,
         "lesson": lesson,
+    }
+    return {
+        **base_event,
+        "validation_labels": normalize_validation_labels(
+            validation_labels,
+            defaults=infer_event_validation_labels(base_event),
+        ),
+        "source_event_metadata": normalize_source_event_metadata(
+            source_event_metadata,
+            source_event_id=event_id,
+            source_event_name=name,
+            source_event_category=category,
+        ),
     }
 
 
@@ -1288,4 +1711,3 @@ def dataset_summary(events: Iterable[Dict[str, Any]] | None = None) -> Dict[str,
         "playbook_count": len(CRISIS_PLAYBOOKS),
         "categories_with_playbooks": sorted(CRISIS_PLAYBOOKS.keys()),
     }
-

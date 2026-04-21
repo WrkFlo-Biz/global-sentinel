@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: OpenClaw Bot Data Feed Timer (weekdays every 5min 13:25-20:05 UTC)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13..20:00,05,10,15,20,25,30,35,40,45,50,55:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

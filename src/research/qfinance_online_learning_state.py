@@ -34,6 +34,16 @@ DEFAULT_STATE = {
         "max_weight": 1.0,
         "sum_normalize_positive_block": False,
         "research_only": True,
+        "drift_guardrails": {
+            "concept_drift_trigger_score": 0.58,
+            "concept_drift_critical_score": 0.75,
+            "max_decaying_edge_ratio": 0.45,
+            "max_average_edge_decay_score": 0.55,
+            "min_average_fill_quality_score": 0.50,
+            "min_average_time_to_edge_score": 0.45,
+            "max_step_scale_under_drift": 0.50,
+            "max_drift_down_weight_step": 0.03,
+        },
     },
 }
 

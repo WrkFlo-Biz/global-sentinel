@@ -31,8 +31,11 @@ class EIABridge:
             f"&offset=0&length=1"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "GlobalSentinel/5.1"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
         rows = (data.get("response") or {}).get("data") or []
 
         out: List[Dict[str, Any]] = []

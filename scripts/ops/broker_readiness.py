@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -283,6 +284,12 @@ class BrokerReadinessChecker:
                 data = json.loads(resp.read())
                 port_ok = True
                 authenticated = data.get("authenticated", False)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                port_ok = True
+                authenticated = False
+            else:
+                authenticated = False
         except Exception:
             authenticated = False
 

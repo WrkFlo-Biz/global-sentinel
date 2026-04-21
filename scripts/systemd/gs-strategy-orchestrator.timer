@@ -1,0 +1,7 @@
+[Unit]
+Description=Strategy Orchestrator Hourly
+[Timer]
+OnCalendar=*:00/30
+Persistent=true
+[Install]
+WantedBy=timers.target

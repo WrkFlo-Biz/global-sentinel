@@ -24,14 +24,6 @@ from typing import Any, Dict, Optional
 
 from src.monitoring.notification_window import notifications_muted
 
-# Notification categories that should be routed to topic group, not main chat
-_TOPIC_ONLY_EVENTS = frozenset({
-    'startup',
-    'scorecard_summary',
-    'mode_transition',       # NORMAL->ELEVATED etc
-    'performance_summary',
-})
-
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -244,18 +236,12 @@ class AlertDispatcher:
                 return  # Suppressed — already sent this hour
             self._last_sent[event_type] = now
 
-        # Telegram — route system noise to topic group, not main chat
-        if self.telegram_token and not notifications_muted():
-            if event_type in _TOPIC_ONLY_EVENTS:
-                try:
-                    self._send_telegram_topic(message)
-                except Exception:
-                    pass
-            elif self.telegram_chat_id:
-                try:
-                    self._send_telegram(message)
-                except Exception:
-                    pass
+        # Telegram
+        if self.telegram_token and self.telegram_chat_id and not notifications_muted():
+            try:
+                self._send_telegram(message)
+            except Exception:
+                pass
 
         # Slack
         if self.slack_webhook:
@@ -269,50 +255,18 @@ class AlertDispatcher:
         if notifications_muted():
             return
         url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        _payload_dict = {
+        payload = json.dumps({
             "chat_id": self.telegram_chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-        }
-        if True:  # always include thread_id
-            _dt = os.getenv("TELEGRAM_DEFAULT_THREAD_ID", "74")
-            if _dt:
-                _payload_dict["message_thread_id"] = int(_dt)
-        payload = json.dumps(_payload_dict).encode("utf-8")
+        }).encode("utf-8")
 
         req = urllib.request.Request(
             url,
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10)
-
-    def _send_telegram_topic(self, text: str):
-        """Send message to topic group chat (noisy system updates channel)."""
-        if notifications_muted():
-            return
-        import os as _os
-        topic_chat = _os.getenv('TELEGRAM_TOPIC_CHAT_ID', '')
-        thread_id = _os.getenv('TELEGRAM_V6_DIGEST_THREAD_ID', '74')
-        if not topic_chat or not self.telegram_token:
-            return  # fallback: don't send at all (suppress noise)
-        payload_d = {
-            'chat_id': topic_chat,
-            'text': text,
-            'parse_mode': 'HTML',
-            'disable_web_page_preview': True,
-            'disable_notification': True,
-        }
-        if thread_id:
-            payload_d['message_thread_id'] = int(thread_id)
-        payload = json.dumps(payload_d).encode('utf-8')
-        req = urllib.request.Request(
-            f'https://api.telegram.org/bot{self.telegram_token}/sendMessage',
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
         )
         urllib.request.urlopen(req, timeout=10)
 

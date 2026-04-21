@@ -24,7 +24,6 @@ import argparse
 import json
 import logging
 import math
-import os
 import random
 import signal
 import sys
@@ -36,6 +35,23 @@ from typing import Any
 # Add project root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+
+from src.research.alpha_candidate_labeler import AlphaCandidateLabeler
+from src.research.classical_optimizer_baseline import ClassicalOptimizerBaseline
+from src.research.evaluate_trade_outcomes import evaluate as evaluate_trade_outcomes
+from src.research.experimental_sipqc_mc_lane import ExperimentalSIPQCMCLane
+from src.research.experiment_tracker import ExperimentTracker
+from src.research.learning_state_persistence import LearningStatePersistence
+from src.research.qfinance_online_learning_state import load_state, save_state
+from src.research.qfinance_training_dataset_builder import QFinanceTrainingDatasetBuilder
+from src.research.replay_quantum_research_backtest import (
+    ReplayQuantumResearchBacktest,
+    load_jsons,
+)
+from src.research.research_score_writer import build_research_score
+from src.research.update_research_model_weights import ResearchModelWeightUpdater
+from src.packets.quantum_optimization_request import QuantumOptimizationRequest
+from src.packets.quantum_optimization_result import QuantumOptimizationResult
 
 logging.basicConfig(
     level=logging.INFO,
@@ -204,10 +220,84 @@ ASSET_PRICES = {
     "DBA": 25.0, "CORN": 22.0, "SPY": 650.0, "QQQ": 577.0,
 }
 
+SECTOR_MAP = {
+    "USO": "Energy",
+    "XOP": "Energy",
+    "OXY": "Energy",
+    "XLE": "Energy",
+    "CVX": "Energy",
+    "XOM": "Energy",
+    "STNG": "Shipping",
+    "FRO": "Shipping",
+    "ZIM": "Shipping",
+    "NAT": "Shipping",
+    "LMT": "Defense",
+    "RTX": "Defense",
+    "NOC": "Defense",
+    "KTOS": "Defense",
+    "AVAV": "Defense",
+    "GLD": "Metals",
+    "GDX": "Metals",
+    "SLV": "Metals",
+    "JETS": "Airlines",
+    "UAL": "Airlines",
+    "AAL": "Airlines",
+    "DAL": "Airlines",
+    "CCJ": "Uranium",
+    "URA": "Uranium",
+    "SMR": "Uranium",
+    "MOS": "Agriculture",
+    "CF": "Agriculture",
+    "NTR": "Agriculture",
+    "WEAT": "Agriculture",
+    "SPY": "Index",
+    "QQQ": "Index",
+    "UVXY": "Volatility",
+    "SVXY": "Volatility",
+    "VXX": "Volatility",
+    "EEM": "EM",
+    "FXI": "EM",
+    "TLT": "Rates",
+    "TIP": "Rates",
+    "GS": "Financials",
+    "MS": "Financials",
+    "NVDA": "Technology",
+    "AMD": "Technology",
+    "TSLA": "Technology",
+    "SOXL": "Technology",
+    "TQQQ": "Technology",
+    "COIN": "Technology",
+    "PLTR": "Technology",
+    "MRVL": "Technology",
+    "AVGO": "Technology",
+}
+
+THEME_BY_STRATEGY = {
+    "oil_momentum_intraday": "oil_momentum",
+    "shipping_rate_explosion": "shipping",
+    "defense_accumulation": "defense",
+    "gold_safe_haven": "safe_haven",
+    "airline_short": "oil_vs_airlines",
+    "vix_spike_scalp": "volatility",
+    "oil_gap_persistence": "oil_gap",
+    "us_premarket_gap": "index_gap",
+    "supply_shock_pairs": "supply_shock",
+    "zahloria_optimized": "momentum_pullback",
+    "amd_power_of_3": "ict_reversal",
+    "simons_pattern_recognition": "pattern_recognition",
+}
+
 
 def _rand_range(r: tuple) -> float:
     """Random float in range tuple."""
     return random.uniform(r[0], r[1])
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
 
 
 def generate_scenario(archetype: str | None = None) -> dict[str, Any]:
@@ -529,13 +619,42 @@ class ContinuousStrategyTrainer:
         # Paths
         self._log_dir = repo_root / "logs" / "training"
         self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._research_dir = repo_root / "reports" / "research"
+        self._research_dir.mkdir(parents=True, exist_ok=True)
+        self._history_dir = self._research_dir / "history"
+        self._history_dir.mkdir(parents=True, exist_ok=True)
         self._kelly_path = self._log_dir / "kelly_state.json"
         self._summary_path = self._log_dir / "training_summary.json"
+        self._training_dataset_path = self._research_dir / "training_dataset.json"
+        self._training_labels_path = self._research_dir / "training_labels.json"
+        self._research_score_path = self._research_dir / "research_score_latest.json"
+        self._replay_backtest_path = (
+            self._research_dir / "replay_quantum_research_backtest.json"
+        )
+        self._learning_state_path = (
+            self._repo_root / "artifacts" / "learning_state" / "current_state.json"
+        )
 
         # Components
         self._kelly = KellyCalculator(self._kelly_path)
         self._summary = TrainingSummary(self._summary_path)
         self._strategy_engine = None
+        self._classical_optimizer = ClassicalOptimizerBaseline()
+        self._scenario_lane = ExperimentalSIPQCMCLane(
+            {
+                "n_scenarios": max(96, scenarios_per_cycle * 24),
+                "seed": 42,
+            }
+        )
+        self._dataset_builder = QFinanceTrainingDatasetBuilder()
+        self._labeler = AlphaCandidateLabeler()
+        self._weight_updater = ResearchModelWeightUpdater()
+        self._learning_state_persistence = LearningStatePersistence(
+            local_dir=self._research_dir / "state" / "versions"
+        )
+        self._experiment_tracker = ExperimentTracker(self._repo_root)
+        if not self._learning_state_path.exists():
+            save_state(self._learning_state_path, load_state(self._learning_state_path))
 
         # Signal handling
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -550,22 +669,11 @@ class ContinuousStrategyTrainer:
         try:
             from src.alpha.strategy_engine import StrategyEngine
 
-            config_relpath = "config/war_strategies.yaml"
-            self._strategy_engine = StrategyEngine(config_path=config_relpath, repo_root=str(self._repo_root))
-            import yaml
-            with open(self._repo_root / config_relpath) as f:
-                config = yaml.safe_load(f)
-            logger.info("Strategy engine initialized with %d strategies",
-                        len(config.get("strategies", {})))
-            return True
-
-
-
-
-
-
-
-
+            self._strategy_engine = StrategyEngine(repo_root=str(self._repo_root))
+            logger.info(
+                "Strategy engine initialized with %d strategies",
+                len(self._strategy_engine.strategies),
+            )
             return True
         except Exception:
             logger.exception("Failed to init strategy engine — using mock evaluation")
@@ -812,10 +920,454 @@ class ContinuousStrategyTrainer:
 
         return ideas
 
+    @staticmethod
+    def _infer_sector(symbol: str) -> str:
+        return SECTOR_MAP.get(symbol, "Unknown")
+
+    @staticmethod
+    def _infer_theme(strategy_name: str) -> str:
+        return THEME_BY_STRATEGY.get(strategy_name, strategy_name)
+
+    @staticmethod
+    def _regime_state_from_scenario(scenario: dict) -> dict[str, Any]:
+        scorecard = scenario["scorecard"]
+        components = scorecard.get("component_scores", {})
+        geopolitical = _safe_float(components.get("geopolitical_tension"))
+        commodity = _safe_float(components.get("commodity_shock"))
+        market_vol = _safe_float(components.get("market_volatility"))
+        macro_state = "mixed"
+        if scenario["archetype"] in {"bull_momentum", "ceasefire_rally"}:
+            macro_state = "risk_on"
+        elif scenario["archetype"] in {
+            "bear_selloff",
+            "vix_spike_crash",
+            "oil_shock_dislocation",
+        }:
+            macro_state = "risk_off"
+
+        geopolitical_state = "elevated" if geopolitical >= 0.5 else "normal"
+        if geopolitical >= 0.8 or commodity >= 0.8:
+            geopolitical_state = "crisis"
+
+        regime = "transition"
+        if market_vol >= 0.55:
+            regime = "crisis"
+        elif macro_state == "risk_off":
+            regime = "risk_off"
+        elif macro_state == "risk_on":
+            regime = "risk_on"
+
+        return {
+            "regime": regime,
+            "regime_shift_probability": scorecard.get("regime_shift_probability", 0.5),
+            "macro_state": macro_state,
+            "geopolitical_state": geopolitical_state,
+        }
+
+    def _build_encoded_candidates(
+        self,
+        scenario: dict,
+        ideas: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        scorecard = scenario["scorecard"]
+        components = scorecard.get("component_scores", {})
+        normalized: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for idea in ideas:
+            symbol = str(idea.get("symbol", "")).upper()
+            direction = str(idea.get("direction", "long")).lower()
+            if not symbol:
+                continue
+            key = (symbol, direction)
+            mkt = scenario["market_data"].get(symbol, {})
+            confidence = _safe_float(
+                idea.get("confidence_score", idea.get("confidence", 0.5)),
+                0.5,
+            )
+            change_pct = _safe_float(mkt.get("change_pct"))
+            volume = max(0.0, _safe_float(mkt.get("volume")))
+            liquidity_score = min(volume / 50_000_000.0, 1.0)
+            volatility_penalty = -min(abs(change_pct) / 10.0, 1.0)
+            sector = self._infer_sector(symbol)
+            strategy_name = str(idea.get("strategy", "unknown"))
+            event_score = 0.0
+            if sector in {"Energy", "Shipping", "Airlines"}:
+                event_score = max(
+                    _safe_float(components.get("commodity_shock")),
+                    _safe_float(scorecard.get("chokepoint_risk", {}).get("hormuz")),
+                )
+            elif sector == "Defense":
+                event_score = _safe_float(components.get("geopolitical_tension"))
+            elif sector in {"Metals", "Volatility", "Rates"}:
+                event_score = max(
+                    _safe_float(components.get("market_volatility")),
+                    _safe_float(components.get("geopolitical_tension")),
+                )
+            else:
+                event_score = _safe_float(components.get("policy_signals"))
+
+            quality_score = min(
+                1.0,
+                abs(_safe_float(idea.get("take_profit_pct", 0.0))) / 10.0
+                + confidence * 0.4,
+            )
+            regime_alignment = min(
+                1.0,
+                max(
+                    0.0,
+                    _safe_float(scorecard.get("regime_shift_probability", 0.5)) * 0.6
+                    + confidence * 0.4,
+                ),
+            )
+            base_score = confidence
+            preopt_feature_score = round(
+                min(
+                    1.0,
+                    max(
+                        0.0,
+                        0.30 * base_score
+                        + 0.25 * event_score
+                        + 0.15 * quality_score
+                        + 0.15 * liquidity_score
+                        + 0.15 * regime_alignment
+                        + 0.10 * volatility_penalty,
+                    ),
+                ),
+                6,
+            )
+            expected_return = max(
+                0.0,
+                abs(_safe_float(idea.get("take_profit_pct", 0.0))) / 100.0,
+            )
+
+            row = {
+                "symbol": symbol,
+                "strategy": strategy_name,
+                "direction": direction,
+                "sector": sector,
+                "theme": self._infer_theme(strategy_name),
+                "base_score": round(base_score, 6),
+                "event_score": round(event_score, 6),
+                "quality_score": round(quality_score, 6),
+                "anomaly_score": round(abs(volatility_penalty), 6),
+                "liquidity_score": round(liquidity_score, 6),
+                "volatility_penalty": round(volatility_penalty, 6),
+                "regime_alignment": round(regime_alignment, 6),
+                "preopt_feature_score": preopt_feature_score,
+                "score": preopt_feature_score,
+                "expected_return": round(expected_return, 6),
+                "notional_usd": _safe_float(idea.get("notional_usd")),
+                "confidence": round(confidence, 6),
+                "entry_signal": idea.get("entry_signal"),
+            }
+
+            existing = normalized.get(key)
+            if existing is None or row["score"] > existing["score"]:
+                normalized[key] = row
+
+        rows = list(normalized.values())
+        total_score = sum(max(_safe_float(row.get("score")), 0.0) for row in rows)
+        for row in rows:
+            row["weight"] = round(
+                max(_safe_float(row.get("score")), 0.0) / total_score,
+                6,
+            ) if total_score > 0 else round(1.0 / max(len(rows), 1), 6)
+        return rows
+
+    def _build_quantum_request(
+        self,
+        scenario: dict,
+        encoded_candidates: list[dict[str, Any]],
+    ) -> QuantumOptimizationRequest:
+        regime_state = self._regime_state_from_scenario(scenario)
+        return QuantumOptimizationRequest(
+            request_id=f"{scenario['scenario_id']}-req",
+            package_id=f"{scenario['scenario_id']}-pkg",
+            timestamp_utc=scenario["scorecard"]["timestamp_utc"],
+            runtime_flags={"shadow_mode_only": True, "training_cycle": True},
+            time_window_state={
+                "window": "scenario_training",
+                "impact_multiplier": 1.0,
+                "archetype": scenario["archetype"],
+            },
+            regime_state=regime_state,
+            objective={"type": "scenario_training_rank"},
+            constraints={
+                "max_names": min(10, max(1, len(encoded_candidates))),
+                "max_sector_weight": 0.50,
+            },
+            candidate_universe=encoded_candidates,
+            market_microstructure={},
+            provenance={
+                "source": "continuous_strategy_trainer",
+                "scenario_id": scenario["scenario_id"],
+                "archetype": scenario["archetype"],
+            },
+        )
+
+    def _build_quantum_proxy_result(
+        self,
+        request: QuantumOptimizationRequest,
+        encoded_candidates: list[dict[str, Any]],
+    ) -> QuantumOptimizationResult:
+        regime_state = request.regime_state
+        scenarios = self._scenario_lane.generate_scenarios(
+            regime_state,
+            n=max(64, min(256, len(encoded_candidates) * 32)),
+        )
+        adjusted_candidates: list[dict[str, Any]] = []
+
+        for candidate in encoded_candidates:
+            direction = str(candidate.get("direction", "long")).lower()
+            signed_expected = _safe_float(candidate.get("expected_return"))
+            if direction == "short":
+                signed_expected *= -1.0
+
+            realized_path = []
+            for sc in scenarios:
+                realized_path.append(
+                    (signed_expected + _safe_float(sc.get("return_shift")))
+                    * _safe_float(sc.get("vol_multiplier"), 1.0)
+                )
+
+            realized_path.sort()
+            mean_return = sum(realized_path) / max(len(realized_path), 1)
+            tail = realized_path[: max(1, len(realized_path) // 10)]
+            downside_cvar = abs(sum(x for x in tail if x < 0.0)) / max(len(tail), 1)
+            risk_adjusted_score = (
+                _safe_float(candidate.get("score"))
+                + mean_return * 12.0
+                - downside_cvar * 8.0
+                + _safe_float(candidate.get("regime_alignment")) * 0.10
+            )
+            updated = dict(candidate)
+            updated["score"] = round(risk_adjusted_score, 6)
+            updated["sipqc_mean_return"] = round(mean_return, 6)
+            updated["sipqc_downside_cvar"] = round(downside_cvar, 6)
+            adjusted_candidates.append(updated)
+
+        proxy_request = QuantumOptimizationRequest(
+            request_id=request.request_id,
+            package_id=request.package_id,
+            timestamp_utc=request.timestamp_utc,
+            runtime_flags=dict(request.runtime_flags),
+            time_window_state=dict(request.time_window_state),
+            regime_state=dict(request.regime_state),
+            objective=dict(request.objective),
+            constraints=dict(request.constraints),
+            candidate_universe=adjusted_candidates,
+            market_microstructure=dict(request.market_microstructure),
+            provenance=dict(request.provenance),
+        )
+        baseline = self._classical_optimizer.run(proxy_request)
+        lane_summary = self._scenario_lane.run(adjusted_candidates, regime_state)
+        return QuantumOptimizationResult(
+            request_id=request.request_id,
+            package_id=request.package_id,
+            solver="sipqc_mc_proxy",
+            success=True,
+            ranked_solutions=baseline.ranked_solutions,
+            objective_value=baseline.objective_value,
+            feasibility=1.0,
+            diagnostics={
+                "framework_standard": "sipqc_mc_proxy",
+                "research_only": True,
+                "not_for_direct_execution": True,
+                "risk_metrics": lane_summary.get("risk_metrics", {}),
+                "selection_count": len(baseline.ranked_solutions),
+            },
+            provenance=request.provenance,
+        )
+
+    @staticmethod
+    def _trade_outcomes_from_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
+        rows = []
+        for trade in trades:
+            rows.append(
+                {
+                    "symbol": trade.get("symbol"),
+                    "trade_executed": True,
+                    "direction": trade.get("direction"),
+                    "realized_return_bps": round(_safe_float(trade.get("realized_pct")) * 100.0, 2),
+                    "realized_slippage_bps": round(
+                        abs(
+                            (_safe_float(trade.get("move_pct")) - _safe_float(trade.get("realized_pct")))
+                            * 100.0
+                        ),
+                        2,
+                    ),
+                    "fill_rate": 1.0,
+                    "quantum_influenced": False,
+                    "research_score_used": None,
+                }
+            )
+        return {"schema_version": "scenario_trade_outcomes.v1", "trades": rows}
+
+    @staticmethod
+    def _read_rows(path: Path) -> list[dict[str, Any]]:
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+        rows = payload.get("rows")
+        return rows if isinstance(rows, list) else []
+
+    def _append_dataset_rows(
+        self,
+        path: Path,
+        schema_version: str,
+        new_rows: list[dict[str, Any]],
+        max_rows: int = 5000,
+    ) -> dict[str, Any]:
+        rows = self._read_rows(path)
+        rows.extend(new_rows)
+        rows = rows[-max_rows:]
+        payload = {
+            "schema_version": schema_version,
+            "row_count": len(rows),
+            "rows": rows,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return payload
+
+    def _update_learning_state(
+        self,
+        labeled_dataset: dict[str, Any],
+        scenario: dict[str, Any],
+        research_score: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        current_state = load_state(self._learning_state_path)
+        updated_state = self._weight_updater.update(
+            state=current_state,
+            labeled_dataset=labeled_dataset,
+            learning_rate=0.01,
+        )
+        save_state(self._learning_state_path, updated_state)
+        version_id = self._learning_state_persistence.save_state(
+            updated_state,
+            metadata={
+                "source": "continuous_strategy_trainer",
+                "scenario_id": scenario["scenario_id"],
+                "archetype": scenario["archetype"],
+                "research_score": research_score.get("research_score"),
+                "training_rows": labeled_dataset.get("row_count", 0),
+            },
+        )
+        return updated_state, version_id
+
+    def _write_research_artifacts(
+        self,
+        scenario: dict[str, Any],
+        encoded_candidates: list[dict[str, Any]],
+        trades: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        request = self._build_quantum_request(scenario, encoded_candidates)
+        classical_result = self._classical_optimizer.run(request).to_dict()
+        quantum_result = self._build_quantum_proxy_result(
+            request,
+            encoded_candidates,
+        ).to_dict()
+        trade_outcomes = self._trade_outcomes_from_trades(trades)
+        evaluation = evaluate_trade_outcomes(
+            classical_result=classical_result,
+            quantum_result=quantum_result,
+            trade_outcomes=trade_outcomes,
+        )
+        research_score = build_research_score(evaluation)
+        self._research_score_path.write_text(
+            json.dumps(research_score, indent=2),
+            encoding="utf-8",
+        )
+
+        dataset = self._dataset_builder.build(
+            encoded_candidates=encoded_candidates,
+            regime_state=self._regime_state_from_scenario(scenario),
+            trade_outcomes=trade_outcomes,
+            research_score=research_score,
+        )
+        labeled_new = self._labeler.label_rows(dataset)
+        self._append_dataset_rows(
+            self._training_dataset_path,
+            dataset["schema_version"],
+            dataset.get("rows", []),
+        )
+        self._append_dataset_rows(
+            self._training_labels_path,
+            labeled_new["schema_version"],
+            labeled_new.get("rows", []),
+        )
+        updated_state, version_id = self._update_learning_state(
+            labeled_new,
+            scenario,
+            research_score,
+        )
+
+        comparison_report = {
+            "request_id": request.request_id,
+            "package_id": request.package_id,
+            "request": {
+                "candidate_universe": encoded_candidates,
+                "candidates": encoded_candidates,
+                "regime_state": request.regime_state,
+                "scenario_id": scenario["scenario_id"],
+            },
+            "comparison": {
+                "classical_objective": classical_result.get("objective_value"),
+                "quantum_objective": quantum_result.get("objective_value"),
+                "objective_value_delta": _safe_float(quantum_result.get("objective_value"))
+                - _safe_float(classical_result.get("objective_value")),
+            },
+            "evaluation": evaluation,
+            "scenario_context": {
+                "scenario_id": scenario["scenario_id"],
+                "archetype": scenario["archetype"],
+            },
+        }
+        self._experiment_tracker.log_result(comparison_report)
+
+        history_payload = dict(evaluation)
+        history_payload["request_id"] = request.request_id
+        history_payload["package_id"] = request.package_id
+        history_payload["classical_solver"] = classical_result.get("solver")
+        history_payload["quantum_solver"] = quantum_result.get("solver")
+        history_payload["scenario_id"] = scenario["scenario_id"]
+        history_payload["archetype"] = scenario["archetype"]
+        history_payload["quantum_objective"] = quantum_result.get("objective_value")
+        history_payload["classical_objective"] = classical_result.get("objective_value")
+        history_payload["research_score"] = research_score.get("research_score")
+        history_payload["learning_state_version"] = version_id
+
+        history_path = self._history_dir / f"{scenario['scenario_id']}.json"
+        history_path.write_text(
+            json.dumps(history_payload, indent=2),
+            encoding="utf-8",
+        )
+
+        replay = ReplayQuantumResearchBacktest().run(load_jsons(self._history_dir))
+        self._replay_backtest_path.write_text(
+            json.dumps(replay, indent=2),
+            encoding="utf-8",
+        )
+
+        return {
+            "request_id": request.request_id,
+            "classical_result": classical_result,
+            "quantum_result": quantum_result,
+            "evaluation": evaluation,
+            "research_score": research_score,
+            "learning_state_version": version_id,
+            "learning_state_updates": updated_state.get("update_stats", {}),
+            "replay_backtest": replay,
+        }
+
     def run_cycle(self):
         """Run one training cycle — generate scenarios, evaluate, track P&L."""
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
         pnl_log_path = self._log_dir / f"strategy_pnl_{today}.jsonl"
+        cycle_log_path = self._log_dir / f"scenario_cycles_{today}.jsonl"
 
         for _ in range(self._scenarios_per_cycle):
             scenario = generate_scenario()
@@ -836,6 +1388,10 @@ class ContinuousStrategyTrainer:
             if not ideas:
                 continue
 
+            encoded_candidates = self._build_encoded_candidates(scenario, ideas)
+            if not encoded_candidates:
+                continue
+
             # Simulate P&L for each triggered trade
             trades = []
             for idea in ideas:
@@ -851,6 +1407,23 @@ class ContinuousStrategyTrainer:
             with open(pnl_log_path, "a") as f:
                 for t in trades:
                     f.write(json.dumps(t) + "\n")
+
+            research_artifacts = self._write_research_artifacts(
+                scenario,
+                encoded_candidates,
+                trades,
+            )
+            cycle_artifact = {
+                "schema_version": "continuous_strategy_training_cycle.v2",
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "scenario": scenario,
+                "ideas": ideas,
+                "encoded_candidates": encoded_candidates,
+                "trades": trades,
+                "research": research_artifacts,
+            }
+            with open(cycle_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(cycle_artifact, default=str) + "\n")
 
             # Update summary
             self._summary.record_cycle(scenario, trades)

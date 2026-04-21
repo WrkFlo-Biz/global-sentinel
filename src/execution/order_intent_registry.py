@@ -115,14 +115,26 @@ class OrderIntentRegistry:
 
             "candidate_context": {
                 "symbol": candidate.get("symbol"),
+                "strategy": candidate.get("strategy"),
                 "strategy_style": candidate.get("strategy_style"),
+                "strategy_family": candidate.get("strategy_family"),
+                "underlying_strategy": candidate.get("underlying_strategy"),
+                "learning_adjusted": candidate.get("learning_adjusted"),
+                "learning_adjustment_detail": candidate.get("learning_adjustment_detail"),
+                "event_novelty_score": candidate.get("event_novelty_score"),
+                "expected_edge_bps": candidate.get("expected_edge_bps"),
+                "expected_cost_bps": candidate.get("expected_cost_bps"),
+                "net_expected_value_bps": candidate.get("net_expected_value_bps"),
                 "template_key": candidate.get("template_key"),
                 "direction": candidate.get("direction"),
                 "holding_period": candidate.get("holding_period"),
                 "confidence_score": candidate.get("confidence_score"),
                 "size_multiplier_suggestion": candidate.get("size_multiplier_suggestion"),
+                "entry_signal": candidate.get("entry_signal"),
+                "rationale": candidate.get("rationale"),
                 "price_hints": candidate.get("price_hints"),
                 "themes": candidate.get("themes"),
+                "metadata": candidate.get("metadata"),
                 "block_reasons": candidate.get("block_reasons"),
                 "execution_constraints": candidate.get("execution_constraints"),
                 "fill_sim_assessment": candidate.get("fill_sim_assessment"),
@@ -418,17 +430,16 @@ class OrderIntentRegistry:
         if not path.exists():
             return []
         out = []
-        with open(path, encoding="utf-8") as _f:
-            for line in _f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if isinstance(obj, dict):
-                        out.append(obj)
-                except Exception:
-                    continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    out.append(obj)
+            except Exception:
+                continue
         return out
 
     def _latest_by_intent_id(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

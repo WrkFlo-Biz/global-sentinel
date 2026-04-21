@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: Price Forecasting (weekdays 12:00 & 16:00 UTC) Timer
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 12,16:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

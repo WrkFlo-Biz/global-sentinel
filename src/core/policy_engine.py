@@ -255,7 +255,7 @@ class PolicyEngine:
 
             asset_class = str(trade_idea.get("asset_class", trade_idea.get("instrument_type", ""))).lower()
             if "option" in asset_class:
-                options_enabled = bool(((self._options_rollout.get("options") or self._options_rollout.get("options_rollout") or {}).get("enabled")))
+                options_enabled = bool(((self._options_rollout.get("options_rollout") or {}).get("enabled")))
                 options_enabled = options_enabled or bool((self._policy_config.get("options_policy") or {}).get("default_options_enabled"))
                 if options_enabled:
                     checks_passed.append("options_rollout_allows_trade")

@@ -123,6 +123,8 @@ export interface PortfolioPosition {
   unrealized_plpc: number;
   market_value: number;
   account?: string;
+  account_label?: string;
+  broker?: string;
 }
 
 export interface PortfolioAccountError {
@@ -133,6 +135,10 @@ export interface PortfolioAccountError {
 export interface PortfolioAccountDetail {
   label: string;
   status?: string;
+  broker?: string;
+  display_label?: string;
+  account_number?: string;
+  is_live?: boolean;
   equity: number;
   cash: number;
   buying_power: number;

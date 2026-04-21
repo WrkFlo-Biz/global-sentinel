@@ -21,13 +21,23 @@ def attach_research_score(
     research_score: Dict[str, Any],
     incident_mode: str = "NORMAL",
 ) -> Dict[str, Any]:
+    validation = research_score.get("validation") or {}
+    guardrail_result = research_score.get("guardrail_result") or {}
+    if validation and not validation.get("passed", False):
+        raise ValueError("research_score_validation_failed")
+    if guardrail_result and not guardrail_result.get("passed", False):
+        raise ValueError("research_score_guardrail_failed")
+
     out = dict(snapshot)
 
     out.setdefault("research_overlays", {})
     out["research_overlays"]["quantum_research_score"] = {
         "research_score": research_score.get("research_score"),
+        "raw_research_score": research_score.get("raw_research_score"),
         "recommended_influence": research_score.get("recommended_influence"),
         "guardrails": research_score.get("guardrails"),
+        "guardrail_result": guardrail_result,
+        "validation": validation,
         "request_id": research_score.get("request_id"),
         "package_id": research_score.get("package_id"),
     }

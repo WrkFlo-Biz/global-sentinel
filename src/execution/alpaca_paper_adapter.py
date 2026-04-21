@@ -79,7 +79,7 @@ class AlpacaPaperAdapter:
         # Rate limiter: 180 req/min per API key (conservative vs Alpaca's 200 limit)
         try:
             from src.utils.rate_limiter import get_limiter, retry_with_backoff
-            self._rate_limiter = get_limiter(self.api_key, max_rpm=150)
+            self._rate_limiter = get_limiter(self.api_key, max_rpm=180)
             self._retry_with_backoff = retry_with_backoff
         except ImportError:
             self._rate_limiter = None

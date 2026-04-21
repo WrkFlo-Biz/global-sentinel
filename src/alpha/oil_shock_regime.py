@@ -75,7 +75,7 @@ class OilShockRegime:
                 "oil_momentum_intraday", "defense_accumulation",
                 "oil_gap_persistence", "petro_inflation",
                 "china_oil_import_shock", "europe_pre_open",
-                "us_premarket_gap", "ag_spread_cascade",
+                "us_premarket_gap",
             ],
             "suppress": ["airline_short"],  # wait for confirmation
             "size_multiplier": 1.2,
@@ -83,7 +83,7 @@ class OilShockRegime:
         },
         "SHOCK": {
             "promote": [
-                "shipping_rate_explosion",
+                "shipping_grind", "shipping_rate_explosion",
                 "oil_momentum_intraday", "defense_accumulation",
                 "gold_safe_haven", "airline_short", "europe_energy_crisis",
                 "fertilizer_food_chain", "nuclear_renaissance",
@@ -97,11 +97,8 @@ class OilShockRegime:
                 "china_oil_import_shock", "asia_energy_cascade",
                 "europe_pre_open", "us_premarket_gap",
                 "commodity_currency_divergence",
-                "ag_spread_cascade",
             ],
-            "suppress": [
-                "oil_mean_reversion",  # don't fade $100 oil
-            ],
+            "suppress": [],
             "size_multiplier": 1.5,
             "max_correlated_exposure": 0.50,  # 50% cap on oil-correlated
             "max_new_gross_per_cycle": 0.06,  # 6% — don't add too fast
@@ -119,7 +116,6 @@ class OilShockRegime:
                 "china_oil_import_shock", "asia_energy_cascade",
                 "europe_pre_open", "us_premarket_gap",
                 "commodity_currency_divergence",
-                "ag_spread_cascade",
             ],
             "suppress": [
                 "oil_mean_reversion",  # don't fade dislocation
@@ -207,10 +203,10 @@ class OilShockRegime:
                 (chokepoint_status or {}).get("hormuz", 0.0),
                 (chokepoint_status or {}).get("bab_el_mandeb", 0.0),
             ) if chokepoint_status else 0.0
-            if commodity_shock > 0.8:
+            if commodity_shock >= 0.85:
                 regime_from_commodity = "SHOCK"
-            elif commodity_shock >= 0.65 and chokepoint_composite > 0:
-                # High commodity shock + any chokepoint activity = SHOCK
+            elif commodity_shock >= 0.75 and chokepoint_composite >= 0.4:
+                # High commodity shock plus a real chokepoint event = SHOCK
                 regime_from_commodity = "SHOCK"
             elif commodity_shock > 0.6:
                 regime_from_commodity = "ELEVATED"

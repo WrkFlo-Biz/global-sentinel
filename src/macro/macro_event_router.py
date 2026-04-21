@@ -62,6 +62,14 @@ def event_fingerprint(ev: Dict[str, Any]) -> str:
     Build a coarse content fingerprint to collapse obvious duplicates across bridges.
     Prioritizes same event_type + normalized headline + source URL path-ish.
     """
+    canonical_dedupe = str(
+        ev.get("canonical_dedupe_key")
+        or (ev.get("event_ledger") or {}).get("dedupe_key")
+        or ""
+    ).strip()
+    if canonical_dedupe:
+        return f"canon:{canonical_dedupe}"
+
     event_type = str(ev.get("event_type", "unknown"))
     headline = norm_text(ev.get("headline", ""))[:180]
     src_url = str(ev.get("source_url", ""))[:220]
@@ -107,7 +115,7 @@ class MacroEventRouter:
     # Public API
     # -------------------------
     def route(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        valid = [e for e in events if self._is_valid_macro_policy_event(e)]
+        valid = [self._ensure_canonical_event_fields(e) for e in events if self._is_valid_macro_policy_event(e)]
 
         # Score first (used in dedupe winner selection)
         scored = [self._annotate_with_routing_score(e) for e in valid]
@@ -149,26 +157,61 @@ class MacroEventRouter:
     # -------------------------
     # Validation / scoring
     # -------------------------
+    def _ensure_canonical_event_fields(self, ev: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(ev)
+        if (
+            out.get("canonical_event_id")
+            and out.get("canonical_dedupe_key")
+            and out.get("source_credibility") is not None
+        ):
+            return out
+        try:
+            from src.research.event_ledger import attach_event_ledger
+
+            bridge_name = str(out.get("bridge") or out.get("source") or "macro_event_router")
+            out = attach_event_ledger(out, bridge_name=bridge_name)
+        except Exception:
+            return out
+        return out
+
+    @staticmethod
+    def _canonical_source_credibility(ev: Dict[str, Any]) -> float:
+        explicit = ev.get("source_credibility")
+        if explicit is None:
+            explicit = (ev.get("event_ledger") or {}).get("source_credibility")
+        if explicit is None:
+            explicit = ev.get("source_confidence")
+        return max(0.0, min(1.0, safe_float(explicit, 0.0)))
+
+    @staticmethod
+    def _canonical_novelty_score(ev: Dict[str, Any]) -> float:
+        value = ev.get("canonical_novelty_score")
+        if value is None:
+            value = (ev.get("event_ledger") or {}).get("novelty_score")
+        return max(0.0, min(1.0, safe_float(value, 0.0)))
+
     def _is_valid_macro_policy_event(self, ev: Dict[str, Any]) -> bool:
         schema = str(ev.get("schema_version", ""))
         return schema.startswith("macro_policy_event")
 
     def _annotate_with_routing_score(self, ev: Dict[str, Any]) -> Dict[str, Any]:
         e = dict(ev)  # shallow copy
-        tier = str(e.get("source_tier", "tier_d_free_fallback"))
-        event_type = str(e.get("event_type", "macro_calendar_update"))
+        canonical_source = ((e.get("event_ledger") or {}).get("canonical_source") or {})
+        tier = str(e.get("source_tier") or canonical_source.get("source_tier") or "tier_d_free_fallback")
+        event_type = str(e.get("canonical_event_type") or e.get("event_type", "macro_calendar_update"))
 
         tier_w = self.source_tier_weights.get(tier, 0.40)
         type_w = self.event_type_priority.get(event_type, 0.40)
         urgency = safe_float(e.get("policy_release_urgency_score"), 0.0)
-        source_conf = safe_float(e.get("source_confidence"), 0.0)
+        source_conf = self._canonical_source_credibility(e)
+        novelty_score = self._canonical_novelty_score(e)
 
         official_bonus = 0.08 if e.get("official_source_confirmed") is True else 0.0
         rate_regime_bonus = 0.08 if e.get("rate_regime_shock_candidate") is True else 0.0
         cross_asset_bonus = 0.04 if e.get("requires_rate_cross_asset_check") is True else 0.0
 
         # De-emphasize page heartbeat packets relative to item-level links/API series packets
-        source_type = str(e.get("source_type", "unknown"))
+        source_type = str(e.get("source_type") or canonical_source.get("source_type") or "unknown")
         source_type_adj = {
             "api": 0.08,
             "rss": 0.06,
@@ -182,6 +225,7 @@ class MacroEventRouter:
             + 0.20 * source_conf
             + 0.20 * tier_w
             + 0.20 * type_w
+            + 0.10 * novelty_score
             + official_bonus
             + rate_regime_bonus
             + cross_asset_bonus
@@ -196,6 +240,8 @@ class MacroEventRouter:
             "priority_score": round(score, 4),
             "source_tier_weight": tier_w,
             "event_type_priority": type_w,
+            "canonical_source_credibility": round(source_conf, 4),
+            "canonical_novelty_score": round(novelty_score, 4),
             "fingerprint": fp,
         }
         return e
@@ -223,8 +269,19 @@ class MacroEventRouter:
             current = winners[fp]
             curr_score = safe_float(current.get("_router", {}).get("priority_score"), 0.0)
             new_score = safe_float(ev.get("_router", {}).get("priority_score"), 0.0)
+            curr_novelty = self._canonical_novelty_score(current)
+            new_novelty = self._canonical_novelty_score(ev)
+            curr_cred = self._canonical_source_credibility(current)
+            new_cred = self._canonical_source_credibility(ev)
 
+            replace = False
             if new_score > curr_score:
+                replace = True
+            elif abs(new_score - curr_score) <= 1e-9:
+                if (new_novelty, new_cred) > (curr_novelty, curr_cred):
+                    replace = True
+
+            if replace:
                 suppressed.append(self._mark_suppressed(current, reason="duplicate_lower_priority", winner=ev))
                 winners[fp] = ev
             else:
@@ -259,9 +316,16 @@ class MacroEventRouter:
         return kept, suppressed
 
     def _heartbeat_group_key(self, ev: Dict[str, Any]) -> str:
-        domain = str(ev.get("source_domain", "unknown"))
-        event_type = str(ev.get("event_type", "unknown"))
-        source_feed_url = str(ev.get("source_feed_url", ev.get("source_url", "")))
+        canonical_source = ((ev.get("event_ledger") or {}).get("canonical_source") or {})
+        domain = str(ev.get("source_domain") or canonical_source.get("source_domain") or "unknown")
+        event_type = str(ev.get("canonical_event_type") or ev.get("event_type", "unknown"))
+        source_feed_url = str(
+            ev.get("source_feed_url")
+            or canonical_source.get("source_feed_url")
+            or ev.get("source_url")
+            or canonical_source.get("source_url")
+            or ""
+        )
         return f"{domain}|{event_type}|{source_feed_url}"
 
     def _mark_suppressed(self, ev: Dict[str, Any], reason: str, winner: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -270,7 +334,7 @@ class MacroEventRouter:
         xr["suppressed"] = True
         xr["suppress_reason"] = reason
         if winner is not None:
-            xr["suppressed_by_event_id"] = winner.get("event_id")
+            xr["suppressed_by_event_id"] = winner.get("canonical_event_id") or winner.get("event_id")
             xr["suppressed_by_priority_score"] = winner.get("_router", {}).get("priority_score")
         x["_router"] = xr
         return x
@@ -331,8 +395,9 @@ class MacroEventRouter:
             event_type_counts[et] = event_type_counts.get(et, 0) + 1
             sd = str(e.get("source_domain", "unknown"))
             source_domain_counts[sd] = source_domain_counts.get(sd, 0) + 1
-            if e.get("event_id"):
-                top_ids.append(str(e["event_id"]))
+            top_id = e.get("canonical_event_id") or e.get("event_id")
+            if top_id:
+                top_ids.append(str(top_id))
             if e.get("headline"):
                 top_headlines.append(str(e["headline"]))
 

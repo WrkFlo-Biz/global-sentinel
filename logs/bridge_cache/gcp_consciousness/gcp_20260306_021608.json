@@ -1,0 +1,16 @@
+{
+  "timestamp_utc": "2026-03-06T02:16:07.962023+00:00",
+  "source": "gcpdot_fallback",
+  "max_z": -0.446,
+  "mean_z": -0.232,
+  "node_count": 60,
+  "coherence_level": "random",
+  "regional_z": {
+    "global_aggregate": -0.446
+  },
+  "regional_spikes": [],
+  "evidence": [
+    "GCP network: 60 active RNG nodes"
+  ],
+  "fresh": true
+}

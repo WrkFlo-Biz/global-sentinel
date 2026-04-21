@@ -29,45 +29,6 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-# Date when Global Sentinel went live
-_LIVE_START_DATE = datetime(2026, 3, 5, tzinfo=timezone.utc)
-
-
-def _resolve_ramp_exposure_limit(cfg: Dict[str, Any]) -> float:
-    """Return effective max_gross_exposure_pct based on ramp schedule."""
-    base_limit = _safe_float(
-        cfg.get("position_limits", {}).get("max_gross_exposure_pct"), 0.40
-    )
-    ramp = cfg.get("ramp_schedule")
-    if not ramp or not isinstance(ramp, list):
-        return base_limit
-    days_live = (datetime.now(timezone.utc) - _LIVE_START_DATE).days
-    stages = sorted(ramp, key=lambda s: int(s.get("days_after_live", 0)))
-    effective = base_limit
-    for stage in stages:
-        if days_live >= int(stage.get("days_after_live", 0)):
-            effective = _safe_float(stage.get("max_gross_exposure_pct"), effective)
-        else:
-            break
-    return effective
-
-
-def _is_crypto_symbol(symbol: str) -> bool:
-    """Return True if symbol is a crypto pair (e.g. BTCUSD, AVAXUSD)."""
-    s = symbol.upper().replace("/", "")
-    return s.endswith("USD") and len(s) > 3 and not s.replace("USD", "").isdigit()
-
-
-def _load_crypto_config() -> Dict[str, Any]:
-    """Load crypto_strategies.yaml for crypto allocation limits."""
-    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "crypto_strategies.yaml")
-    try:
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-
-
 SYMBOL_SECTOR_OVERRIDES = {
     "USO": "energy",
     "XLE": "energy",
@@ -177,16 +138,6 @@ class ExposureBook:
         by_direction["long_pct"] = (by_direction["total_long"] / total_equity) if total_equity else 0.0
         by_direction["short_pct"] = (by_direction["total_short"] / total_equity) if total_equity else 0.0
 
-        # Separate equity vs crypto exposure
-        equity_effective_gross = 0.0
-        crypto_effective_gross = 0.0
-        for pos in combined_positions:
-            emv = abs(_safe_float(pos.get("_effective_market_value"), _safe_float(pos.get("market_value"), 0.0)))
-            if _is_crypto_symbol(str(pos.get("symbol") or "")):
-                crypto_effective_gross += emv
-            else:
-                equity_effective_gross += emv
-
         snapshot = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "accounts": per_account,
@@ -196,10 +147,6 @@ class ExposureBook:
                 "total_net_exposure": total_effective_net,
                 "gross_exposure_pct": (total_effective_gross / total_equity) if total_equity else 0.0,
                 "net_exposure_pct": (total_effective_net / total_equity) if total_equity else 0.0,
-                "equity_gross_exposure": equity_effective_gross,
-                "equity_gross_exposure_pct": (equity_effective_gross / total_equity) if total_equity else 0.0,
-                "crypto_gross_exposure": crypto_effective_gross,
-                "crypto_gross_exposure_pct": (crypto_effective_gross / total_equity) if total_equity else 0.0,
                 "raw_total_gross_exposure": total_gross,
                 "raw_total_net_exposure": total_net,
                 "raw_gross_exposure_pct": (total_gross / total_equity) if total_equity else 0.0,
@@ -225,34 +172,15 @@ class ExposureBook:
     ) -> Dict[str, Any]:
         snap = snapshot or self.snapshot()
         violations = []
-        cfg = _load_guardrails_config()
         position_limits = guardrails.get("position_limits", {}) if guardrails else {}
         if not position_limits:
+            cfg = _load_guardrails_config()
             position_limits = cfg.get("position_limits", {})
-        # Apply ramp schedule for exposure limit
-        max_gross = _resolve_ramp_exposure_limit(cfg)
+        max_gross = _safe_float(position_limits.get("max_gross_exposure_pct"), 0.40)
         max_sector = _safe_float(position_limits.get("max_sector_pct"), 0.50)
-        combined = snap.get("combined") or {}
-
-        # Use equity-only exposure for main limit (crypto has its own bucket)
-        equity_gross_pct = _safe_float(combined.get("equity_gross_exposure_pct"), 0.0)
-        if equity_gross_pct == 0.0:
-            # Fallback for backward compat if equity breakdown not yet computed
-            equity_gross_pct = _safe_float(combined.get("gross_exposure_pct"), 0.0)
-        if equity_gross_pct > max_gross:
-            violations.append(f"Equity gross exposure {equity_gross_pct:.1%} exceeds limit {max_gross:.1%}")
-
-        # Separate crypto exposure check
-        crypto_gross_pct = _safe_float(combined.get("crypto_gross_exposure_pct"), 0.0)
-        crypto_cfg = _load_crypto_config()
-        crypto_limit = 0.15  # default 15%
-        for acct_cfg in (crypto_cfg.get("accounts") or {}).values():
-            limit_val = _safe_float(acct_cfg.get("crypto_allocation_pct"), 0) / 100.0
-            if limit_val > crypto_limit:
-                crypto_limit = limit_val
-        if crypto_gross_pct > crypto_limit:
-            violations.append(f"Crypto gross exposure {crypto_gross_pct:.1%} exceeds limit {crypto_limit:.1%}")
-
+        gross_pct = _safe_float((snap.get("combined") or {}).get("gross_exposure_pct"), 0.0)
+        if gross_pct > max_gross:
+            violations.append(f"Gross exposure {gross_pct:.1%} exceeds limit {max_gross:.1%}")
         for sector, row in (snap.get("by_sector") or {}).items():
             sector_pct = _safe_float(row.get("pct_of_equity"), 0.0)
             if sector_pct > max_sector:
@@ -268,17 +196,11 @@ class ExposureBook:
                 qty = _safe_float(proposed_order.get("qty"), 0.0)
                 px = _safe_float(proposed_order.get("limit_price"), _safe_float(proposed_order.get("decision_price"), 0.0))
                 order_notional = abs(qty * px)
-            total_equity = _safe_float(combined.get("total_equity"), 0.0)
-            # Check against correct bucket (crypto vs equity)
-            if _is_crypto_symbol(symbol):
-                projected_crypto = _safe_float(combined.get("crypto_gross_exposure"), 0.0) + order_notional
-                if total_equity and (projected_crypto / total_equity) > crypto_limit:
-                    violations.append(f"Proposed crypto order {symbol} would breach crypto exposure limit")
-            else:
-                projected_equity = _safe_float(combined.get("equity_gross_exposure"), 0.0) + order_notional
-                if total_equity and (projected_equity / total_equity) > max_gross:
-                    violations.append(f"Proposed order {symbol} would breach equity gross exposure limit")
-            _ = side
+            projected_gross = _safe_float((snap.get("combined") or {}).get("total_gross_exposure"), 0.0) + order_notional
+            total_equity = _safe_float((snap.get("combined") or {}).get("total_equity"), 0.0)
+            if total_equity and (projected_gross / total_equity) > max_gross:
+                violations.append(f"Proposed order {symbol} would breach gross exposure limit")
+            _ = side  # keep parsed side for future extensions
         return {"ok": not violations, "violations": violations}
 
     def pnl_realtime(self) -> Dict[str, Any]:

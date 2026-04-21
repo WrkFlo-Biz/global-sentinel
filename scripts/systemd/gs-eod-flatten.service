@@ -1,0 +1,25 @@
+[Unit]
+Description=Global Sentinel EOD Day Trade Position Flatten
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/opt/global-sentinel/scripts/ops/eod_flatten_daytrade.sh
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gs-eod-flatten
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/control
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

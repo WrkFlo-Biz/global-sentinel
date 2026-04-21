@@ -1,0 +1,7 @@
+[Unit]
+Description=Multi-Agent Ensemble Daily
+[Timer]
+OnCalendar=*-*-* 11:30:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

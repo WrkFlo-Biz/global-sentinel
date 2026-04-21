@@ -21,6 +21,7 @@ tiers:
       - gdelt
       - maritime
       - maritime_bridge
+      - maritime_bridge_v2
       - sentiment
       - exchange_market_data
       - cds_sovereign

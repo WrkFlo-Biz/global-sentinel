@@ -50,8 +50,11 @@ class SentimentBridge:
             f"&token={FINNHUB_API_KEY}"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "GlobalSentinel/5.1"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            rows = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                rows = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
 
         out: List[Dict[str, Any]] = []
         for row in rows[:20]:

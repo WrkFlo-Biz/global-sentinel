@@ -18,8 +18,11 @@ class FedBridge:
 
     def fetch(self) -> List[Dict[str, Any]]:
         req = urllib.request.Request(FED_FEED_URL, headers={"User-Agent": "GlobalSentinel/5.1"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            text = resp.read().decode("utf-8")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                text = resp.read().decode("utf-8")
+        except Exception:
+            return []
 
         items: List[Dict[str, Any]] = []
         for m in re.finditer(r"<title>(.*?)</title>.*?<description>(.*?)</description>", text, re.DOTALL):

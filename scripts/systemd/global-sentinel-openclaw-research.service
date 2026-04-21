@@ -12,8 +12,8 @@ EnvironmentFile=-/opt/global-sentinel/.env
 Environment=PYTHONPATH=/opt/global-sentinel
 Environment=OPENCLAW_MIN_WORKERS=3
 Environment=OPENCLAW_MAX_WORKERS=6
-Environment=OPENCLAW_SEED_INTERVAL_SEC=20
-Environment=OPENCLAW_DISPATCH_INTERVAL_SEC=10
+Environment=OPENCLAW_SEED_INTERVAL_SEC=60
+Environment=OPENCLAW_DISPATCH_INTERVAL_SEC=30
 Environment=OPENCLAW_REPLAY_EVERY_N_SEEDS=1
 Environment=OPENCLAW_OUTCOME_EVERY_N_SEEDS=1
 ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/agent_factory.py run --bot research --config /opt/global-sentinel/config/thresholds.yaml

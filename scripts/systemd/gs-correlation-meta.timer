@@ -1,0 +1,7 @@
+[Unit]
+Description=Correlation Meta Daily
+[Timer]
+OnCalendar=*-*-* 20:35:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

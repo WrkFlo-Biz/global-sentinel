@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from src.execution.slippage_model import compute_global_net_ev_ranking
+
 logger = logging.getLogger(__name__)
 
 # Default sizing parameters (fraction of equity)
@@ -15,6 +17,15 @@ MAX_ALLOCATION = 0.06  # 6%
 EXPLORATORY_SIZE = 0.005  # 0.5% for scanner discoveries
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
 class ProfitOptimizer:
     """Aggregate signals from strategies, edge detectors, and scanners to
     recommend sizing changes and new positions."""
@@ -22,6 +33,7 @@ class ProfitOptimizer:
     def __init__(self, repo_root: str | Path | None = None) -> None:
         self.repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[2]
         self._last_result: dict[str, Any] = {}
+        self._slippage_model = self._load_slippage_model()
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -82,12 +94,45 @@ class ProfitOptimizer:
             if recommended > current * 1.05:
                 entry["reason"] = self._increase_reason(signal, pnl)
                 increase_exposure.append(entry)
+                expected_edge = signal * max(pnl, 0.01)
+                edge_bps = round(expected_edge * 100.0, 2)
+                direction = str(sr.get("direction") or ("short" if safe_float(sr.get("short_bias"), 0.0) > 0 else "long"))
+                cost_details = self._estimate_execution_costs(
+                    symbol=str(sr.get("symbol") or strategy),
+                    direction=direction,
+                    notional=safe_float(sr.get("recommended_notional"), equity * recommended),
+                    order_type=str(sr.get("order_type") or "limit"),
+                    market_data=self._merge_market_data(sr),
+                )
+                rank_profile = compute_global_net_ev_ranking(
+                    expected_edge_bps=edge_bps,
+                    expected_cost_bps=cost_details["total_expected_cost_bps"],
+                    confidence_score=signal,
+                    size_multiplier=1.0,
+                    fill_feasibility_score=sr.get("fill_feasibility_score"),
+                    fill_quality_score=cost_details["fill_quality_score"],
+                    session_liquidity_score=cost_details["session_liquidity_score"],
+                    reject_risk_probability=sr.get("reject_risk_probability"),
+                    do_not_route=sr.get("do_not_route_even_in_shadow", False),
+                )
                 all_ideas.append(
                     {
                         "source": "strategy",
                         "strategy": strategy,
                         "action": "increase",
-                        "expected_edge": signal * max(pnl, 0.01),
+                        "expected_edge": expected_edge,
+                        "expected_edge_bps": edge_bps,
+                        "expected_cost_bps": cost_details["total_expected_cost_bps"],
+                        "net_expected_value_bps": rank_profile["net_expected_value_bps"],
+                        "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+                        "net_ev_ranking_score": rank_profile["ranking_score"],
+                        "spread_cost_bps": cost_details["expected_spread_cost_bps"],
+                        "slippage_cost_bps": cost_details["expected_slippage_bps"],
+                        "borrow_cost_bps": cost_details["expected_borrow_cost_bps"],
+                        "fill_quality_cost_bps": cost_details["expected_fill_quality_cost_bps"],
+                        "session_liquidity_cost_bps": cost_details["expected_liquidity_cost_bps"],
+                        "fill_quality_score": cost_details["fill_quality_score"],
+                        "session_liquidity_score": cost_details["session_liquidity_score"],
                         **entry,
                     }
                 )
@@ -106,6 +151,25 @@ class ProfitOptimizer:
             if confidence >= 0.7:
                 notional = min(notional * 1.5, equity * MAX_ALLOCATION)
 
+            cost_details = self._estimate_execution_costs(
+                symbol=symbol,
+                direction=direction,
+                notional=notional,
+                order_type=str(ef.get("order_type") or "limit"),
+                market_data=self._merge_market_data(ef),
+            )
+            expected_edge_bps = round(confidence * 100.0, 2)
+            rank_profile = compute_global_net_ev_ranking(
+                expected_edge_bps=expected_edge_bps,
+                expected_cost_bps=cost_details["total_expected_cost_bps"],
+                confidence_score=confidence,
+                size_multiplier=1.0,
+                fill_feasibility_score=ef.get("fill_feasibility_score"),
+                fill_quality_score=cost_details["fill_quality_score"],
+                session_liquidity_score=cost_details["session_liquidity_score"],
+                reject_risk_probability=ef.get("reject_risk_probability"),
+                do_not_route=ef.get("do_not_route_even_in_shadow", False),
+            )
             new_positions.append(
                 {
                     "symbol": symbol,
@@ -116,12 +180,25 @@ class ProfitOptimizer:
                               f"(conf {confidence:.0%})",
                 }
             )
+            expected_edge = confidence
             all_ideas.append(
                 {
                     "source": "edge",
                     "symbol": symbol,
                     "action": direction,
-                    "expected_edge": confidence,
+                    "expected_edge": expected_edge,
+                    "expected_edge_bps": expected_edge_bps,
+                    "expected_cost_bps": cost_details["total_expected_cost_bps"],
+                    "net_expected_value_bps": rank_profile["net_expected_value_bps"],
+                    "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+                    "net_ev_ranking_score": rank_profile["ranking_score"],
+                    "spread_cost_bps": cost_details["expected_spread_cost_bps"],
+                    "slippage_cost_bps": cost_details["expected_slippage_bps"],
+                    "borrow_cost_bps": cost_details["expected_borrow_cost_bps"],
+                    "fill_quality_cost_bps": cost_details["expected_fill_quality_cost_bps"],
+                    "session_liquidity_cost_bps": cost_details["expected_liquidity_cost_bps"],
+                    "fill_quality_score": cost_details["fill_quality_score"],
+                    "session_liquidity_score": cost_details["session_liquidity_score"],
                     "notional": round(notional, 2),
                 }
             )
@@ -142,6 +219,26 @@ class ProfitOptimizer:
             if confidence >= 0.8:
                 notional = equity * DEFAULT_BASE_ALLOCATION
 
+            direction = "short" if str(action).lower() in {"sell", "short"} else "long"
+            cost_details = self._estimate_execution_costs(
+                symbol=symbol,
+                direction=direction,
+                notional=notional,
+                order_type=str(sd.get("order_type") or "limit"),
+                market_data=self._merge_market_data(sd),
+            )
+            expected_edge_bps = round(confidence * 80.0, 2)
+            rank_profile = compute_global_net_ev_ranking(
+                expected_edge_bps=expected_edge_bps,
+                expected_cost_bps=cost_details["total_expected_cost_bps"],
+                confidence_score=confidence,
+                size_multiplier=1.0,
+                fill_feasibility_score=sd.get("fill_feasibility_score"),
+                fill_quality_score=cost_details["fill_quality_score"],
+                session_liquidity_score=cost_details["session_liquidity_score"],
+                reject_risk_probability=sd.get("reject_risk_probability"),
+                do_not_route=sd.get("do_not_route_even_in_shadow", False),
+            )
             new_positions.append(
                 {
                     "symbol": symbol,
@@ -157,12 +254,24 @@ class ProfitOptimizer:
                     "symbol": symbol,
                     "action": action,
                     "expected_edge": confidence * 0.8,  # discount scanner vs edge
+                    "expected_edge_bps": expected_edge_bps,
+                    "expected_cost_bps": cost_details["total_expected_cost_bps"],
+                    "net_expected_value_bps": rank_profile["net_expected_value_bps"],
+                    "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+                    "net_ev_ranking_score": rank_profile["ranking_score"],
+                    "spread_cost_bps": cost_details["expected_spread_cost_bps"],
+                    "slippage_cost_bps": cost_details["expected_slippage_bps"],
+                    "borrow_cost_bps": cost_details["expected_borrow_cost_bps"],
+                    "fill_quality_cost_bps": cost_details["expected_fill_quality_cost_bps"],
+                    "session_liquidity_cost_bps": cost_details["expected_liquidity_cost_bps"],
+                    "fill_quality_score": cost_details["fill_quality_score"],
+                    "session_liquidity_score": cost_details["session_liquidity_score"],
                     "notional": round(notional, 2),
                 }
             )
 
         # ----- 4. Priority ranking -----
-        all_ideas.sort(key=lambda i: i.get("expected_edge", 0), reverse=True)
+        all_ideas.sort(key=self._idea_value_score, reverse=True)
 
         self._last_result = {
             "increase_exposure": increase_exposure,
@@ -208,6 +317,76 @@ class ProfitOptimizer:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _load_slippage_model(self):
+        try:
+            from src.execution.slippage_model import SlippageModel
+
+            return SlippageModel()
+        except Exception:
+            return None
+
+    def _merge_market_data(self, payload: dict[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for key in ("market_data", "microstructure", "execution_context", "fill_sim_assessment"):
+            block = payload.get(key)
+            if isinstance(block, dict):
+                merged.update(block)
+        if payload.get("borrow_fee_bps") is not None:
+            merged["borrow_fee_bps"] = payload.get("borrow_fee_bps")
+        if payload.get("hard_to_borrow") is not None:
+            merged["hard_to_borrow"] = payload.get("hard_to_borrow")
+        if payload.get("session_bucket") is not None:
+            merged["session_bucket"] = payload.get("session_bucket")
+        return merged
+
+    def _estimate_execution_costs(
+        self,
+        *,
+        symbol: str,
+        direction: str,
+        notional: float,
+        order_type: str,
+        market_data: dict[str, Any] | None,
+    ) -> dict[str, float]:
+        if self._slippage_model is None:
+            return {
+                "expected_spread_cost_bps": 0.0,
+                "expected_slippage_bps": 0.0,
+                "expected_borrow_cost_bps": 0.0,
+                "expected_fill_quality_cost_bps": 0.0,
+                "expected_liquidity_cost_bps": 0.0,
+                "total_expected_cost_bps": 0.0,
+                "fill_quality_score": 0.6,
+                "session_liquidity_score": 0.6,
+            }
+
+        md = dict(market_data or {})
+        last_price = safe_float(
+            md.get("last_price"),
+            safe_float(md.get("mark_price"), safe_float(md.get("mid_price"), 0.0)),
+        )
+        if last_price <= 0:
+            last_price = 100.0
+            md.setdefault("last_price", last_price)
+        quantity = max(1, int(round(abs(notional) / max(last_price, 0.01))))
+        estimate = self._slippage_model.estimate(
+            symbol=symbol,
+            direction=direction,
+            quantity=quantity,
+            order_type=order_type,
+            market_data=md,
+        )
+        return {
+            "expected_spread_cost_bps": round(safe_float(estimate.get("expected_spread_cost_bps"), 0.0), 2),
+            "expected_slippage_bps": round(safe_float(estimate.get("expected_slippage_bps"), 0.0), 2),
+            "expected_borrow_cost_bps": round(safe_float(estimate.get("expected_borrow_cost_bps"), 0.0), 2),
+            "expected_fill_quality_cost_bps": round(safe_float(estimate.get("expected_fill_quality_cost_bps"), 0.0), 2),
+            "expected_liquidity_cost_bps": round(safe_float(estimate.get("expected_liquidity_cost_bps"), 0.0), 2),
+            "total_expected_cost_bps": round(safe_float(estimate.get("total_expected_cost_bps"), 0.0), 2),
+            "fill_quality_score": round(safe_float(estimate.get("fill_quality_score"), 0.6), 4),
+            "session_liquidity_score": round(safe_float(estimate.get("session_liquidity_score"), 0.6), 4),
+        }
+
     @staticmethod
     def _compute_new_allocation(
         signal: float, pnl: float, current: float
@@ -251,3 +430,22 @@ class ProfitOptimizer:
         if signal < 0.5:
             return "Fading signal + negative PnL: reduce 20%"
         return "Signal weakening"
+
+    @staticmethod
+    def _idea_value_score(idea: dict[str, Any]) -> float:
+        """Rank by canonical net-EV ranking score first, then bps fallbacks."""
+        ranking = idea.get("net_ev_ranking_score")
+        if ranking is not None:
+            try:
+                return float(ranking)
+            except Exception:
+                pass
+        net = idea.get("net_expected_value_bps")
+        if net is None:
+            net = idea.get("expected_edge_bps")
+        if net is None:
+            net = idea.get("expected_edge", 0)
+        try:
+            return float(net)
+        except Exception:
+            return 0.0

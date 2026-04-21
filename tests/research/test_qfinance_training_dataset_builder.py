@@ -32,6 +32,7 @@ def test_qfinance_training_dataset_builder_basic():
                 "symbol": "XOM",
                 "trade_executed": True,
                 "direction": "long",
+                "timestamp_utc": "2026-04-09T10:00:00Z",
                 "realized_return_bps": 120.0,
                 "fill_rate": 1.0,
                 "quantum_influenced": True,
@@ -53,6 +54,7 @@ def test_qfinance_training_dataset_builder_basic():
     assert ds["row_count"] == 1
     row = ds["rows"][0]
     assert row["symbol"] == "XOM"
+    assert row["timestamp_utc"] == "2026-04-09T10:00:00Z"
     assert row["attached_research_score"] == 0.71
     assert row["trade_executed"] is True
     assert row["realized_return_bps"] == 120.0

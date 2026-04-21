@@ -20,8 +20,11 @@ class GDELTBridge:
         params = urllib.request.quote(query, safe="")
         url = f"{GDELT_DOC_API}?query={params}&mode=artlist&maxrecords={max_records}&format=json"
         req = urllib.request.Request(url, headers={"User-Agent": "GlobalSentinel/5.1"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
         articles = data.get("articles", [])
 
         out: List[Dict[str, Any]] = []

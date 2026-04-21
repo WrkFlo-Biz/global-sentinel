@@ -146,6 +146,7 @@ class IdiosyncraticPackageBuilder:
         whipsaw_after_open = safe_bool(runtime_flags.get("whipsaw_detected_after_open"), False)
 
         thematic_context = self._derive_thematic_context(packet, macro_summary, macro_top_events)
+        event_novelty_score = self._extract_event_novelty_score(packet)
         candidates = candidate_universe_override or self.candidate_universe
         candidates = self._dedupe_preserve_order(candidates)
 
@@ -170,7 +171,7 @@ class IdiosyncraticPackageBuilder:
         package["execution_constraints"] = self._compute_execution_constraints(packet=packet, slippage_bps_est=slippage_bps_est, tw_size_mult=tw_size_mult, watchlist_only_window=watchlist_only_window, major_release_day=major_release_day, whipsaw_after_open=whipsaw_after_open)
         package["required_confirmations"] = self._required_confirmations(packet=packet, policy_data_integrity_degraded=policy_data_integrity_degraded, major_release_day=major_release_day)
 
-        candidate_rows, blocked_rows = self._build_candidate_rows(packet=packet, candidates=candidates, strategy_eligibility=strategy_eligibility, package_global_blocks=global_blocks, thematic_context=thematic_context)
+        candidate_rows, blocked_rows = self._build_candidate_rows(packet=packet, candidates=candidates, strategy_eligibility=strategy_eligibility, package_global_blocks=global_blocks, thematic_context=thematic_context, event_novelty_score=event_novelty_score)
         package["candidates"] = candidate_rows
         package["blocked_candidates"] = blocked_rows
         package["diversification_summary"] = self._build_diversification_summary(candidate_rows, blocked_rows)
@@ -230,6 +231,26 @@ class IdiosyncraticPackageBuilder:
         ai_infra_bias = packet_text_flags["ai_capex_positive_impulse"] or packet_text_flags["hyperscaler_capex_watch"]
         return {"rate_regime_shock_candidate_any": rate_regime_any, "policy_release_urgency_score_max": policy_urgency, "energy_shock_theme": energy_shock, "sanctions_policy_theme": sanctions_policy, "fed_rates_theme": fed_rates, "trade_tariffs_theme": trade_tariffs, "immigration_labor_theme": immigration_labor, "ai_infra_theme": ai_infra_bias or any(k in text_blob for k in ["nvidia", "data center", "hyperscaler", "ai infrastructure"]), "energy_shock_transmission_confirmed": packet_text_flags["energy_shock_transmission_confirmed"]}
 
+    def _extract_event_novelty_score(self, packet: Dict[str, Any]) -> Optional[float]:
+        scores: List[float] = []
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key in {"canonical_novelty_score", "novelty_score"} and isinstance(item, (int, float)):
+                        scores.append(float(item))
+                    elif key == "canonical_dedupe_score" and isinstance(item, (int, float)):
+                        scores.append(max(0.0, 1.0 - float(item)))
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(packet or {})
+        if not scores:
+            return None
+        return round(max(scores), 4)
+
     def _compute_global_blocks(self, packet, combined_shadow_blocked, window_shadow_blocked, watchlist_only_window, policy_data_integrity_degraded, luld_halt_detected, broker_status_degraded) -> List[str]:
         blocks = []
         control_flags = packet.get("control_flags") or {}
@@ -277,7 +298,7 @@ class IdiosyncraticPackageBuilder:
         req += ["execution_reliability_checks_pass", "risk_gate_pass", "manual_operator_review_before_any_live_use"]
         return self._dedupe_preserve_order(req)
 
-    def _build_candidate_rows(self, packet, candidates, strategy_eligibility, package_global_blocks, thematic_context) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def _build_candidate_rows(self, packet, candidates, strategy_eligibility, package_global_blocks, thematic_context, event_novelty_score: Optional[float] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         rows: List[Dict[str, Any]] = []
         blocked: List[Dict[str, Any]] = []
         tw_name = str(packet.get("time_window_name") or "")
@@ -315,7 +336,7 @@ class IdiosyncraticPackageBuilder:
                 window_size_mult = safe_float(packet.get("window_size_multiplier"), 1.0)
                 size_mult = clamp(window_size_mult * (0.6 + 0.4 * confidence), 0.0, 1.2)
                 thesis = self._build_thesis(sym, themes, template_key, thematic_context, packet)
-                row = {"symbol": sym, "themes": themes, "template_key": template_key, "strategy_style": idea["style"], "direction": idea["direction"], "instrument_types": idea["instrument_types"], "window_name": tw_name, "thesis": thesis, "catalyst_type": self._catalyst_type(themes, thematic_context), "confidence_score": round(confidence, 4), "size_multiplier_suggestion": round(size_mult, 4), "required_confirmations": self._candidate_required_confirmations(sym, themes, thematic_context), "execution_constraints": self._candidate_execution_constraints(packet, idea), "block_reasons": block_reasons, "status": "blocked" if block_reasons else "candidate"}
+                row = {"symbol": sym, "themes": themes, "template_key": template_key, "strategy_style": idea["style"], "direction": idea["direction"], "instrument_types": idea["instrument_types"], "window_name": tw_name, "thesis": thesis, "catalyst_type": self._catalyst_type(themes, thematic_context), "confidence_score": round(confidence, 4), "size_multiplier_suggestion": round(size_mult, 4), "event_novelty_score": event_novelty_score, "required_confirmations": self._candidate_required_confirmations(sym, themes, thematic_context), "execution_constraints": self._candidate_execution_constraints(packet, idea), "block_reasons": block_reasons, "status": "blocked" if block_reasons else "candidate"}
                 row = self._apply_fill_simulator(row, packet)
                 if row.get("status") == "blocked" or row.get("block_reasons"):
                     row["status"] = "blocked"
@@ -444,12 +465,30 @@ class IdiosyncraticPackageBuilder:
         elif quality == "acceptable_shadow_only" and row.get("status") != "blocked":
             row["size_multiplier_suggestion"] = round(max(0.0, float(row.get("size_multiplier_suggestion", 0.0)) * 0.80), 4)
 
+        expected_edge_bps = round(safe_float(row.get("confidence_score"), 0.0) * 100.0, 2)
+        expected_cost_bps = round(safe_float(assessment.get("expected_slippage_bps"), 0.0), 2)
+        expected_cost_bps += round(safe_float(assessment.get("expected_market_impact_bps"), 0.0) * 0.5, 2)
+        expected_cost_bps += round(safe_float(assessment.get("reject_risk_probability"), 0.0) * 10.0, 2)
+        novelty_score = row.get("event_novelty_score")
+        if novelty_score is not None:
+            novelty_penalty = max(0.0, 1.0 - min(max(safe_float(novelty_score, 0.0), 0.0), 1.0)) * 8.0
+            expected_cost_bps += round(novelty_penalty, 2)
+        if row.get("status") == "blocked":
+            expected_cost_bps += 5.0
+        net_expected_value_bps = round(expected_edge_bps - expected_cost_bps, 2)
+
         row.setdefault("execution_constraints", {})
         row["execution_constraints"]["expected_slippage_bps_simulated"] = assessment.get("expected_slippage_bps")
         row["execution_constraints"]["fill_feasibility_score"] = assessment.get("fill_feasibility_score")
         row["execution_constraints"]["partial_fill_probability"] = assessment.get("partial_fill_probability")
         row["execution_constraints"]["reject_risk_probability"] = assessment.get("reject_risk_probability")
         row["execution_constraints"]["execution_quality_class"] = assessment.get("execution_quality_class")
+        row["expected_edge_bps"] = expected_edge_bps
+        row["expected_cost_bps"] = expected_cost_bps
+        row["net_expected_value_bps"] = net_expected_value_bps
+        row["fill_sim_assessment"]["expected_edge_bps"] = expected_edge_bps
+        row["fill_sim_assessment"]["expected_cost_bps"] = expected_cost_bps
+        row["fill_sim_assessment"]["net_expected_value_bps"] = net_expected_value_bps
 
         return row
 
@@ -458,7 +497,11 @@ class IdiosyncraticPackageBuilder:
             fill_feas = safe_float((r.get("fill_sim_assessment") or {}).get("fill_feasibility_score"), 0.5)
             reject_risk = safe_float((r.get("fill_sim_assessment") or {}).get("reject_risk_probability"), 0.0)
             exec_penalty = 1.0 - min(reject_risk, 0.8) * 0.5
-            r["_rank_score"] = round(safe_float(r.get("confidence_score")) * max(safe_float(r.get("size_multiplier_suggestion")), 0.01) * fill_feas * exec_penalty, 6)
+            net_ev = r.get("net_expected_value_bps")
+            if net_ev is None:
+                net_ev = safe_float(r.get("expected_edge_bps"), safe_float(r.get("confidence_score")) * 100.0) - safe_float(r.get("expected_cost_bps"), 0.0)
+            value_basis = max(safe_float(net_ev), -100.0)
+            r["_rank_score"] = round(value_basis * max(safe_float(r.get("size_multiplier_suggestion")), 0.01) * fill_feas * exec_penalty, 6)
         rows = sorted(rows, key=lambda r: r["_rank_score"], reverse=True)
         selected = []
         theme_counts: Dict[str, int] = {}

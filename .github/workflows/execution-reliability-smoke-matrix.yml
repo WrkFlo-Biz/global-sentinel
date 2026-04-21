@@ -110,3 +110,8 @@ jobs:
               json.dumps(snippet, indent=2), encoding="utf-8"
           )
           PY
+
+      - name: Render job summary (canonical fields)
+        env:
+          CI_SUMMARY_JSON: tests/replays/execution_reliability_smoke/out/${{ matrix.scenario }}/smoke_summary.json
+        run: python3 scripts/ci/render_job_summary.py

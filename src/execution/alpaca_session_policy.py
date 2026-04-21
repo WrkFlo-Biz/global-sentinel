@@ -43,6 +43,7 @@ class AlpacaSessionPolicy:
 
         order_type = str(order.get("type", "")).lower()
         tif = str(order.get("time_in_force", "")).lower()
+        phase = str(getattr(session, "intraday_phase", session.session) or session.session).lower()
 
         if session.session == "overnight":
             if bool(asset_metadata.get("overnight_tradable")):
@@ -68,6 +69,14 @@ class AlpacaSessionPolicy:
             checks_passed.append("extended_hours_session_detected")
         elif session.session == "regular":
             checks_passed.append("regular_session_detected")
+            if phase == "opening":
+                checks_passed.append("opening_window_detected")
+            elif phase == "midday":
+                checks_passed.append("midday_window_detected")
+            elif phase == "power_hour":
+                checks_passed.append("power_hour_detected")
+            else:
+                checks_passed.append("regular_session_phase_detected")
         else:
             checks_failed.append("market_closed")
 

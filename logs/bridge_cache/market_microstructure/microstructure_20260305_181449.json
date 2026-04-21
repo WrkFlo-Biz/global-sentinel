@@ -1,0 +1,290 @@
+{
+  "AAL": {
+    "adv_shares": 60258016.0,
+    "sigma_daily_pct": 3.8623,
+    "last_price": 11.58,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:40.351394+00:00",
+    "data_points": 21
+  },
+  "ABNB": {
+    "adv_shares": 5937480.0,
+    "sigma_daily_pct": 2.4156,
+    "last_price": 135.85,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:40.559584+00:00",
+    "data_points": 21
+  },
+  "AIG": {
+    "adv_shares": 3994197.0,
+    "sigma_daily_pct": 1.49,
+    "last_price": 79.62,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:40.860783+00:00",
+    "data_points": 21
+  },
+  "BA": {
+    "adv_shares": 5468742.0,
+    "sigma_daily_pct": 1.6486,
+    "last_price": 219.6801,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:41.165822+00:00",
+    "data_points": 21
+  },
+  "BKNG": {
+    "adv_shares": 646815.0,
+    "sigma_daily_pct": 3.5673,
+    "last_price": 4613.4102,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:41.545527+00:00",
+    "data_points": 21
+  },
+  "BRK-B": {
+    "adv_shares": 4647906.0,
+    "sigma_daily_pct": 1.5215,
+    "last_price": 499.2,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:41.825481+00:00",
+    "data_points": 21
+  },
+  "CCL": {
+    "adv_shares": 20823352.0,
+    "sigma_daily_pct": 3.5292,
+    "last_price": 27.235,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:42.074919+00:00",
+    "data_points": 21
+  },
+  "DAL": {
+    "adv_shares": 8901347.0,
+    "sigma_daily_pct": 3.56,
+    "last_price": 60.0075,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:42.343986+00:00",
+    "data_points": 21
+  },
+  "EEM": {
+    "adv_shares": 46376687.0,
+    "sigma_daily_pct": 1.8041,
+    "last_price": 57.2699,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:42.633110+00:00",
+    "data_points": 21
+  },
+  "EFA": {
+    "adv_shares": 23446875.0,
+    "sigma_daily_pct": 1.3449,
+    "last_price": 98.66,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:42.917714+00:00",
+    "data_points": 21
+  },
+  "EXPE": {
+    "adv_shares": 3864021.0,
+    "sigma_daily_pct": 4.5095,
+    "last_price": 246.9,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:43.144375+00:00",
+    "data_points": 21
+  },
+  "FDX": {
+    "adv_shares": 1721452.0,
+    "sigma_daily_pct": 1.1334,
+    "last_price": 375.435,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:43.405206+00:00",
+    "data_points": 21
+  },
+  "FXI": {
+    "adv_shares": 34041648.0,
+    "sigma_daily_pct": 1.2351,
+    "last_price": 35.5113,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:43.713239+00:00",
+    "data_points": 21
+  },
+  "GD": {
+    "adv_shares": 1221423.0,
+    "sigma_daily_pct": 1.763,
+    "last_price": 356.73,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:44.240648+00:00",
+    "data_points": 21
+  },
+  "HLT": {
+    "adv_shares": 2018987.0,
+    "sigma_daily_pct": 1.3869,
+    "last_price": 301.555,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:44.515191+00:00",
+    "data_points": 21
+  },
+  "HYG": {
+    "adv_shares": 48440025.0,
+    "sigma_daily_pct": 0.2041,
+    "last_price": 80.19,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:44.791170+00:00",
+    "data_points": 21
+  },
+  "JBLU": {
+    "adv_shares": 15814133.0,
+    "sigma_daily_pct": 4.4079,
+    "last_price": 4.5899,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:45.023494+00:00",
+    "data_points": 21
+  },
+  "JETS": {
+    "adv_shares": 3567664.0,
+    "sigma_daily_pct": 2.6742,
+    "last_price": 25.86,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:45.263443+00:00",
+    "data_points": 21
+  },
+  "LMT": {
+    "adv_shares": 1547748.0,
+    "sigma_daily_pct": 1.7199,
+    "last_price": 649.38,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:45.678390+00:00",
+    "data_points": 21
+  },
+  "LQD": {
+    "adv_shares": 37831038.0,
+    "sigma_daily_pct": 0.2638,
+    "last_price": 110.505,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:45.917458+00:00",
+    "data_points": 21
+  },
+  "LUV": {
+    "adv_shares": 10040266.0,
+    "sigma_daily_pct": 2.8603,
+    "last_price": 44.45,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:46.191353+00:00",
+    "data_points": 21
+  },
+  "MAR": {
+    "adv_shares": 1902889.0,
+    "sigma_daily_pct": 2.4044,
+    "last_price": 328.71,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:46.490552+00:00",
+    "data_points": 21
+  },
+  "MATX": {
+    "adv_shares": 279577.0,
+    "sigma_daily_pct": 2.1427,
+    "last_price": 158.98,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:46.815937+00:00",
+    "data_points": 21
+  },
+  "NOC": {
+    "adv_shares": 891154.0,
+    "sigma_daily_pct": 2.1787,
+    "last_price": 736.6475,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:47.144639+00:00",
+    "data_points": 21
+  },
+  "QQQ": {
+    "adv_shares": 69613317.0,
+    "sigma_daily_pct": 1.1189,
+    "last_price": 604.868,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:47.414353+00:00",
+    "data_points": 21
+  },
+  "RCL": {
+    "adv_shares": 2308965.0,
+    "sigma_daily_pct": 2.9075,
+    "last_price": 285.25,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:48.015256+00:00",
+    "data_points": 21
+  },
+  "RTX": {
+    "adv_shares": 6760815.0,
+    "sigma_daily_pct": 1.9284,
+    "last_price": 201.12,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:48.381199+00:00",
+    "data_points": 21
+  },
+  "SPY": {
+    "adv_shares": 82569713.0,
+    "sigma_daily_pct": 0.8547,
+    "last_price": 678.13,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:48.679039+00:00",
+    "data_points": 21
+  },
+  "TLT": {
+    "adv_shares": 38739975.0,
+    "sigma_daily_pct": 0.6286,
+    "last_price": 88.7989,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:48.949193+00:00",
+    "data_points": 21
+  },
+  "UAL": {
+    "adv_shares": 6304717.0,
+    "sigma_daily_pct": 4.4389,
+    "last_price": 93.63,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:49.214559+00:00",
+    "data_points": 21
+  },
+  "UPS": {
+    "adv_shares": 5727782.0,
+    "sigma_daily_pct": 1.7061,
+    "last_price": 105.21,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:49.515871+00:00",
+    "data_points": 21
+  },
+  "ZIM": {
+    "adv_shares": 5248233.0,
+    "sigma_daily_pct": 5.6299,
+    "last_price": 28.27,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:14:49.987460+00:00",
+    "data_points": 21
+  }
+}

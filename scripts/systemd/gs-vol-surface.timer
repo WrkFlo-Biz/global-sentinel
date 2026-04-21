@@ -1,0 +1,10 @@
+[Unit]
+Description=Global Sentinel: Volatility Surface Tracker Timer (weekdays every 30min 13:30-20:00 UTC)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13..19:00,30:00 UTC
+OnCalendar=Mon..Fri *-*-* 20:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

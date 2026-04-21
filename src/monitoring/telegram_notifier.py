@@ -30,6 +30,7 @@ except ImportError:
     yaml = None
 
 from src.monitoring.notification_window import mute_reason, notifications_muted
+from src.execution.strategy_learning import infer_strategy_family
 
 
 def iso_now() -> str:
@@ -125,11 +126,6 @@ class TelegramNotifier:
             payload["parse_mode"] = parse_mode
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
-        elif str(chat_id).startswith("-100"):
-            # Sending to topic group - use default thread to avoid main chat
-            _default_thread = os.getenv("TELEGRAM_DEFAULT_THREAD_ID")
-            if _default_thread:
-                payload["message_thread_id"] = int(_default_thread)
 
         try:
             resp = requests.post(url, json=payload, timeout=15)
@@ -148,7 +144,6 @@ class TelegramNotifier:
         formatted_message: str,
     ):
         """Buffer new order notification for hourly digest."""
-        strategy = order_summary.get("strategy", "day_trade")
         bot = order_summary.get("bot", "mo2darkbot")
         orders = order_summary.get("orders", [])
 
@@ -156,6 +151,20 @@ class TelegramNotifier:
             for order in orders:
                 symbol = order.get("symbol", "unknown")
                 side = order.get("side", "buy")
+                strategy = order.get("strategy") or order_summary.get("strategy") or "day_trade"
+                strategy_family = (
+                    order.get("strategy_family")
+                    or order_summary.get("strategy_family")
+                    or infer_strategy_family(
+                        {
+                            "strategy": strategy,
+                            "strategy_style": order.get("strategy_style") or order_summary.get("strategy_style"),
+                            "holding_period": order.get("holding_period") or order_summary.get("holding_period"),
+                        },
+                        default_family="day_trade",
+                    )
+                    or "day_trade"
+                )
                 dedup_key = f"order:{symbol}:{side}:{strategy}"
 
                 now = time.time()
@@ -169,13 +178,27 @@ class TelegramNotifier:
                     "side": side,
                     "qty": order.get("qty", 0),
                     "strategy": strategy,
+                    "strategy_family": strategy_family,
+                    "underlying_strategy": (
+                        order.get("underlying_strategy") or order_summary.get("underlying_strategy")
+                    ),
+                    "learning_adjusted": bool(
+                        order.get(
+                            "learning_adjusted",
+                            order_summary.get("learning_adjusted", False),
+                        )
+                    ),
+                    "learning_adjustment_detail": (
+                        order.get("learning_adjustment_detail")
+                        or order_summary.get("learning_adjustment_detail")
+                    ),
                     "bot": bot,
                     "confidence": order.get("confidence", 0),
                     "timestamp": iso_now(),
                 })
 
         self._log("order_notification_buffered", {
-            "strategy": strategy,
+            "strategy": order_summary.get("strategy"),
             "bot": bot,
             "order_count": order_summary.get("order_count", 0),
         })
@@ -200,9 +223,17 @@ class TelegramNotifier:
         qty: float,
         fill_price: float,
         strategy_name: str,
+        strategy_family: Optional[str] = None,
+        underlying_strategy: Optional[str] = None,
+        learning_adjusted: bool = False,
+        learning_adjustment_detail: Optional[Dict[str, Any]] = None,
     ):
         """Buffer order fill notification for hourly digest."""
         bot = self.config.get("strategies", {}).get(strategy_name, {}).get("bot", "mo2darkbot")
+        resolved_family = strategy_family or infer_strategy_family(
+            {"strategy": strategy_name},
+            default_family="day_trade",
+        )
 
         with self._buffer_lock:
             dedup_key = f"fill:{symbol}:{side}:{strategy_name}"
@@ -220,6 +251,10 @@ class TelegramNotifier:
                 "qty": qty,
                 "fill_price": fill_price,
                 "strategy": strategy_name,
+                "strategy_family": resolved_family,
+                "underlying_strategy": underlying_strategy,
+                "learning_adjusted": learning_adjusted,
+                "learning_adjustment_detail": learning_adjustment_detail,
                 "bot": bot,
                 "timestamp": iso_now(),
             })
@@ -233,9 +268,17 @@ class TelegramNotifier:
         pnl_pct: float,
         pnl_usd: float,
         strategy_name: str,
+        strategy_family: Optional[str] = None,
+        underlying_strategy: Optional[str] = None,
+        learning_adjusted: bool = False,
+        learning_adjustment_detail: Optional[Dict[str, Any]] = None,
     ):
         """Buffer position close notification for hourly digest."""
         bot = self.config.get("strategies", {}).get(strategy_name, {}).get("bot", "mo2darkbot")
+        resolved_family = strategy_family or infer_strategy_family(
+            {"strategy": strategy_name},
+            default_family="day_trade",
+        )
 
         with self._buffer_lock:
             dedup_key = f"close:{symbol}:{strategy_name}"
@@ -253,6 +296,10 @@ class TelegramNotifier:
                 "pnl_pct": pnl_pct,
                 "pnl_usd": pnl_usd,
                 "strategy": strategy_name,
+                "strategy_family": resolved_family,
+                "underlying_strategy": underlying_strategy,
+                "learning_adjusted": learning_adjusted,
+                "learning_adjustment_detail": learning_adjustment_detail,
                 "bot": bot,
                 "timestamp": iso_now(),
             })
@@ -318,9 +365,9 @@ class TelegramNotifier:
         for strategy in ("day_trade", "medium_long"):
             bot = self.config.get("strategies", {}).get(strategy, {}).get("bot", "mo2darkbot")
 
-            submitted = [e for e in buffer["orders_submitted"] if e["strategy"] == strategy]
-            filled = [e for e in buffer["orders_filled"] if e["strategy"] == strategy]
-            closed = [e for e in buffer["positions_closed"] if e["strategy"] == strategy]
+            submitted = [e for e in buffer["orders_submitted"] if e.get("strategy_family", e["strategy"]) == strategy]
+            filled = [e for e in buffer["orders_filled"] if e.get("strategy_family", e["strategy"]) == strategy]
+            closed = [e for e in buffer["positions_closed"] if e.get("strategy_family", e["strategy"]) == strategy]
 
             if not submitted and not filled and not closed:
                 continue
@@ -334,7 +381,9 @@ class TelegramNotifier:
             if submitted:
                 lines.append(f"NEW ORDERS ({len(submitted)}):")
                 for e in submitted:
-                    lines.append(f"  {e['symbol']} {e['side'].upper()} x{e['qty']}")
+                    lines.append(
+                        f"  {e['symbol']} {e['side'].upper()} x{e['qty']}{self._format_strategy_digest_context(e)}"
+                    )
                 lines.append("")
 
             if filled:
@@ -343,7 +392,10 @@ class TelegramNotifier:
                 for e in filled:
                     notional = e.get("fill_price", 0) * e.get("qty", 0)
                     total_notional += notional
-                    lines.append(f"  {e['symbol']} {e['side'].upper()} x{e['qty']} @ ${e.get('fill_price', 0):,.2f}")
+                    lines.append(
+                        f"  {e['symbol']} {e['side'].upper()} x{e['qty']} @ ${e.get('fill_price', 0):,.2f}"
+                        f"{self._format_strategy_digest_context(e)}"
+                    )
                 lines.append(f"  Total notional: ${total_notional:,.2f}")
                 lines.append("")
 
@@ -354,7 +406,9 @@ class TelegramNotifier:
                 for e in closed:
                     pnl = e.get("pnl_usd", 0)
                     label = "+" if pnl >= 0 else ""
-                    lines.append(f"  {e['symbol']} {e['reason']} ${label}{pnl:,.2f}")
+                    lines.append(
+                        f"  {e['symbol']} {e['reason']} ${label}{pnl:,.2f}{self._format_strategy_digest_context(e)}"
+                    )
                 lines.append(f"  Net P&L: ${total_pnl:+,.2f}")
 
             msg = "\n".join(lines)
@@ -377,28 +431,6 @@ class TelegramNotifier:
         if not all_positions:
             return
 
-        # Optional: suppress paper vs live position updates (prevents paper positions from
-        # looking like live holdings).
-        allow_paper = os.getenv("GS_NOTIFY_PAPER_POSITIONS", "1") != "0"
-        allow_live = os.getenv("GS_NOTIFY_LIVE_POSITIONS", "1") != "0"
-        filtered_positions = []
-        for pos in all_positions:
-            if not isinstance(pos, dict):
-                filtered_positions.append(pos)
-                continue
-            acct = str(pos.get("_account") or "").strip().lower()
-            if acct == "paper" and not allow_paper:
-                continue
-            if acct == "live" and not allow_live:
-                continue
-            filtered_positions.append(pos)
-
-        if not filtered_positions:
-            self._log("position_updates_suppressed", {"positions": len(all_positions)})
-            return
-
-        all_positions = filtered_positions
-
         # Load order history to classify positions by strategy
         order_history = self._load_order_history()
 
@@ -407,8 +439,7 @@ class TelegramNotifier:
         for pos in all_positions:
             symbol = pos.get("symbol", "")
             entry = order_history.get(symbol, {})
-            holding = entry.get("holding_period", "day")
-            strategy = "medium_long" if holding in ("swing", "medium", "long", "macro") else "day_trade"
+            strategy = infer_strategy_family(entry, default_family="day_trade") or "day_trade"
             strategy_positions[strategy].append(pos)
 
         # Send updates for each strategy
@@ -417,6 +448,9 @@ class TelegramNotifier:
                 continue
             bot = strategy_manager.get_bot_for_strategy(strategy_name)
             msg = strategy_manager.format_telegram_position_update(positions, strategy_name)
+            context_lines = self._position_strategy_context_lines(positions, order_history)
+            if context_lines:
+                msg = "\n".join([msg, "", *context_lines])
             self.notify_position_update(msg, strategy_name, bot)
 
     def _load_order_history(self) -> Dict[str, Dict]:
@@ -437,15 +471,80 @@ class TelegramNotifier:
                         for cand in payload.get("selected_candidates", []):
                             sym = cand.get("symbol")
                             if sym:
+                                metadata = cand.get("metadata") or {}
                                 history[sym] = {
-                                    "strategy_style": cand.get("strategy_style"),
-                                    "holding_period": "day" if payload.get("time_window_name") == "us_regular_hours" else "swing",
+                                    "strategy": cand.get("strategy") or metadata.get("strategy"),
+                                    "strategy_style": cand.get("strategy_style") or metadata.get("strategy_style"),
+                                    "strategy_family": cand.get("strategy_family") or metadata.get("strategy_family"),
+                                    "underlying_strategy": cand.get("underlying_strategy") or metadata.get("underlying_strategy"),
+                                    "learning_adjusted": cand.get("learning_adjusted", metadata.get("learning_adjusted", False)),
+                                    "learning_adjustment_detail": cand.get("learning_adjustment_detail") or metadata.get("learning_adjustment_detail"),
+                                    "holding_period": cand.get("holding_period")
+                                    or metadata.get("holding_period")
+                                    or ("day" if payload.get("time_window_name") == "us_regular_hours" else "swing"),
                                 }
                     except json.JSONDecodeError:
                         continue
         except Exception:
             pass
         return history
+
+    def _position_strategy_context_lines(
+        self,
+        positions: List[Dict[str, Any]],
+        order_history: Dict[str, Dict[str, Any]],
+    ) -> List[str]:
+        lines: List[str] = []
+        for pos in positions:
+            symbol = pos.get("symbol")
+            if not symbol:
+                continue
+            entry = order_history.get(symbol, {})
+            strategy = str(entry.get("strategy") or entry.get("strategy_style") or "").strip()
+            family = str(
+                entry.get("strategy_family")
+                or infer_strategy_family(entry, default_family="day_trade")
+                or ""
+            ).strip()
+            underlying = str(entry.get("underlying_strategy") or "").strip()
+            learning_adjusted = bool(entry.get("learning_adjusted", False))
+            if not any((strategy, family, underlying, learning_adjusted)):
+                continue
+
+            parts = [symbol]
+            if strategy:
+                parts.append(strategy)
+            if family:
+                parts.append(f"[{family}]")
+            if underlying:
+                parts.append(f"underlying={underlying}")
+            if learning_adjusted:
+                parts.append("learning=on")
+            lines.append("  " + " ".join(parts))
+
+        if not lines:
+            return []
+        return ["Strategy Context:", *lines]
+
+    def _format_strategy_digest_context(self, event: Dict[str, Any]) -> str:
+        strategy = str(event.get("strategy") or "").strip()
+        family = str(event.get("strategy_family") or "").strip()
+        underlying = str(event.get("underlying_strategy") or "").strip()
+        learning_adjusted = bool(event.get("learning_adjusted", False))
+
+        if not any((strategy, family, underlying, learning_adjusted)):
+            return ""
+
+        parts = []
+        if strategy:
+            parts.append(strategy)
+        if family:
+            parts.append(f"family={family}")
+        if underlying:
+            parts.append(f"underlying={underlying}")
+        if learning_adjusted:
+            parts.append("learning=on")
+        return f" ({', '.join(parts)})"
 
     def send_manual_mode_summary(self, summary: Dict[str, Any], formatted: str):
         """Send order summary in manual mode and wait for approval via Telegram."""

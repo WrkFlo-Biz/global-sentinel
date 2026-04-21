@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=gsadmin
-Group=gsadmin
-WorkingDirectory=/home/gsadmin/global-sentinel
-EnvironmentFile=/home/gsadmin/global-sentinel/.env
-ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/agent_factory.py list --bot ops
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/opt/global-sentinel/.venv/bin/python scripts/agent_factory.py list --bot ops
 # In production, replace ExecStart with the OpenClaw bot runner command
 Restart=on-failure
 RestartSec=30
@@ -22,7 +23,7 @@ SyslogIdentifier=openclaw-ops
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/gsadmin/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/logs
 ReadWritePaths=/tmp
 
 [Install]

@@ -16,14 +16,6 @@ from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger("global_sentinel.rate_limiter")
 
-# Cross-process file-based limiter (preferred)
-try:
-    from src.utils.file_rate_limiter import FileBasedRateLimiter
-    _USE_FILE_LIMITER = True
-except ImportError:
-    _USE_FILE_LIMITER = False
-
-
 # ---------------------------------------------------------------------------
 # Token-bucket rate limiter (thread-safe, per-key)
 # ---------------------------------------------------------------------------
@@ -31,7 +23,7 @@ except ImportError:
 class TokenBucketRateLimiter:
     """Token-bucket rate limiter. Default: 180 req/min (conservative vs 200 limit)."""
 
-    def __init__(self, max_tokens: int = 20, refill_period: float = 60.0):
+    def __init__(self, max_tokens: int = 180, refill_period: float = 60.0):
         self.max_tokens = max_tokens
         self.refill_period = refill_period
         self.tokens = float(max_tokens)
@@ -65,14 +57,11 @@ _limiters: Dict[str, TokenBucketRateLimiter] = {}
 _registry_lock = threading.Lock()
 
 
-def get_limiter(api_key: str, max_rpm: int = 120):
-    """Get or create a rate limiter. Prefers cross-process file-based limiter."""
+def get_limiter(api_key: str, max_rpm: int = 180) -> TokenBucketRateLimiter:
+    """Get or create a rate limiter for the given API key."""
     with _registry_lock:
         if api_key not in _limiters:
-            if _USE_FILE_LIMITER:
-                _limiters[api_key] = FileBasedRateLimiter(api_key=api_key, max_rpm=max_rpm)
-            else:
-                _limiters[api_key] = TokenBucketRateLimiter(max_tokens=max_rpm, refill_period=60.0)
+            _limiters[api_key] = TokenBucketRateLimiter(max_tokens=max_rpm, refill_period=60.0)
         return _limiters[api_key]
 
 

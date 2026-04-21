@@ -1,0 +1,842 @@
+# Global Sentinel V4 — Asset Watchlist
+# Geopolitical arbitrage focus: 2nd/3rd-order macro effects
+
+version: "4.0"
+
+# --- Equity Indices & Index ETFs ---
+equity_indices:
+  - symbol: SPY
+    description: "S&P 500 ETF"
+    priority: critical
+  - symbol: QQQ
+    description: "Nasdaq 100 ETF"
+    priority: critical
+  - symbol: DIA
+    description: "Dow Jones Industrial Average ETF"
+    priority: high
+  - symbol: IWM
+    description: "Russell 2000 Small Cap ETF"
+    priority: high
+  - symbol: MDY
+    description: "S&P MidCap 400 ETF"
+    priority: medium
+  - symbol: EEM
+    description: "Emerging Markets ETF"
+    priority: medium
+  - symbol: EFA
+    description: "EAFE Developed Markets ETF"
+    priority: medium
+  - symbol: FXI
+    description: "China Large-Cap ETF"
+    priority: high
+  - symbol: VIX
+    description: "CBOE Volatility Index"
+    priority: critical
+  - symbol: XLF
+    description: "Financial Select Sector SPDR"
+    priority: high
+  - symbol: XLK
+    description: "Technology Select Sector SPDR"
+    priority: high
+  - symbol: XLI
+    description: "Industrial Select Sector SPDR"
+    priority: medium
+  - symbol: XLU
+    description: "Utilities Select Sector SPDR"
+    priority: medium
+  - symbol: XLP
+    description: "Consumer Staples Select Sector SPDR"
+    priority: medium
+  # -- Additional US Index & Sector ETFs --
+  - symbol: VTI
+    description: "Vanguard Total US Stock Market ETF"
+    priority: high
+  - symbol: VOO
+    description: "Vanguard S&P 500 ETF"
+    priority: high
+  - symbol: VTWO
+    description: "Vanguard Russell 2000 ETF"
+    priority: medium
+  - symbol: XLC
+    description: "Communication Services Select Sector SPDR"
+    priority: medium
+  - symbol: XLB
+    description: "Materials Select Sector SPDR"
+    priority: medium
+  - symbol: XLV
+    description: "Health Care Select Sector SPDR"
+    priority: high
+  - symbol: XLRE
+    description: "Real Estate Select Sector SPDR"
+    priority: medium
+  - symbol: XLY
+    description: "Consumer Discretionary Select Sector SPDR"
+    priority: medium
+  - symbol: XRT
+    description: "SPDR S&P Retail ETF"
+    priority: medium
+  - symbol: KRE
+    description: "SPDR S&P Regional Banking ETF"
+    priority: high
+  - symbol: KBE
+    description: "SPDR S&P Bank ETF"
+    priority: medium
+  - symbol: IBB
+    description: "iShares Biotechnology ETF"
+    priority: medium
+  - symbol: SMH
+    description: "VanEck Semiconductor ETF"
+    priority: critical
+  - symbol: IYT
+    description: "iShares US Transportation ETF"
+    priority: medium
+  - symbol: XHB
+    description: "SPDR S&P Homebuilders ETF"
+    priority: medium
+
+# --- Global Market Indexes (via ETFs) ---
+global_indexes:
+  - symbol: VEA
+    description: "Vanguard FTSE Developed Markets ex-US ETF"
+    priority: high
+  - symbol: VWO
+    description: "Vanguard FTSE Emerging Markets ETF"
+    priority: high
+  - symbol: IEMG
+    description: "iShares Core MSCI Emerging Markets ETF"
+    priority: medium
+  - symbol: ACWI
+    description: "iShares MSCI ACWI (All Country World Index) ETF"
+    priority: high
+  - symbol: ACWX
+    description: "iShares MSCI ACWI ex-US ETF"
+    priority: high
+  - symbol: VGK
+    description: "Vanguard FTSE Europe ETF"
+    priority: high
+  - symbol: EZU
+    description: "iShares MSCI Eurozone ETF"
+    priority: medium
+  - symbol: EWJ
+    description: "iShares MSCI Japan ETF"
+    priority: high
+  - symbol: EWG
+    description: "iShares MSCI Germany ETF"
+    priority: medium
+  - symbol: EWU
+    description: "iShares MSCI United Kingdom ETF"
+    priority: medium
+  - symbol: EWZ
+    description: "iShares MSCI Brazil ETF"
+    priority: high
+  - symbol: EWT
+    description: "iShares MSCI Taiwan ETF — TSMC/semiconductor supply chain"
+    priority: critical
+  - symbol: EWY
+    description: "iShares MSCI South Korea ETF"
+    priority: medium
+  - symbol: INDA
+    description: "iShares MSCI India ETF"
+    priority: high
+  - symbol: MCHI
+    description: "iShares MSCI China ETF"
+    priority: high
+  - symbol: GXC
+    description: "SPDR S&P China ETF"
+    priority: medium
+  - symbol: FM
+    description: "iShares MSCI Frontier and Select EM ETF"
+    priority: medium
+  - symbol: ERUS
+    description: "iShares MSCI Russia ETF — likely delisted/halted since 2022 sanctions"
+    priority: low
+  - symbol: THD
+    description: "iShares MSCI Thailand ETF"
+    priority: low
+  - symbol: EPHE
+    description: "iShares MSCI Philippines ETF"
+    priority: low
+  - symbol: ECH
+    description: "iShares MSCI Chile ETF — copper/commodities proxy"
+    priority: medium
+  - symbol: TUR
+    description: "iShares MSCI Turkey ETF"
+    priority: medium
+  - symbol: EIS
+    description: "iShares MSCI Israel ETF"
+    priority: high
+  - symbol: KSA
+    description: "iShares MSCI Saudi Arabia ETF — Strait of Hormuz exposure"
+    priority: high
+  - symbol: UAE
+    description: "iShares MSCI UAE ETF — Gulf region"
+    priority: medium
+  - symbol: QAT
+    description: "iShares MSCI Qatar ETF — LNG exporter"
+    priority: medium
+
+# --- Index Futures (via ETF proxies for Yahoo/Finnhub) ---
+index_futures:
+  - symbol: ES=F
+    description: "S&P 500 E-mini Futures"
+    priority: critical
+  - symbol: NQ=F
+    description: "Nasdaq 100 E-mini Futures"
+    priority: critical
+  - symbol: YM=F
+    description: "Dow Jones E-mini Futures"
+    priority: high
+  - symbol: RTY=F
+    description: "Russell 2000 E-mini Futures"
+    priority: high
+
+# --- Treasury Futures (via ETF proxies) ---
+treasury_futures:
+  - symbol: ZN=F
+    description: "10-Year Treasury Note Futures"
+    priority: critical
+  - symbol: ZB=F
+    description: "30-Year Treasury Bond Futures"
+    priority: high
+  - symbol: ZF=F
+    description: "5-Year Treasury Note Futures"
+    priority: high
+  - symbol: ZT=F
+    description: "2-Year Treasury Note Futures"
+    priority: high
+
+# --- Commodity Futures ---
+commodity_futures:
+  - symbol: CL=F
+    description: "WTI Crude Oil Futures"
+    priority: critical
+  - symbol: BZ=F
+    description: "Brent Crude Oil Futures"
+    priority: critical
+  - symbol: GC=F
+    description: "Gold Futures"
+    priority: critical
+  - symbol: SI=F
+    description: "Silver Futures"
+    priority: medium
+  - symbol: NG=F
+    description: "Natural Gas Futures"
+    priority: high
+  - symbol: HG=F
+    description: "Copper Futures"
+    priority: medium
+  - symbol: RB=F
+    description: "RBOB Gasoline Futures (crack spread component)"
+    priority: high
+  - symbol: HO=F
+    description: "Heating Oil Futures (distillate proxy)"
+    priority: medium
+
+# --- Currencies ---
+currencies:
+  - pair: DXY
+    description: "US Dollar Index"
+    priority: high
+  - pair: EURUSD
+    description: "Euro/USD"
+    priority: high
+  - pair: USDJPY
+    description: "USD/Japanese Yen"
+    priority: high
+  - pair: USDCNH
+    description: "USD/Offshore Yuan"
+    priority: high
+  - pair: USDRUB
+    description: "USD/Russian Ruble"
+    priority: medium
+
+# --- Commodities ---
+commodities:
+  - symbol: CL
+    description: "WTI Crude Oil"
+    priority: high
+  - symbol: GC
+    description: "Gold"
+    priority: high
+  - symbol: SI
+    description: "Silver"
+    priority: medium
+  - symbol: NG
+    description: "Natural Gas"
+    priority: medium
+  - symbol: HG
+    description: "Copper"
+    priority: medium
+
+# --- Fixed Income / Treasury Yield Curve ---
+fixed_income:
+  - symbol: BIL
+    description: "SPDR 1-3 Month T-Bill ETF (cash proxy)"
+    priority: medium
+  - symbol: SHV
+    description: "iShares Short Treasury Bond ETF (0-1Y)"
+    priority: medium
+  - symbol: SHY
+    description: "iShares 1-3 Year Treasury ETF (2Y yield proxy)"
+    priority: critical
+  - symbol: IEI
+    description: "iShares 3-7 Year Treasury ETF (5Y yield proxy)"
+    priority: high
+  - symbol: IEF
+    description: "iShares 7-10 Year Treasury ETF (10Y yield proxy)"
+    priority: critical
+  - symbol: TLT
+    description: "iShares 20+ Year Treasury ETF (long bond)"
+    priority: critical
+  - symbol: TLH
+    description: "iShares 10-20 Year Treasury ETF"
+    priority: medium
+  - symbol: GOVT
+    description: "iShares US Treasury Bond ETF (full curve)"
+    priority: high
+  - symbol: TIP
+    description: "iShares TIPS Bond ETF (inflation-protected)"
+    priority: high
+  - symbol: HYG
+    description: "High Yield Corporate Bond ETF (credit stress)"
+    priority: critical
+  - symbol: JNK
+    description: "SPDR Bloomberg High Yield Bond ETF"
+    priority: high
+  - symbol: LQD
+    description: "Investment Grade Corporate Bond ETF"
+    priority: high
+  - symbol: AGG
+    description: "iShares Core US Aggregate Bond ETF"
+    priority: medium
+  - symbol: EMB
+    description: "iShares JP Morgan USD Emerging Markets Bond ETF"
+    priority: medium
+
+# --- Crypto (sentiment proxy) ---
+crypto:
+  - symbol: BTC
+    description: "Bitcoin — risk appetite proxy"
+    priority: low
+
+# --- Geopolitical Watchlist Regions ---
+regions:
+  - name: "Taiwan Strait"
+    keywords: ["taiwan", "china military", "strait", "TSMC"]
+    priority: critical
+  - name: "Ukraine/Russia"
+    keywords: ["ukraine", "russia", "NATO", "sanctions"]
+    priority: high
+  - name: "Middle East / Iran"
+    keywords: ["iran", "israel", "saudi", "oil embargo", "strait of hormuz", "persian gulf", "irgc", "iran war", "iran sanctions", "iran nuclear", "hamas", "hezbollah"]
+    priority: critical
+  - name: "Korean Peninsula"
+    keywords: ["north korea", "DPRK", "missile test"]
+    priority: medium
+  - name: "US-China Trade"
+    keywords: ["tariff", "trade war", "export controls", "chips act"]
+    priority: high
+
+# --- Aviation & Travel (War/Geopolitical Disruption) ---
+aviation_travel:
+  - symbol: DAL
+    description: "Delta Air Lines"
+    priority: high
+    sector: aviation
+  - symbol: UAL
+    description: "United Airlines Holdings"
+    priority: high
+    sector: aviation
+  - symbol: AAL
+    description: "American Airlines Group"
+    priority: high
+    sector: aviation
+  - symbol: LUV
+    description: "Southwest Airlines"
+    priority: medium
+    sector: aviation
+  - symbol: JBLU
+    description: "JetBlue Airways"
+    priority: medium
+    sector: aviation
+  - symbol: JETS
+    description: "US Global Jets ETF"
+    priority: high
+    sector: aviation_etf
+  - symbol: BA
+    description: "Boeing — defense/commercial aviation"
+    priority: high
+    sector: aerospace_defense
+  - symbol: RTX
+    description: "RTX Corp (Raytheon) — defense"
+    priority: high
+    sector: aerospace_defense
+  - symbol: LMT
+    description: "Lockheed Martin — defense"
+    priority: high
+    sector: aerospace_defense
+  - symbol: GD
+    description: "General Dynamics — defense"
+    priority: medium
+    sector: aerospace_defense
+  - symbol: NOC
+    description: "Northrop Grumman — defense"
+    priority: medium
+    sector: aerospace_defense
+
+# --- Travel & Hospitality (Geopolitical Sensitivity) ---
+travel_hospitality:
+  - symbol: MAR
+    description: "Marriott International"
+    priority: medium
+    sector: hotels
+  - symbol: HLT
+    description: "Hilton Worldwide"
+    priority: medium
+    sector: hotels
+  - symbol: BKNG
+    description: "Booking Holdings"
+    priority: high
+    sector: online_travel
+  - symbol: EXPE
+    description: "Expedia Group"
+    priority: medium
+    sector: online_travel
+  - symbol: ABNB
+    description: "Airbnb"
+    priority: medium
+    sector: online_travel
+  - symbol: CCL
+    description: "Carnival Corp — cruise lines"
+    priority: medium
+    sector: cruise
+  - symbol: RCL
+    description: "Royal Caribbean — cruise lines"
+    priority: medium
+    sector: cruise
+
+# --- Supply Chain / Shipping (War Disruption) ---
+supply_chain:
+  - symbol: ZIM
+    description: "ZIM Integrated Shipping — Red Sea/Houthi exposure"
+    priority: high
+    sector: shipping
+  - symbol: MATX
+    description: "Matson Inc — Pacific shipping"
+    priority: medium
+    sector: shipping
+  - symbol: FDX
+    description: "FedEx — global logistics"
+    priority: medium
+    sector: logistics
+  - symbol: UPS
+    description: "UPS — global logistics"
+    priority: medium
+    sector: logistics
+
+# --- Gasoline & Refining (War/Supply Disruption) ---
+gasoline_refining:
+  - symbol: UGA
+    description: "United States Gasoline Fund ETF"
+    priority: high
+    sector: gasoline
+  - symbol: VLO
+    description: "Valero Energy — largest US refiner"
+    priority: high
+    sector: refining
+  - symbol: MPC
+    description: "Marathon Petroleum — refining & midstream"
+    priority: high
+    sector: refining
+  - symbol: PSX
+    description: "Phillips 66 — refining & chemicals"
+    priority: high
+    sector: refining
+  - symbol: PBF
+    description: "PBF Energy — refining, Strait of Hormuz exposure"
+    priority: medium
+    sector: refining
+  - symbol: HFC
+    description: "HF Sinclair — refining"
+    priority: medium
+    sector: refining
+  - symbol: DK
+    description: "Delek US Holdings — refining"
+    priority: medium
+    sector: refining
+  - symbol: CTRA
+    description: "Coterra Energy — nat gas/oil production"
+    priority: medium
+    sector: upstream
+  - symbol: XOP
+    description: "SPDR Oil & Gas Exploration ETF"
+    priority: high
+    sector: energy_etf
+  - symbol: XLE
+    description: "Energy Select Sector SPDR ETF"
+    priority: high
+    sector: energy_etf
+
+# --- Defense & Military Industry (Geopolitical Sensitivity) ---
+defense_military:
+  - symbol: ITA
+    description: "iShares US Aerospace & Defense ETF"
+    priority: high
+    sector: defense_etf
+  - symbol: PPA
+    description: "Invesco Aerospace & Defense ETF"
+    priority: high
+    sector: defense_etf
+  - symbol: HII
+    description: "Huntington Ingalls — naval shipbuilding"
+    priority: high
+    sector: defense
+  - symbol: LHX
+    description: "L3Harris Technologies — C4ISR, electronic warfare"
+    priority: high
+    sector: defense
+  - symbol: LDOS
+    description: "Leidos Holdings — defense IT & intelligence"
+    priority: medium
+    sector: defense
+  - symbol: KTOS
+    description: "Kratos Defense — drones, missile defense"
+    priority: medium
+    sector: defense
+  - symbol: PLTR
+    description: "Palantir — defense AI & intelligence"
+    priority: high
+    sector: defense_tech
+  - symbol: AVAV
+    description: "AeroVironment — tactical drones, loitering munitions"
+    priority: medium
+    sector: defense
+  - symbol: RKLB
+    description: "Rocket Lab — defense space launches"
+    priority: medium
+    sector: defense_space
+
+# --- Insurance (War/Catastrophe Risk) ---
+insurance_risk:
+  - symbol: AIG
+    description: "AIG — war/aviation insurance exposure"
+    priority: medium
+    sector: insurance
+  - symbol: BRK-B
+    description: "Berkshire Hathaway — reinsurance exposure"
+    priority: medium
+    sector: insurance
+
+# --- Geopolitical Watchlist Regions (Expanded) ---
+regions_expanded:
+  - name: "Red Sea / Suez Canal"
+    keywords: ["houthi", "red sea", "suez canal", "bab el-mandeb", "shipping disruption"]
+    priority: critical
+  - name: "Black Sea / Grain Corridor"
+    keywords: ["black sea", "grain corridor", "odessa", "sevastopol"]
+    priority: high
+  - name: "Arctic / Northern Sea Route"
+    keywords: ["arctic route", "northern sea route", "polar shipping"]
+    priority: low
+  - name: "South China Sea"
+    keywords: ["south china sea", "spratly", "paracel", "freedom of navigation"]
+    priority: high
+  - name: "Aviation Disruptions"
+    keywords: ["airspace closure", "no-fly zone", "flight diversion", "NOTAM", "aviation ban", "flight cancellation"]
+    priority: high
+
+# --- Cybersecurity ---
+cybersecurity:
+  symbols: [PANW, CRWD, FTNT, ZS, HACK, CIBR]
+  priority: high
+  keywords: ["cyberattack", "cyber warfare", "ransomware", "state-sponsored hack"]
+
+# --- Shipping & Maritime (Hormuz / Red Sea / chokepoint exposure) ---
+shipping_maritime:
+  symbols: [ZIM, GOGL, INSW, STNG, FRO, DHT, EURN, TNK, HAFN, BDRY, SBLK, GNK]
+  priority: critical
+  keywords: ["strait of hormuz", "shipping disruption", "tanker attack", "naval blockade", "red sea",
+             "suez canal", "bab el mandeb", "malacca strait", "chokepoint", "bunker fuel",
+             "freight rates", "VLCC", "suezmax", "aframax", "war risk insurance",
+             "tanker seizure", "maritime security", "piracy", "houthi"]
+
+# --- Uranium & Nuclear ---
+uranium_nuclear:
+  symbols: [URA, CCJ, UUUU, LEU]
+  priority: high
+  keywords: ["uranium", "nuclear program", "enrichment", "nuclear deal", "IAEA"]
+
+# --- Agriculture & Food (oil → fertilizer → food price cascade) ---
+agriculture_food:
+  symbols: [DBA, WEAT, CORN, SOYB, COW, MOO, ADM, BG, CTVA, CF, MOS, NTR, DE, AGCO]
+  priority: high
+  keywords: ["food shortage", "grain disruption", "agricultural supply", "fertilizer crisis",
+             "crop failure", "food inflation", "wheat price", "corn price", "soybean",
+             "fertilizer price", "potash", "nitrogen", "phosphate", "food security",
+             "Black Sea grain", "export ban food", "drought", "famine"]
+
+# --- Electricity & Utilities (energy → power grid cascade) ---
+electricity_utilities:
+  symbols: [XLU, NEE, DUK, SO, D, AEP, EXC, SRE, ED, PCG, VST, CEG, NRG, FSLR, ENPH]
+  priority: high
+  keywords: ["electricity price", "power grid", "utility crisis", "blackout", "brownout",
+             "natural gas power", "electricity demand", "grid stress", "power outage",
+             "renewable energy", "solar", "wind power", "nuclear power", "baseload"]
+
+# --- Chemicals & Petrochemicals (oil feedstock → industrial cascade) ---
+chemicals_petrochemicals:
+  symbols: [LYB, DOW, DD, EMN, CE, HUN, WLKP, OLN]
+  priority: medium
+  keywords: ["petrochemical", "ethylene", "propylene", "chemical feedstock", "naphtha",
+             "plastic prices", "chemical plant shutdown", "feedstock cost"]
+
+# --- Leveraged & Volatility ---
+leveraged_volatility:
+  symbols: [UVXY, SQQQ, SPXU, TQQQ, SDOW]
+  priority: high
+  keywords: ["volatility spike", "VIX surge", "market crash", "circuit breaker"]
+
+# --- Insurance & Reinsurance ---
+insurance_reinsurance:
+  symbols: [RE, RNR, ACGL]
+  priority: medium
+  keywords: ["war risk premium", "insurance loss", "catastrophe bond"]
+
+# --- Crude Oil Direct (price tracking ETFs) ---
+crude_oil_direct:
+  symbols: [USO, UCO, BNO, DBO, OILK]
+  priority: critical
+  keywords: ["crude oil price", "WTI", "brent crude", "oil futures", "oil barrel price",
+             "oil 100", "oil 150", "oil superspike", "oil supply shock"]
+
+# --- Oil Majors ---
+oil_majors:
+  symbols: [XOM, CVX, COP, OXY, SLB, HAL, BKR, DVN, PXD, FANG, EOG]
+  priority: critical
+  keywords: ["oil production", "OPEC", "crude oil", "supply cut", "brent", "oil services",
+             "shale production", "drilling rigs", "oil earnings"]
+
+# --- Oil E&P Small/Mid (leveraged to oil price) ---
+oil_ep_smid:
+  symbols: [PR, CHRD, SM, MTDR, CIVI, NOG, CRGY]
+  priority: high
+  keywords: ["oil exploration", "shale producer", "permian basin", "bakken", "eagle ford"]
+
+# --- Midstream / Pipelines (oil supply chain derivative) ---
+midstream_pipelines:
+  symbols: [ET, EPD, WMB, KMI, MPLX, OKE, TRGP, PAA, HESM]
+  priority: high
+  keywords: ["pipeline", "midstream", "LNG export", "natural gas transport", "oil transport",
+             "pipeline capacity", "throughput"]
+
+# --- Natural Gas / LNG Producers ---
+natgas_lng:
+  symbols: [AR, EQT, RRC, LNG, GLNG, TELL]
+  priority: high
+  keywords: ["natural gas", "LNG", "liquefied natural gas", "gas export", "gas storage"]
+
+# --- Oil Supply Chain Losers (short candidates on $150 oil) ---
+oil_demand_destruction:
+  symbols: [JETS, UAL, DAL, AAL, LUV, CCL, RCL, NCLH, LYFT, UBER, FDX, UPS]
+  priority: high
+  keywords: ["fuel cost", "jet fuel", "airline margins", "shipping cost", "freight rates",
+             "consumer squeeze", "transportation cost", "demand destruction"]
+
+# --- Inflation Hedges (oil cascade into CPI) ---
+inflation_hedges:
+  symbols: [TIP, VTIP, STIP, RINF, INFL, COMT, DJP, PDBC]
+  priority: high
+  keywords: ["inflation", "CPI", "breakeven rate", "real yields", "commodity index",
+             "inflation expectations", "oil inflation pass-through"]
+
+# --- Tankers & Marine Transport (oil rerouting = ton-mile surge) ---
+tankers_marine:
+  symbols: [FRO, STNG, INSW, DHT, TNK, NAT, EURN, TRMD, ASC, CPLP, KNOP, FLNG]
+  priority: high
+  keywords: ["tanker rates", "VLCC", "crude tanker", "product tanker", "LNG carrier",
+             "ton-mile demand", "tanker rerouting", "freight rates", "bunker fuel"]
+
+# --- Oilfield Services & Drilling (rig count surge at $150 oil) ---
+oilfield_services:
+  symbols: [SLB, HAL, BKR, OIH, PTEN, HP, RIG, VAL, NE, LBRT, NEX, WHD, WFRD, FTI, TDW]
+  priority: high
+  keywords: ["rig count", "drilling activity", "oilfield services", "well completion",
+             "pressure pumping", "offshore drilling", "deepwater"]
+
+# --- Alternative Energy Beneficiaries (oil pain = clean energy demand) ---
+alt_energy_solar:
+  symbols: [TAN, FSLR, ENPH, SEDG, RUN, NOVA, ARRY, CSIQ, JKS, MAXN]
+  priority: high
+  keywords: ["solar energy", "solar panel", "solar installer", "renewable energy",
+             "energy transition", "clean energy"]
+
+alt_energy_wind:
+  symbols: [FAN, CWEN, AES, ORA, NEP, VWDRY]
+  priority: medium
+  keywords: ["wind energy", "wind turbine", "offshore wind", "onshore wind"]
+
+alt_energy_nuclear:
+  symbols: [CCJ, URA, LEU, UUUU, NNE, SMR, OKLO, DNN, NXE]
+  priority: high
+  keywords: ["nuclear energy", "uranium", "small modular reactor", "nuclear power",
+             "uranium enrichment", "nuclear fuel"]
+
+alt_energy_ev_battery:
+  symbols: [TSLA, RIVN, LCID, NIO, LI, XPEV, BYDDY, QS, ENVX, IONQ,
+            ALB, SQM, LTHM, LAC, PLL, LIVENT, MP, FREYR]
+  priority: high
+  keywords: ["electric vehicle", "EV sales", "battery", "lithium", "cobalt",
+             "EV demand", "charging infrastructure", "solid state battery"]
+
+alt_energy_hydrogen:
+  symbols: [PLUG, FCEL, BE, BLDP, HYDR]
+  priority: medium
+  keywords: ["hydrogen", "fuel cell", "green hydrogen", "hydrogen economy"]
+
+alt_energy_clean_etfs:
+  symbols: [ICLN, QCLN, PBW, ACES, SMOG, LIT]
+  priority: medium
+  keywords: ["clean energy ETF", "green energy", "ESG energy"]
+
+# --- Autos & Transport (gas guzzlers vs EV, ride-sharing) ---
+autos_transport:
+  symbols: [F, GM, STLA, TM, HMC, RACE, LYFT, UBER, GRAB, DIDI]
+  priority: medium
+  keywords: ["auto sales", "fuel economy", "gas prices consumers", "ride sharing costs",
+             "EV adoption", "fleet fuel costs"]
+
+# --- Cruise Lines (fuel + consumer discretionary double hit) ---
+cruise_leisure:
+  symbols: [CCL, RCL, NCLH, PLYA, HLT, MAR, H, ABNB, BKNG, EXPE]
+  priority: medium
+  keywords: ["cruise fuel costs", "travel demand", "hotel occupancy", "leisure spending"]
+
+# --- Restaurants & Consumer (oil → food/transport costs → margin squeeze) ---
+restaurants_consumer:
+  symbols: [MCD, SBUX, CMG, DPZ, YUM, QSR, WEN, DIN, CAKE, TXRH,
+            WMT, TGT, COST, KR, ACI, DG, DLTR]
+  priority: medium
+  keywords: ["food costs", "consumer spending", "restaurant margins", "grocery prices",
+             "discretionary spending", "gas prices consumer impact"]
+
+# --- Homebuilders & Real Estate (rates + consumer squeeze) ---
+homebuilders_reits:
+  symbols: [XHB, ITB, LEN, DHI, PHM, TOL, NVR, KBH, MDC, TMHC,
+            VNQ, IYR, O, SPG, PLD, AMT, EQIX, DLR]
+  priority: medium
+  keywords: ["housing demand", "mortgage rates", "REIT dividend", "real estate",
+             "homebuilder sentiment", "construction costs"]
+
+# --- Banks & Financials (energy loans, trading rev, rate bets) ---
+banks_financials:
+  symbols: [JPM, GS, MS, BAC, WFC, C, BK, STT, SCHW, BX, KKR, APO,
+            AIG, TRV, ALL, PGR, CB, MET, PRU]
+  priority: medium
+  keywords: ["energy loan exposure", "bank trading revenue", "interest rate expectations",
+             "financial sector", "credit risk", "insurance underwriting"]
+
+# --- Country ETFs: Oil Exporters (beneficiaries) ---
+country_oil_exporters:
+  symbols: [KSA, NORW, EWC, FLBR, EGPT, QAT, UAE]
+  priority: high
+  keywords: ["Saudi Arabia", "Norway", "Canada oil sands", "Brazil Petrobras",
+             "oil exporting nation", "OPEC member", "petrodollar"]
+
+# --- Country ETFs: Oil Importers (losers) ---
+country_oil_importers:
+  symbols: [EWJ, INDA, EWY, TUR, EWG, EWQ, EWU, EWI, EWP, EPI, THD, VNM, EIDO]
+  priority: high
+  keywords: ["Japan oil import", "India oil import", "Korea oil import", "Turkey oil",
+             "European energy crisis", "oil importing nation", "trade deficit"]
+
+# --- Volatility & Tail Risk ---
+volatility_instruments:
+  symbols: [UVXY, VXX, VIXY, SVXY, SVOL, TAIL, SQQQ, SPXU, SDS, SH, PSQ, DOG, RWM]
+  priority: high
+  keywords: ["VIX spike", "volatility", "tail risk", "inverse ETF", "leveraged bearish",
+             "put protection", "hedging"]
+
+# --- Crypto / Digital Gold (inflation hedge, petrodollar alternative) ---
+crypto_proxies:
+  symbols: [IBIT, BITO, GBTC, ETHE, MSTR, COIN, MARA, RIOT, CLSK, HUT]
+  priority: medium
+  keywords: ["bitcoin", "crypto", "digital gold", "inflation hedge crypto",
+             "petrodollar alternative", "bitcoin mining"]
+
+# --- Materials & Industrial Metals (energy-intensive smelting costs) ---
+materials_metals:
+  symbols: [XLB, XME, PICK, COPX, FCX, SCCO, TECK, BHP, RIO, VALE,
+            AA, CENX, X, NUE, CLF, STLD, RS]
+  priority: medium
+  keywords: ["aluminum smelting", "copper", "steel production", "iron ore",
+             "mining energy costs", "industrial metals", "base metals"]
+
+# --- Oil & Gas Royalties (pure upside, ZERO operating costs — hidden gems) ---
+oil_gas_royalties:
+  symbols: [VNOM, TPL, BSM, DMLP, MNRL, PBT]
+  priority: critical
+  keywords: ["mineral rights", "royalty interest", "permian royalty", "oil royalty",
+             "zero operating cost", "mineral owner", "surface acreage"]
+
+# --- Railcar Manufacturers & Lessors (crude-by-rail surge at pipeline capacity) ---
+railcar_crude_by_rail:
+  symbols: [TRN, GBX, GATX]
+  priority: high
+  keywords: ["railcar", "tank car", "crude by rail", "railcar leasing",
+             "pipeline capacity", "rail transport oil"]
+
+# --- Coal (fuel switching demand at extreme oil/gas prices) ---
+coal_fuel_switching:
+  symbols: [BTU, ARCH, ARLP, HCC, CEIX]
+  priority: medium
+  keywords: ["coal prices", "thermal coal", "fuel switching", "coal power",
+             "met coal", "coal demand"]
+
+# --- Waste Haulers (short targets — massive diesel fleet exposure) ---
+waste_haulers:
+  symbols: [WM, RSG, GFL]
+  priority: medium
+  keywords: ["waste hauling", "diesel fleet", "fuel cost waste management",
+             "garbage truck fuel", "collection routes"]
+
+# --- Gas Stations & Fuel Distributors ---
+fuel_distributors:
+  symbols: [CAPL, PARR, CVI, DINO]
+  priority: medium
+  keywords: ["fuel distribution", "gas station", "wholesale fuel", "refining margin"]
+
+# --- Niche Oil Plays (often overlooked) ---
+niche_oil_plays:
+  symbols: [SPH, UGI, AROC, CLNE, AM, CTRA, HES, MUR, WES,
+            TGS, BORR, SDRL, USAC, PUMP, WTTR, HLX, DRQ, MRC,
+            BRY, MRO, APA, MGY, CNQ, SU, IMO, CPG, NOV, CHX, OII]
+  priority: medium
+  keywords: ["propane distribution", "oil storage", "well servicing", "marine fuel",
+             "offshore support", "drilling contractor", "subsea", "compression services",
+             "water management", "well intervention", "pipe valve fitting"]
+
+# --- AI Infrastructure & Semiconductors (Technology Revolution Tailwind) ---
+ai_infrastructure:
+  symbols: [NVDA, AMD, AVGO, TSM, SMCI, MRVL, ARM, INTC, MU, ANET]
+  priority: critical
+  keywords: ["AI infrastructure", "GPU demand", "data center", "AI chip", "semiconductor",
+             "AI spending", "hyperscaler", "NVIDIA earnings", "AI capex", "chip export ban"]
+
+# --- AI Software & Applications ---
+ai_software:
+  symbols: [MSFT, GOOGL, META, AMZN, CRM, NOW, SNOW, PLTR, AI, PATH]
+  priority: high
+  keywords: ["AI model", "large language model", "AI enterprise", "AI adoption",
+             "AI revenue", "generative AI", "AI agents", "AI automation"]
+
+# --- AI-Disrupted Sectors (Short/Hedge Candidates) ---
+ai_disrupted:
+  symbols: [CHGG, UPWK, LMND, LC]
+  priority: medium
+  keywords: ["AI replacement", "AI disruption", "job displacement", "automation threat"]
+
+# --- Robotics & Autonomous Systems ---
+robotics_autonomous:
+  symbols: [ISRG, TER, IRBT, RKLB, JOBY, LUNR]
+  priority: medium
+  keywords: ["robotics", "autonomous", "drone warfare", "autonomous weapons", "self-driving"]

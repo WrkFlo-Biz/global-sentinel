@@ -129,7 +129,7 @@ def test_stale_order_old():
 
 
 def test_stale_buy_no_position():
-    """Fresh buy order with no matching position is treated as a new entry."""
+    """Buy order with no matching position = stale even if recent"""
     audit = BrokerOrderAudit(
         accounts={"test": FakeAdapter(
             open_orders=[_order(symbol="XYZ", side="buy", submitted_hours_ago=2)],
@@ -138,7 +138,7 @@ def test_stale_buy_no_position():
     )
     report = audit.run_audit(now=NOW)
     classified = report["accounts"]["test"]["classified_orders"]
-    assert classified[0]["bucket"] == "new_entry"
+    assert classified[0]["bucket"] == BUCKET_STALE_OPEN
 
 
 def test_crypto_orphan():

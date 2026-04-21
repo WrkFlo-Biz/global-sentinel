@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel: Fundamental Valuation (weekdays 10:00 UTC)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+ExecStart=/bin/bash -c '/usr/bin/python3 -m src.research.fundamental_valuation >> /opt/global-sentinel/logs/fundamental_valuation.log 2>&1'
+User=openclaw
+Group=openclaw

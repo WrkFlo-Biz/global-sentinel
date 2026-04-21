@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel: Multi-Broker Readiness Check Timer (Sun 22:00 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 22:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

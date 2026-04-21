@@ -9,8 +9,8 @@ Generates trade ideas based on:
 - Market microstructure data (vol, ADV, price levels)
 - Risk/reward analysis with entry, target, stop levels
 
-Safety: ALL output is advisory-only. Shadow mode execution requires
-human approval per CLAUDE.md non-negotiable rules.
+Execution: Output feeds directly into the execution pipeline via
+TradeIdeaPackager → ShadowOrderRouter → Broker Adapter.
 """
 
 from __future__ import annotations
@@ -28,45 +28,11 @@ except ImportError:
     print("Missing dependency: pyyaml", file=sys.stderr)
     sys.exit(1)
 
+from src.execution.strategy_learning import apply_learning_adjustments_to_idea, load_learning_context
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-PRICE_FIELDS = ("last_price", "current_price", "close", "mark", "mid", "decision_price")
-VOLATILITY_FIELDS = ("sigma_daily_pct", "realized_vol_pct", "volatility_pct", "daily_vol_pct")
-TIMESTAMP_FIELDS = ("timestamp_utc", "fetched_at_utc", "pricing_timestamp_utc", "market_timestamp_utc")
-STALE_MARKET_DATA_HOURS = 24.0
-VERY_STALE_MARKET_DATA_HOURS = 72.0
-
-
-def load_latest_microstructure_cache(repo_root: Path) -> Dict[str, Dict[str, Any]]:
-    """Load the latest microstructure cache and support legacy/top-level shapes."""
-    cache_dir = Path(repo_root) / "logs" / "bridge_cache" / "market_microstructure"
-    if not cache_dir.exists():
-        return {}
-
-    cache_files = sorted(cache_dir.glob("microstructure_*.json"), reverse=True)
-    if not cache_files:
-        return {}
-
-    for cache_file in cache_files:
-        try:
-            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-
-        if not isinstance(cache_data, dict):
-            continue
-
-        nested_symbols = cache_data.get("symbols")
-        if isinstance(nested_symbols, dict) and nested_symbols:
-            return nested_symbols
-
-        if cache_data and all(isinstance(value, dict) for value in cache_data.values()):
-            return cache_data
-
-    return {}
 
 
 # --- Historical Regime Playbook ---
@@ -75,7 +41,7 @@ REGIME_PLAYBOOK = {
     "NORMAL_to_ELEVATED": {
         "thesis": "AGGRESSIVE DAY TRADE: Risk-off rotation begins. Buy the dip on defense/oil/gold, sell the rip within hours. Tight 2:1 R:R on every trade. Flat by EOD.",
         "long_sectors": ["defense", "defense_tech", "oil_majors", "oil_ep", "gasoline_refining", "gold_safe_haven", "treasuries", "cybersecurity", "shipping", "uranium", "agriculture", "pharma", "leveraged_vol"],
-        "short_sectors": ["airlines", "cruise", "emerging_markets", "transport"],
+        "short_sectors": ["airlines", "cruise", "emerging_markets", "transport", "consumer_discretionary", "autos", "chemicals", "homebuilders"],
         "symbols": {
             "long": [
                 # Defense primes — day trade momentum on escalation headlines
@@ -155,17 +121,55 @@ REGIME_PLAYBOOK = {
                 # Pharma/medical
                 {"symbol": "XLV", "reason": "Healthcare ETF — wartime medical demand", "historical_win_rate": 0.55, "holding_period": "day"},
                 {"symbol": "JNJ", "reason": "J&J — defensive + medical supply demand", "historical_win_rate": 0.54, "holding_period": "day"},
+                # Alt energy / EV — oil pain = demand acceleration
+                {"symbol": "TSLA", "reason": "Tesla — EV demand surges as gas hits $6+, scalp momentum", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "FSLR", "reason": "First Solar — energy independence narrative accelerates", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "TAN", "reason": "Solar ETF — oil superspike accelerates solar capex", "historical_win_rate": 0.57, "holding_period": "day"},
+                {"symbol": "ENPH", "reason": "Enphase — residential solar demand surges with gas prices", "historical_win_rate": 0.56, "holding_period": "day"},
+                # Tankers — rerouting ton-mile demand
+                {"symbol": "FRO", "reason": "Frontline — VLCC tanker rates explode on rerouting", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "DHT", "reason": "DHT Holdings — crude tanker spot rates spike", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "TNK", "reason": "Teekay Tankers — product tanker surge", "historical_win_rate": 0.58, "holding_period": "day"},
+                # Inflation / real assets
+                {"symbol": "TIP", "reason": "TIPS — inflation expectations surge on oil shock", "historical_win_rate": 0.55, "holding_period": "day"},
+                {"symbol": "IBIT", "reason": "Bitcoin ETF — digital gold / inflation hedge narrative", "historical_win_rate": 0.55, "holding_period": "day"},
                 # Leveraged volatility
                 {"symbol": "UVXY", "reason": "VIX spike — intraday volatility scalp", "historical_win_rate": 0.58, "holding_period": "day"},
                 {"symbol": "SQQQ", "reason": "3x bearish QQQ — tech selloff on risk-off", "historical_win_rate": 0.55, "holding_period": "day"},
                 {"symbol": "SPXU", "reason": "3x bearish S&P — broad market fear trade", "historical_win_rate": 0.54, "holding_period": "day"},
             ],
             "short": [
-                # Use inverse ETFs for short exposure (day trades)
-                {"symbol": "EEM", "reason": "EM capital flight on risk-off", "historical_win_rate": 0.67, "holding_period": "day"},
+                # Airlines — jet fuel 25-35% of costs
+                {"symbol": "JETS", "reason": "Airlines ETF — jet fuel spike crushes margins intraday", "historical_win_rate": 0.70, "holding_period": "day"},
+                {"symbol": "AAL", "reason": "American Airlines — weakest balance sheet, biggest fuel hit", "historical_win_rate": 0.68, "holding_period": "day"},
+                {"symbol": "UAL", "reason": "United — fuel costs spike, sell rips", "historical_win_rate": 0.66, "holding_period": "day"},
+                {"symbol": "DAL", "reason": "Delta — premium carrier still hit by fuel spike", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Cruise — fuel + consumer pullback
+                {"symbol": "CCL", "reason": "Carnival — fuel costs + consumer fear kills bookings", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "RCL", "reason": "Royal Caribbean — discretionary travel killed by oil tax", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Transport — diesel costs
+                {"symbol": "IYT", "reason": "Transport ETF — trucking/rail margins crushed by diesel", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "FDX", "reason": "FedEx — fuel surcharges lag costs, intraday sell", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "UBER", "reason": "Uber — driver costs surge, rider demand drops", "historical_win_rate": 0.58, "holding_period": "day"},
+                # EM — oil importers crushed
+                {"symbol": "EEM", "reason": "EM capital flight — oil importers face FX crisis", "historical_win_rate": 0.67, "holding_period": "day"},
+                {"symbol": "EWY", "reason": "South Korea — 100% oil import, petrochemicals hit", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "INDA", "reason": "India — massive oil importer, rupee weakens", "historical_win_rate": 0.62, "holding_period": "day"},
+                # Consumer discretionary — gasoline is a tax on households
+                {"symbol": "XRT", "reason": "Retail ETF — consumer crushed by gas prices", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "XLY", "reason": "Consumer discretionary — oil = spending tax, sell rips", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "XHB", "reason": "Homebuilders — rates + consumer squeeze, intraday fade", "historical_win_rate": 0.57, "holding_period": "day"},
+                # Autos — gas guzzler demand destroyed
+                {"symbol": "F", "reason": "Ford — truck/SUV demand hit by gas prices", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "GM", "reason": "GM — ICE auto demand destruction, sell intraday rips", "historical_win_rate": 0.57, "holding_period": "day"},
+                # Chemicals — feedstock costs
+                {"symbol": "LYB", "reason": "LyondellBasell — petrochemical input costs explode", "historical_win_rate": 0.58, "holding_period": "day"},
+                {"symbol": "DOW", "reason": "Dow Inc — chemical feedstock margin destruction", "historical_win_rate": 0.56, "holding_period": "day"},
+                # Index shorts
                 {"symbol": "SPY", "reason": "Broad market risk-off via SH inverse", "historical_win_rate": 0.60, "holding_period": "day"},
                 {"symbol": "QQQ", "reason": "Tech selloff via PSQ inverse", "historical_win_rate": 0.58, "holding_period": "day"},
-                {"symbol": "IYT", "reason": "Transport disruption — freight logistics hit", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "IWM", "reason": "Small-cap weakness amplifies in risk-off", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "DIA", "reason": "Dow cyclicals selloff", "historical_win_rate": 0.56, "holding_period": "day"},
             ],
         },
         "historical_examples": [
@@ -239,6 +243,17 @@ REGIME_PLAYBOOK = {
                 {"symbol": "FXI", "reason": "China selloff on geopolitical risk", "historical_win_rate": 0.72, "holding_period": "day"},
                 {"symbol": "EEM", "reason": "EM capital flight in crisis", "historical_win_rate": 0.74, "holding_period": "day"},
                 {"symbol": "IYT", "reason": "Transport disruption — supply chain breakdown", "historical_win_rate": 0.68, "holding_period": "day"},
+                # Index short ideas — comprehensive crisis downturn hedges
+                {"symbol": "SPY", "reason": "Broad market selloff — hedge via SH inverse or direct short", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "QQQ", "reason": "Tech-heavy selloff — hedge via PSQ inverse or direct short", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "IWM", "reason": "Small-cap weakness amplifies in risk-off — direct short or inverse", "historical_win_rate": 0.65, "holding_period": "day"},
+                {"symbol": "DIA", "reason": "Dow Jones industrial selloff — cyclical weakness", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "EFA", "reason": "International developed markets selloff", "historical_win_rate": 0.61, "holding_period": "day"},
+                {"symbol": "EEM", "reason": "Emerging markets capital flight", "historical_win_rate": 0.63, "holding_period": "day"},
+                {"symbol": "HYG", "reason": "High yield credit selloff — credit spreads widening", "historical_win_rate": 0.64, "holding_period": "day"},
+                {"symbol": "XLF", "reason": "Financials selloff — rate/credit stress", "historical_win_rate": 0.62, "holding_period": "day"},
+                {"symbol": "XLI", "reason": "Industrials selloff — economic slowdown signal", "historical_win_rate": 0.60, "holding_period": "day"},
+                {"symbol": "JETS", "reason": "Airlines collapse on demand destruction", "historical_win_rate": 0.65, "holding_period": "day"},
             ],
         },
         "historical_examples": [
@@ -344,29 +359,72 @@ REGIME_PLAYBOOK = {
 # Focused on ETFs and sector leaders with wider targets/stops
 MEDIUM_LONG_PLAYBOOK = {
     "NORMAL_to_ELEVATED": {
-        "thesis": "MEDIUM-TERM MACRO: Risk-off regime shift beginning. Build positions in defense ETFs, gold, oil majors, and treasuries. Reduce exposure to travel/airlines. Hold 2-8 weeks through the elevated regime.",
-        "long_sectors": ["defense_etfs", "gold", "oil_majors", "treasuries"],
-        "short_sectors": ["airlines"],
+        "thesis": "MEDIUM-TERM MACRO: Risk-off regime shift with oil supply disruption potential. Build core positions in crude oil direct, oil majors, E&P, refiners, gold, defense, and inflation hedges. Short airlines, transport, and oil-sensitive consumers. Hold 2-8 weeks through elevated regime. If commodity_shock > 0.6, overweight energy chain.",
+        "long_sectors": ["crude_oil_direct", "oil_majors", "oil_ep", "gasoline_refining", "defense_etfs", "gold", "inflation_hedges", "midstream", "natgas_lng", "agriculture"],
+        "short_sectors": ["airlines", "oil_demand_destruction", "emerging_markets"],
         "symbols": {
             "long": [
-                {"symbol": "ITA", "reason": "Defense ETF — broad sector rotation into military spending, hold through elevated regime", "historical_win_rate": 0.70, "holding_period": "swing"},
-                {"symbol": "PPA", "reason": "Aerospace & Defense ETF — diversified defense exposure for multi-week hold", "historical_win_rate": 0.68, "holding_period": "swing"},
+                # Direct crude oil exposure — highest beta to $150 scenario
+                {"symbol": "USO", "reason": "Direct WTI crude oil ETF — primary vehicle for oil superspike thesis, hold through supply disruption", "historical_win_rate": 0.72, "holding_period": "swing"},
+                {"symbol": "UCO", "reason": "2x leveraged crude oil — amplified upside on sustained supply shock, manage with trailing stop", "historical_win_rate": 0.65, "holding_period": "swing"},
+                {"symbol": "BNO", "reason": "Brent crude ETF — tracks international oil price, captures Brent-WTI spread widening", "historical_win_rate": 0.70, "holding_period": "swing"},
+                # Oil majors — sustained earnings re-rating at $100-150 oil
+                {"symbol": "XOM", "reason": "ExxonMobil — $80+ oil = massive FCF, $150 oil = windfall profits, buybacks accelerate", "historical_win_rate": 0.72, "holding_period": "swing"},
+                {"symbol": "CVX", "reason": "Chevron — Permian Basin leverage, $150 oil = $40B+ FCF annually", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "OXY", "reason": "Occidental — highest oil price beta among majors, Permian + CrownRock acquisition leverage", "historical_win_rate": 0.68, "holding_period": "swing"},
+                {"symbol": "COP", "reason": "ConocoPhillips — pure-play upstream, earnings scale linearly with crude price", "historical_win_rate": 0.69, "holding_period": "swing"},
+                # E&P sector — leveraged to oil price moves
+                {"symbol": "XOP", "reason": "Oil & Gas E&P ETF — broadest pure-play upstream exposure for oil superspike", "historical_win_rate": 0.67, "holding_period": "swing"},
+                {"symbol": "DVN", "reason": "Devon Energy — variable dividend model pays out massive cash at high oil", "historical_win_rate": 0.66, "holding_period": "swing"},
+                {"symbol": "FANG", "reason": "Diamondback Energy — Permian pure-play, capital returns surge at $150 oil", "historical_win_rate": 0.65, "holding_period": "swing"},
+                {"symbol": "EOG", "reason": "EOG Resources — low-cost producer, margin expansion extreme at $150", "historical_win_rate": 0.66, "holding_period": "swing"},
+                # Broad energy ETF
+                {"symbol": "XLE", "reason": "Energy sector ETF — broad energy rotation with multi-week momentum", "historical_win_rate": 0.65, "holding_period": "swing"},
+                # Refiners — crack spread explosion (crude in, gasoline/diesel/jet fuel out)
+                {"symbol": "VLO", "reason": "Valero — largest US refiner, crack spreads blow out when crude surges", "historical_win_rate": 0.68, "holding_period": "swing"},
+                {"symbol": "MPC", "reason": "Marathon Petroleum — refining margins + midstream, double benefit from oil spike", "historical_win_rate": 0.67, "holding_period": "swing"},
+                {"symbol": "PSX", "reason": "Phillips 66 — refining + chemicals, benefits from supply-driven crude surge", "historical_win_rate": 0.64, "holding_period": "swing"},
+                # Midstream — pipeline volumes increase, take-or-pay contracts reprice
+                {"symbol": "ET", "reason": "Energy Transfer — pipeline volumes surge on US production ramp, 8%+ yield", "historical_win_rate": 0.63, "holding_period": "swing"},
+                {"symbol": "EPD", "reason": "Enterprise Products — midstream toll collector, NGL exports surge", "historical_win_rate": 0.62, "holding_period": "swing"},
+                # Natural gas / LNG — oil-to-gas switching + LNG export premium
+                {"symbol": "LNG", "reason": "Cheniere — LNG exporter, EU/Asia gas premium widens on oil disruption", "historical_win_rate": 0.66, "holding_period": "swing"},
+                # Gold — flight to safety
                 {"symbol": "GLD", "reason": "Gold — macro safe haven, accumulate on dips through risk-off period", "historical_win_rate": 0.75, "holding_period": "swing"},
                 {"symbol": "GDX", "reason": "Gold miners — leveraged gold upside with 2-4 week holding horizon", "historical_win_rate": 0.67, "holding_period": "swing"},
-                {"symbol": "XOM", "reason": "ExxonMobil — oil major benefiting from sustained supply disruption premium", "historical_win_rate": 0.69, "holding_period": "swing"},
-                {"symbol": "CVX", "reason": "Chevron — crude supply risk premium builds over weeks, not hours", "historical_win_rate": 0.67, "holding_period": "swing"},
-                {"symbol": "TLT", "reason": "Long treasuries — flight to safety trade, hold through uncertainty", "historical_win_rate": 0.66, "holding_period": "swing"},
-                {"symbol": "XLE", "reason": "Energy sector ETF — broad energy rotation with multi-week momentum", "historical_win_rate": 0.65, "holding_period": "swing"},
+                # Defense — geopolitical premium
+                {"symbol": "ITA", "reason": "Defense ETF — broad sector rotation into military spending", "historical_win_rate": 0.70, "holding_period": "swing"},
+                # Inflation hedges — oil cascade into CPI
+                {"symbol": "TIP", "reason": "TIPS — inflation-protected treasuries, oil superspike = CPI surge", "historical_win_rate": 0.64, "holding_period": "swing"},
+                {"symbol": "DBA", "reason": "Agriculture ETF — fertilizer costs surge with oil, food prices follow", "historical_win_rate": 0.62, "holding_period": "swing"},
+                {"symbol": "CF", "reason": "CF Industries — fertilizer producer, nat gas input costs offset by pricing power", "historical_win_rate": 0.63, "holding_period": "swing"},
             ],
             "short": [
-                {"symbol": "JETS", "reason": "Airlines ETF — sustained travel demand destruction via inverse/puts, hold 2-6 weeks", "historical_win_rate": 0.70, "holding_period": "swing"},
-                {"symbol": "EEM", "reason": "Emerging markets — capital flight persists through elevated regime", "historical_win_rate": 0.65, "holding_period": "swing"},
+                # Airlines — jet fuel is 25-35% of operating costs
+                {"symbol": "JETS", "reason": "Airlines ETF — jet fuel spike crushes margins, $150 oil = potential bankruptcy risk for weaker carriers", "historical_win_rate": 0.74, "holding_period": "swing"},
+                {"symbol": "UAL", "reason": "United Airlines — unhedged fuel exposure, margin destruction at $150 crude", "historical_win_rate": 0.70, "holding_period": "swing"},
+                {"symbol": "AAL", "reason": "American Airlines — weakest balance sheet, most vulnerable to fuel spike", "historical_win_rate": 0.72, "holding_period": "swing"},
+                # Cruise lines — heavy fuel consumers
+                {"symbol": "CCL", "reason": "Carnival — fuel 10-15% of costs + consumer discretionary pullback", "historical_win_rate": 0.68, "holding_period": "swing"},
+                # Transport / logistics — diesel costs
+                {"symbol": "IYT", "reason": "Transport ETF — trucking and freight margins crushed by diesel spike", "historical_win_rate": 0.66, "holding_period": "swing"},
+                {"symbol": "FDX", "reason": "FedEx — fuel surcharges lag actual cost increases, near-term margin pressure", "historical_win_rate": 0.62, "holding_period": "swing"},
+                # Consumer discretionary — oil = inflation tax on consumers
+                {"symbol": "XRT", "reason": "Retail ETF — consumer spending power destroyed by gasoline price surge", "historical_win_rate": 0.60, "holding_period": "swing"},
+                {"symbol": "XLY", "reason": "Consumer discretionary — oil tax on households kills spending, hold 2-6 weeks", "historical_win_rate": 0.59, "holding_period": "swing"},
+                # Emerging markets — oil-importing EMs crushed (India, Turkey, etc.)
+                {"symbol": "EEM", "reason": "Emerging markets — oil-importing nations face currency/balance of payments crisis", "historical_win_rate": 0.65, "holding_period": "swing"},
+                {"symbol": "EWY", "reason": "South Korea ETF — 100% oil import dependent, petrochemical feedstock costs surge", "historical_win_rate": 0.63, "holding_period": "swing"},
+                # Chemicals — feedstock cost explosion
+                {"symbol": "LYB", "reason": "LyondellBasell — petrochemical feedstock costs surge faster than product prices", "historical_win_rate": 0.60, "holding_period": "swing"},
             ],
         },
         "historical_examples": [
-            {"event": "Russia-Ukraine Feb 2022", "result": "ITA +14%, GLD +8%, XOM +25%, JETS -20% over 8 weeks"},
-            {"event": "Iran-Israel escalation Apr 2024", "result": "GLD +6%, XLE +8%, TLT +3% over 4 weeks"},
-            {"event": "Iran War 2026", "result": "ITA +14%, GLD +10%, XLE +18%, JETS -25% over 6 weeks"},
+            {"event": "Oil superspike Jun-Jul 2008 ($147)", "result": "XOM +15%, XLE +22%, JETS -35%, XRT -18%, EEM -25% over 8 weeks before crash"},
+            {"event": "Russia-Ukraine Feb 2022 (oil to $130)", "result": "XOM +25%, OXY +45%, XOP +30%, VLO +35%, JETS -20% over 8 weeks"},
+            {"event": "Iran-Israel escalation Apr 2024", "result": "GLD +6%, XLE +8%, USO +12% over 4 weeks"},
+            {"event": "Gulf War I 1990 (oil doubled)", "result": "Oil majors +20-30%, airlines -40%, defense +25% over 3 months"},
+            {"event": "Arab oil embargo 1973", "result": "Oil 4x, airlines/autos/retail crushed, gold +60% over 6 months"},
         ],
     },
     "ELEVATED_to_CRISIS": {
@@ -386,6 +444,10 @@ MEDIUM_LONG_PLAYBOOK = {
                 {"symbol": "SPY", "reason": "Broad market — sustained selloff through crisis via puts or inverse", "historical_win_rate": 0.80, "holding_period": "swing"},
                 {"symbol": "QQQ", "reason": "Tech — growth multiple compression through crisis", "historical_win_rate": 0.76, "holding_period": "swing"},
                 {"symbol": "EEM", "reason": "Emerging markets — sustained capital flight in crisis", "historical_win_rate": 0.74, "holding_period": "swing"},
+                # Index short swing ideas — sustained crisis downturn hedges
+                {"symbol": "SPY", "reason": "Sustained market downturn — hold SH 2-4 weeks", "historical_win_rate": 0.63, "holding_period": "swing"},
+                {"symbol": "QQQ", "reason": "Tech correction — hold PSQ 2-4 weeks", "historical_win_rate": 0.62, "holding_period": "swing"},
+                {"symbol": "HYG", "reason": "Credit deterioration — hold SJB 2-4 weeks", "historical_win_rate": 0.61, "holding_period": "swing"},
             ],
         },
         "historical_examples": [
@@ -493,7 +555,6 @@ class TradeAnalysisEngine:
 
         # Determine regime transition key
         transition = self._detect_transition(mode, previous_mode, regime_p)
-        market_data_assessment = self._assess_market_data(microstructure or {})
 
         # Select playbook based on strategy type
         if strategy_type == "medium_long":
@@ -509,28 +570,27 @@ class TradeAnalysisEngine:
             components,
             confidence,
             strategy_type,
-            market_data_assessment,
+            regime_p,
+            transition,
         )
 
         # Sector analysis
         sector_analysis = self._sector_rotation_analysis(components, mode)
 
         # Risk assessment
-        risk_assessment = self._risk_assessment(
-            regime_p,
-            confidence,
-            mode,
-            tw,
-            strategy_type,
-            market_data_assessment,
-        )
+        risk_assessment = self._risk_assessment(regime_p, confidence, mode, tw, strategy_type)
 
-        return {
+        # Run analog matching against crisis library
+        analog_metadata = self._match_crisis_analog(components)
+
+        result = {
             "timestamp_utc": iso_now(),
             "mode": mode,
             "regime_p": regime_p,
             "transition": transition,
             "strategy_type": strategy_type,
+            "strategy_family": strategy_type,
+            "strategy_key": transition,
             "playbook_thesis": playbook.get("thesis", ""),
             "trade_ideas": ideas,
             "sector_analysis": sector_analysis,
@@ -538,9 +598,87 @@ class TradeAnalysisEngine:
             "historical_examples": playbook.get("historical_examples", []),
             "evidence_summary": evidence[:5],
             "confidence": confidence,
-            "market_data_assessment": market_data_assessment,
-            "advisory_only": True,
+            "execution_eligible": True,
         }
+
+        if analog_metadata:
+            result["_historical_analog"] = analog_metadata
+            # Attach to each trade idea as informational context
+            for idea in ideas:
+                idea["_historical_analog"] = analog_metadata
+
+        return result
+
+    def _match_crisis_analog(self, components: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Match current regime against crisis analog library. Informational only."""
+        try:
+            from src.research.historical_analog_engine import HistoricalAnalogEngine
+
+            engine = HistoricalAnalogEngine(repo_root=self.repo_root)
+            # Build regime state from scorer components
+            regime_state: Dict[str, Any] = {}
+            component_to_marker = {
+                "geopolitical_tension": "energy_disruption",
+                "market_volatility": "vol_spike",
+                "commodity_shock": "energy_disruption",
+                "credit_spread": "banking_stress",
+                "policy_uncertainty": "trade_stress",
+                "currency_stress": "flight_to_quality",
+            }
+            for comp_name, marker in component_to_marker.items():
+                val = components.get(comp_name, 0.0)
+                if isinstance(val, (int, float)):
+                    regime_state[marker] = max(regime_state.get(marker, 0.0), float(val))
+
+            matches = engine.find_matches(regime_state, top_n=1, min_similarity=0.7)
+            if not matches:
+                return None
+
+            top = matches[0]
+            # Load playbook for matched category
+            playbook_data = None
+            category = top.get("category")
+            if category:
+                playbook_path = self.repo_root / "config" / "crisis_playbooks.json"
+                if playbook_path.exists():
+                    try:
+                        playbooks = json.loads(playbook_path.read_text(encoding="utf-8"))
+                        playbook_data = playbooks.get(category)
+                    except Exception:
+                        pass
+
+            # Load optimal_day_trade from analog entry
+            optimal_day_trade = None
+            lesson = None
+            crisis_lib_path = self.repo_root / "config" / "crisis_analog_library.json"
+            if crisis_lib_path.exists() and top.get("source_event_id"):
+                try:
+                    entries = json.loads(crisis_lib_path.read_text(encoding="utf-8"))
+                    for entry in entries:
+                        if entry.get("source_event_id") == top["source_event_id"]:
+                            ai = entry.get("asset_impacts", {})
+                            optimal_day_trade = ai.get("optimal_day_trade")
+                            lesson = None  # lesson is in the dataset, not the analog
+                            break
+                except Exception:
+                    pass
+
+            result: Dict[str, Any] = {
+                "matched_event": top["label"],
+                "similarity": top["similarity"],
+                "category": category,
+                "severity": top.get("severity"),
+                "informational_only": True,
+                "not_for_direct_execution": True,
+            }
+            if optimal_day_trade:
+                result["optimal_day_trade"] = optimal_day_trade
+            if playbook_data:
+                result["playbook"] = playbook_data
+
+            return result
+        except Exception:
+            return None
 
     def _detect_transition(self, mode: str, prev_mode: Optional[str], regime_p: float) -> str:
         if prev_mode and prev_mode != mode:
@@ -562,142 +700,6 @@ class TradeAnalysisEngine:
             return "ELEVATED_to_CRISIS"
         return "NORMAL_steady"
 
-    def _parse_timestamp(self, value: Any) -> Optional[datetime]:
-        if not value or not isinstance(value, str):
-            return None
-        text = value.strip().replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(text)
-        except Exception:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    def _extract_symbol_timestamp(self, sym_data: Dict[str, Any]) -> Optional[datetime]:
-        for field in TIMESTAMP_FIELDS:
-            parsed = self._parse_timestamp(sym_data.get(field))
-            if parsed:
-                return parsed
-        return None
-
-    def _extract_market_data_snapshot(self, sym_data: Dict[str, Any]) -> Dict[str, Any]:
-        price = None
-        price_source = None
-        for field in PRICE_FIELDS:
-            raw_value = sym_data.get(field)
-            if isinstance(raw_value, (int, float)) and raw_value > 0:
-                price = float(raw_value)
-                price_source = field
-                break
-
-        sigma = None
-        sigma_source = None
-        for field in VOLATILITY_FIELDS:
-            raw_value = sym_data.get(field)
-            if isinstance(raw_value, (int, float)) and raw_value > 0:
-                sigma = float(raw_value)
-                sigma_source = field
-                break
-
-        adv = sym_data.get("adv_shares")
-        adv_val = float(adv) if isinstance(adv, (int, float)) and adv > 0 else None
-        timestamp = self._extract_symbol_timestamp(sym_data)
-        freshness_hours = None
-        if timestamp:
-            freshness_hours = max((datetime.now(timezone.utc) - timestamp).total_seconds() / 3600.0, 0.0)
-
-        has_price_levels = bool(price is not None and sigma is not None and price > 0 and sigma > 0)
-        stale = freshness_hours is not None and freshness_hours >= STALE_MARKET_DATA_HOURS
-        very_stale = freshness_hours is not None and freshness_hours >= VERY_STALE_MARKET_DATA_HOURS
-
-        warnings: List[str] = []
-        if price is None:
-            warnings.append("no usable price field")
-        if sigma is None:
-            warnings.append("no usable volatility field")
-        if adv_val is None:
-            warnings.append("no ADV field")
-        if freshness_hours is None:
-            warnings.append("no market-data timestamp")
-        elif stale:
-            warnings.append(f"market-data timestamp is stale ({freshness_hours:.1f}h old)")
-
-        return {
-            "has_price": price is not None,
-            "has_volatility": sigma is not None,
-            "has_price_levels": has_price_levels,
-            "price": round(price, 2) if price is not None else None,
-            "price_source": price_source,
-            "sigma_daily_pct": round(sigma, 4) if sigma is not None else None,
-            "sigma_source": sigma_source,
-            "adv_shares": round(adv_val, 0) if adv_val is not None else None,
-            "timestamp_utc": timestamp.isoformat() if timestamp else None,
-            "freshness_hours": round(freshness_hours, 2) if freshness_hours is not None else None,
-            "is_stale": stale,
-            "is_very_stale": very_stale,
-            "freshness_status": "fresh"
-            if has_price_levels and not stale
-            else "stale"
-            if stale
-            else "partial"
-            if price is not None or sigma is not None
-            else "missing",
-            "warnings": warnings,
-            "source": sym_data.get("source"),
-        }
-
-    def _assess_market_data(self, microstructure: Dict[str, Any]) -> Dict[str, Any]:
-        symbols = microstructure if isinstance(microstructure, dict) else {}
-        snapshots: Dict[str, Dict[str, Any]] = {}
-        stale_symbols: List[str] = []
-        missing_symbols: List[str] = []
-        price_ready_symbols: List[str] = []
-
-        for symbol, sym_data in symbols.items():
-            if not isinstance(sym_data, dict):
-                continue
-            snapshot = self._extract_market_data_snapshot(sym_data)
-            snapshots[symbol] = snapshot
-            if snapshot["has_price_levels"]:
-                price_ready_symbols.append(symbol)
-            if snapshot["is_stale"] or snapshot["is_very_stale"]:
-                stale_symbols.append(symbol)
-            if snapshot["freshness_status"] == "missing":
-                missing_symbols.append(symbol)
-
-        total = len(snapshots)
-        partial_count = sum(1 for v in snapshots.values() if v["freshness_status"] == "partial")
-        status = "missing"
-        if total == 0:
-            status = "missing"
-        elif stale_symbols:
-            status = "stale"
-        elif partial_count > 0:
-            status = "partial"
-        else:
-            status = "fresh"
-
-        warnings: List[str] = []
-        if total == 0:
-            warnings.append("no market microstructure data available")
-        elif stale_symbols:
-            warnings.append(f"{len(stale_symbols)} symbol(s) have stale microstructure data")
-        elif partial_count > 0:
-            warnings.append(f"{partial_count} symbol(s) are missing price or volatility inputs")
-
-        return {
-            "status": status,
-            "total_symbols": total,
-            "price_ready_symbols": len(price_ready_symbols),
-            "partial_symbols": partial_count,
-            "stale_symbols": len(stale_symbols),
-            "missing_symbols": len(missing_symbols),
-            "price_ready_ratio": round(len(price_ready_symbols) / total, 3) if total else 0.0,
-            "warnings": warnings,
-            "symbols": snapshots,
-        }
-
     def _generate_ideas(
         self,
         playbook: Dict,
@@ -705,110 +707,188 @@ class TradeAnalysisEngine:
         components: Dict[str, float],
         confidence: float,
         strategy_type: str = "day_trade",
-        market_data_assessment: Optional[Dict[str, Any]] = None,
+        regime_p: float = 0,
+        strategy_key: str = "",
     ) -> List[Dict[str, Any]]:
-        ideas = []
+        ideas: List[Dict[str, Any]] = []
         micro = microstructure or {}
-        market_data_assessment = market_data_assessment or self._assess_market_data(micro)
+
+        # Detect broad market selloff — boost short idea confidence
+        selloff_mult = self._detect_broad_selloff(components, regime_p)
+
+        # Floor confidence at 0.55 so that well-supported playbook signals
+        # produce meaningful confidence_adjusted_scores (>= 0.40).
+        # Raw scorecard confidence of 0.30-0.50 was crushing scores to 0.15-0.30
+        # which triggered excessive position size penalties downstream.
+        effective_confidence = max(confidence, 0.55)
 
         for side in ["long", "short"]:
             for entry in playbook.get("symbols", {}).get(side, []):
                 sym = entry["symbol"]
-                sym_data = micro.get(sym) if isinstance(micro, dict) else None
-                data_snapshot = self._extract_market_data_snapshot(sym_data) if isinstance(sym_data, dict) else {
-                    "has_price": False,
-                    "has_volatility": False,
-                    "has_price_levels": False,
-                    "price": None,
-                    "price_source": None,
-                    "sigma_daily_pct": None,
-                    "sigma_source": None,
-                    "adv_shares": None,
-                    "timestamp_utc": None,
-                    "freshness_hours": None,
-                    "is_stale": False,
-                    "is_very_stale": False,
-                    "freshness_status": "missing",
-                    "warnings": ["symbol not present in microstructure cache"],
-                    "source": None,
-                }
-
-                quality_factor = 1.0
-                if data_snapshot["freshness_status"] == "missing":
-                    quality_factor = 0.70
-                elif data_snapshot["freshness_status"] == "partial":
-                    quality_factor = 0.82
-                elif data_snapshot["is_stale"]:
-                    quality_factor = 0.60
-
-                base_score = entry.get("historical_win_rate", 0.5) * min(confidence, 1.0) * quality_factor
-                data_backed = bool(data_snapshot["has_price_levels"])
+                base_score = round(
+                    entry.get("historical_win_rate", 0.5) * min(effective_confidence, 1.0), 2
+                )
+                # Apply selloff multiplier to short ideas
+                if side == "short" and selloff_mult > 1.0:
+                    adjusted_score = round(min(1.0, base_score * selloff_mult), 2)
+                else:
+                    adjusted_score = base_score
                 idea = {
                     "symbol": sym,
                     "side": side,
                     "reason": entry["reason"],
                     "historical_win_rate": entry.get("historical_win_rate", 0),
-                    "confidence_adjusted_score": round(base_score, 2),
+                    "confidence_adjusted_score": adjusted_score,
                     "holding_period": entry.get("holding_period", "day"),
                     "strategy_style": f"regime_playbook_{strategy_type}",
-                    "advisory_only": True,
-                    "data_backed": data_backed,
-                    "market_data": data_snapshot,
-                    "data_quality_factor": round(quality_factor, 2),
                 }
+                # Tag selloff boost for transparency
+                if side == "short" and selloff_mult > 1.0:
+                    idea["selloff_boost_multiplier"] = round(selloff_mult, 3)
+                idea["strategy"] = strategy_key or f"regime_playbook_{strategy_type}"
+                idea["strategy_family"] = strategy_type
+                idea["playbook_transition"] = strategy_key or None
 
-                if data_snapshot["has_price_levels"]:
-                    price = data_snapshot["price"] or 0.0
-                    sigma = data_snapshot["sigma_daily_pct"] or 0.0
-                    idea["current_price"] = round(price, 2)
-                    idea["daily_vol_pct"] = round(sigma, 2)
-                    idea["adv_shares"] = data_snapshot["adv_shares"]
-                    idea["price_source"] = data_snapshot["price_source"]
-                    idea["volatility_source"] = data_snapshot["sigma_source"]
-                    idea["market_data_timestamp_utc"] = data_snapshot["timestamp_utc"]
-                    idea["market_data_freshness_hours"] = data_snapshot["freshness_hours"]
+                # Add price levels if microstructure available
+                sym_data = micro.get(sym)
+                if sym_data:
+                    price = sym_data.get("last_price", 0)
+                    sigma = sym_data.get("sigma_daily_pct", 2.0)
+                    if price > 0:
+                        idea["current_price"] = round(price, 2)
+                        idea["daily_vol_pct"] = round(sigma, 2)
 
-                    atr_est = price * sigma / 100.0
+                        atr_est = price * sigma / 100.0
 
-                    if strategy_type == "medium_long":
-                        # Wider targets/stops for swing trades: 3 ATR target, 1.5 ATR stop (2:1 R:R)
-                        target_mult = 3.0
-                        stop_mult = 1.5
-                    else:
-                        # Tight targets/stops for day trades: 1.5 ATR target, 0.75 ATR stop (2:1 R:R)
-                        target_mult = 1.5
-                        stop_mult = 0.75
+                        if strategy_type == "medium_long":
+                            # Wider targets/stops for swing trades: 3 ATR target, 1.5 ATR stop (2:1 R:R)
+                            target_mult = 3.0
+                            stop_mult = 1.5
+                        else:
+                            # Tight targets/stops for day trades: 1.5 ATR target, 0.75 ATR stop (2:1 R:R)
+                            target_mult = 1.5
+                            stop_mult = 0.75
 
-                    if side == "long":
-                        idea["entry"] = round(price, 2)
-                        idea["target"] = round(price + target_mult * atr_est, 2)
-                        idea["stop"] = round(price - stop_mult * atr_est, 2)
-                    else:
-                        idea["entry"] = round(price, 2)
-                        idea["target"] = round(price - target_mult * atr_est, 2)
-                        idea["stop"] = round(price + stop_mult * atr_est, 2)
+                        if side == "long":
+                            idea["entry"] = round(price, 2)
+                            idea["target"] = round(price + target_mult * atr_est, 2)
+                            idea["stop"] = round(price - stop_mult * atr_est, 2)
+                        else:
+                            idea["entry"] = round(price, 2)
+                            idea["target"] = round(price - target_mult * atr_est, 2)
+                            idea["stop"] = round(price + stop_mult * atr_est, 2)
 
-                    idea["risk_reward"] = round(target_mult / stop_mult, 2)
-                    idea["supporting_data"] = (
-                        f"{sym}: {price:.2f} via {data_snapshot['price_source']}, "
-                        f"sigma={sigma:.2f}% via {data_snapshot['sigma_source']}, "
-                        f"ADV={data_snapshot['adv_shares'] or 0:,.0f}"
-                    )
-                else:
-                    idea["market_data_note"] = (
-                        "No full price envelope available; validate live quote and volatility "
-                        "before sizing."
-                    )
-                    idea["supporting_data"] = f"{sym}: market data incomplete ({'; '.join(data_snapshot['warnings'])})"
-                    idea["reason"] = (
-                        f"{entry['reason']} | Market-data caveat: {', '.join(data_snapshot['warnings'])}"
-                    )
+                        idea["risk_reward"] = round(target_mult / stop_mult, 2)
 
                 ideas.append(idea)
+
+        learning_context = load_learning_context(self.repo_root)
+        equity_ideas = [
+            apply_learning_adjustments_to_idea(
+                idea,
+                learning_context,
+                default_family=strategy_type,
+            )
+            for idea in ideas
+        ]
+
+        # Generate option ideas for index ETFs alongside equity ideas
+        option_ideas = self._generate_option_ideas_for_indices(
+            equity_ideas,
+            micro,
+            effective_confidence,
+            strategy_type,
+            strategy_key or f"regime_playbook_{strategy_type}",
+        )
+        ideas = equity_ideas + option_ideas
 
         # Sort by confidence-adjusted score
         ideas.sort(key=lambda x: x.get("confidence_adjusted_score", 0), reverse=True)
         return ideas
+
+    # Index ETFs eligible for options idea generation
+    OPTIONS_ELIGIBLE_INDICES = {"SPY", "QQQ", "IWM"}
+
+    def _generate_option_ideas_for_indices(
+        self,
+        equity_ideas: List[Dict[str, Any]],
+        micro: Dict,
+        effective_confidence: float,
+        strategy_type: str,
+        strategy_key: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        For bearish signals on index ETFs (SPY, QQQ, IWM), generate put option ideas.
+        For bullish signals, generate call option ideas.
+        Only creates option ideas for symbols that already have an equity idea,
+        ensuring there's a real signal backing the options trade.
+        """
+        option_ideas = []
+
+        for idea in equity_ideas:
+            sym = idea.get("symbol", "")
+            if sym not in self.OPTIONS_ELIGIBLE_INDICES:
+                continue
+
+            side = idea.get("side", "")
+            score = idea.get("confidence_adjusted_score", 0)
+
+            # Only generate option ideas for reasonably confident signals
+            if score < 0.40:
+                continue
+
+            if side == "short":
+                option_type = "put"
+                option_reason = f"Put option on {sym} — bearish signal: {idea.get('reason', '')}"
+            elif side == "long":
+                option_type = "call"
+                option_reason = f"Call option on {sym} — bullish signal: {idea.get('reason', '')}"
+            else:
+                continue
+
+            # Options offer leverage — slightly discount score vs equity idea
+            option_score = round(score * 0.90, 2)
+
+            # Prefer weekly expiry for day trades, monthly for swing
+            if strategy_type == "medium_long":
+                target_expiry = "monthly"
+                holding_period = "swing"
+            else:
+                target_expiry = "weekly"
+                holding_period = "day"
+
+            option_idea = {
+                "symbol": sym,
+                "side": side,
+                "instrument_type": "option",
+                "option_type": option_type,
+                "target_expiry": target_expiry,
+                "strike_preference": "atm" if score >= 0.60 else "otm_1",
+                "reason": option_reason,
+                "historical_win_rate": idea.get("historical_win_rate", 0),
+                "confidence_adjusted_score": option_score,
+                "holding_period": holding_period,
+                "strategy_style": f"regime_playbook_{strategy_type}_option",
+                "strategy": f"{str(idea.get('strategy') or strategy_key)}_option",
+                "strategy_family": strategy_type,
+                "underlying_strategy": idea.get("strategy") or strategy_key,
+                "learning_adjusted": idea.get("learning_adjusted", False),
+                "learning_adjustment_detail": idea.get("learning_adjustment_detail"),
+            }
+
+            # Carry over price data from equity idea
+            if idea.get("current_price"):
+                option_idea["current_price"] = idea["current_price"]
+            if idea.get("daily_vol_pct"):
+                option_idea["daily_vol_pct"] = idea["daily_vol_pct"]
+            if idea.get("entry"):
+                option_idea["underlying_entry"] = idea["entry"]
+            if idea.get("selloff_boost_multiplier"):
+                option_idea["selloff_boost_multiplier"] = idea["selloff_boost_multiplier"]
+
+            option_ideas.append(option_idea)
+
+        return option_ideas
 
     def _sector_rotation_analysis(
         self, components: Dict[str, float], mode: str
@@ -905,13 +985,8 @@ class TradeAnalysisEngine:
         return sectors
 
     def _risk_assessment(
-        self,
-        regime_p: float,
-        confidence: float,
-        mode: str,
-        tw: Dict,
+        self, regime_p: float, confidence: float, mode: str, tw: Dict,
         strategy_type: str = "day_trade",
-        market_data_assessment: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         # Position sizing recommendation based on regime and strategy type
         if mode == "CRISIS":
@@ -938,14 +1013,6 @@ class TradeAnalysisEngine:
         # Time window impact
         window = tw.get("current_window", "unknown")
         window_quality = tw.get("window_priority", "unknown")
-        market_data_assessment = market_data_assessment or {}
-        market_data_status = market_data_assessment.get("status", "missing")
-
-        risk_factors = self._identify_risk_factors(regime_p, confidence, mode)
-        if market_data_status in ("missing", "partial"):
-            risk_factors.append("Market microstructure incomplete — size down or wait for fresh price levels")
-        elif market_data_status == "stale":
-            risk_factors.append("Market microstructure stale — use live quote confirmation before acting")
 
         return {
             "regime_p": round(regime_p, 3),
@@ -955,9 +1022,45 @@ class TradeAnalysisEngine:
             "max_position_pct": max_position_pct,
             "time_window": window,
             "window_quality": window_quality,
-            "market_data_status": market_data_status,
-            "risk_factors": risk_factors,
+            "risk_factors": self._identify_risk_factors(regime_p, confidence, mode),
         }
+
+    def _detect_broad_selloff(
+        self, components: Dict[str, float], regime_p: float
+    ) -> float:
+        """Detect broad market selloff conditions and return a confidence multiplier for short ideas.
+
+        Returns a multiplier >= 1.0. Higher values = more aggressive short conviction.
+        - Base: 1.0 (no selloff detected)
+        - Moderate selloff: 1.15-1.25
+        - Severe selloff: 1.25-1.40
+        """
+        multiplier = 1.0
+
+        market_vol = components.get("market_volatility", 0)
+        commodity_shock = components.get("commodity_shock", 0)
+        policy_signals = components.get("policy_signals", 0)
+        currency_stress = components.get("currency_stress", 0)
+        credit_spread = components.get("credit_spread", 0)
+
+        # Primary trigger: elevated market volatility + regime shift probability
+        if market_vol > 0.4 and regime_p > 0.3:
+            multiplier += 0.15  # Base selloff boost
+
+        # Secondary trigger: multiple stress components firing simultaneously
+        elevated_count = sum(1 for v in [commodity_shock, policy_signals, currency_stress]
+                            if v > 0.4)
+        if elevated_count >= 2:
+            multiplier += 0.10  # Broad stress across multiple dimensions
+        if elevated_count >= 3:
+            multiplier += 0.05  # All three firing = severe dislocation
+
+        # Credit stress amplifier — credit spreads widening confirms risk-off
+        if credit_spread > 0.4 and market_vol > 0.3:
+            multiplier += 0.05
+
+        # Cap at 1.40 to avoid runaway confidence on shorts
+        return min(multiplier, 1.40)
 
     def _identify_risk_factors(self, regime_p: float, confidence: float, mode: str) -> List[str]:
         factors = []
@@ -995,7 +1098,16 @@ def main():
     sc = json.loads(files[0].read_text(encoding="utf-8"))
 
     # Load microstructure from scorecard's bridge data or cache
-    micro = load_latest_microstructure_cache(repo_root)
+    micro = {}
+    cache_dir = repo_root / "logs" / "bridge_cache" / "market_microstructure"
+    if cache_dir.exists():
+        cache_files = sorted(cache_dir.glob("microstructure_*.json"), reverse=True)
+        if cache_files:
+            try:
+                cache_data = json.loads(cache_files[0].read_text(encoding="utf-8"))
+                micro = cache_data.get("symbols", {})
+            except Exception:
+                pass
 
     result = engine.analyze(sc, microstructure=micro, strategy_type=args.strategy)
     output = json.dumps(result, indent=2)

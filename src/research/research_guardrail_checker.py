@@ -203,6 +203,17 @@ class ResearchGuardrailChecker:
             "reason": f"{duplicates} duplicates found" if duplicates > 0 else "ok",
         })
 
+        # Check: walk-forward validation on sufficiently large datasets
+        if len(rows) >= self.min_eval_count:
+            wf = self.check_walk_forward_validation(dataset)
+            checks.append({
+                "name": "walk_forward_validation",
+                "passed": wf.passed,
+                "value": wf.to_dict(),
+                "threshold": "passed",
+                "reason": "ok" if wf.passed else "walk-forward validation failed",
+            })
+
         # Check: label distribution not degenerate (if labels present)
         labels = [row.get("alpha_label") for row in rows if row.get("alpha_label")]
         if labels:
@@ -218,3 +229,45 @@ class ResearchGuardrailChecker:
 
         passed = all(c["passed"] for c in checks)
         return GuardrailResult(passed=passed, checks=checks)
+
+    def check_walk_forward_validation(self, dataset: Dict[str, Any]) -> GuardrailResult:
+        """Validate a training dataset with purged walk-forward splits."""
+        try:
+            from src.research.walk_forward_validation import validate_walk_forward_dataset
+        except Exception as exc:
+            return GuardrailResult(
+                passed=False,
+                checks=[{
+                    "name": "walk_forward_validation_import",
+                    "passed": False,
+                    "value": str(exc),
+                    "threshold": "importable",
+                    "reason": "walk-forward validator unavailable",
+                }],
+            )
+
+        result = validate_walk_forward_dataset(dataset)
+        summary = result.get("summary") or {}
+        checks = [
+            {
+                "name": "walk_forward_validation_passed",
+                "passed": bool(result.get("passed")),
+                "value": summary,
+                "threshold": True,
+                "reason": summary.get("reason", "ok"),
+            }
+        ]
+
+        for warning in result.get("warnings") or []:
+            checks.append({
+                "name": f"walk_forward_warning:{warning}",
+                "passed": True,
+                "value": warning,
+                "threshold": "warning",
+                "reason": "warning",
+            })
+
+        return GuardrailResult(
+            passed=bool(result.get("passed")),
+            checks=checks,
+        )

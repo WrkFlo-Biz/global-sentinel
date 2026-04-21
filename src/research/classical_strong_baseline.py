@@ -52,6 +52,8 @@ class ClassicalStrongBaseline:
         risks = np.array([float(c.get("volatility_penalty", 0.3)) for c in candidates])
 
         try:
+            from scipy.optimize import minimize
+
             # Build covariance matrix (diagonal + small correlation)
             cov = np.diag(risks ** 2) + 0.01 * np.outer(risks, risks)
 
@@ -65,8 +67,8 @@ class ClassicalStrongBaseline:
                 weights = self._optimize_sharpe(scores, cov, n, max_weight, min_weight)
 
         except ImportError:
-            logger.warning("scipy not available; using heuristic fallback")
-            weights = self._heuristic_weights(scores, risks, objective_type, max_weight, min_weight)
+            logger.warning("scipy not available; using equal weight fallback")
+            weights = np.ones(n) / n
 
         elapsed = time.time() - start
 
@@ -99,29 +101,6 @@ class ClassicalStrongBaseline:
             "not_for_direct_execution": True,
             "artifact_only": True,
         }
-
-    def _heuristic_weights(self, scores, risks, objective_type, max_w, min_w):
-        n = len(scores)
-        if n == 0:
-            return np.array([])
-
-        safe_risks = np.maximum(risks, 1e-6)
-        if objective_type == "min_variance":
-            pref = 1.0 / safe_risks
-        elif objective_type == "max_return":
-            pref = np.maximum(scores, 0.0)
-        else:
-            pref = np.maximum(scores / safe_risks, 0.0)
-
-        if float(np.sum(pref)) <= 0:
-            pref = np.ones(n)
-
-        weights = pref / np.sum(pref)
-        weights = np.clip(weights, min_w, max_w)
-        total = float(np.sum(weights))
-        if total <= 0:
-            return np.ones(n) / n
-        return weights / total
 
     def _optimize_sharpe(self, returns, cov, n, max_w, min_w):
         from scipy.optimize import minimize

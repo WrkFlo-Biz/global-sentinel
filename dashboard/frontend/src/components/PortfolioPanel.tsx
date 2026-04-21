@@ -36,7 +36,8 @@ function formatAgeSeconds(ageSeconds?: number | null): string {
   return `${Math.floor(ageSeconds / 86400)}d`;
 }
 
-function formatAccountLabel(label: string): string {
+function formatAccountLabel(label: string, displayLabel?: string): string {
+  if (displayLabel) return displayLabel;
   if (label === "day_trade") return "Day Trade";
   if (label === "day_trade_2") return "Day Trade 2";
   if (label === "medium_long") return "Med/Long";
@@ -242,7 +243,7 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <div className="text-[10px] text-gray-400 uppercase">
-                    {formatAccountLabel(account.label)}
+                    {formatAccountLabel(account.label, account.display_label)}
                   </div>
                   <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${statusTone(account.status || "ok")}`}>
                     {(account.status || "ok").toUpperCase()}

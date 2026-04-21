@@ -1,0 +1,29 @@
+{
+  "SPY": {
+    "adv_shares": 82544272.0,
+    "sigma_daily_pct": 0.8594,
+    "last_price": 677.62,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:11:15.471542+00:00",
+    "data_points": 21
+  },
+  "DAL": {
+    "adv_shares": 8896356.0,
+    "sigma_daily_pct": 3.5765,
+    "last_price": 59.884,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:11:15.795275+00:00",
+    "data_points": 21
+  },
+  "UAL": {
+    "adv_shares": 6301124.0,
+    "sigma_daily_pct": 4.4567,
+    "last_price": 93.41,
+    "source": "yahoo_finance",
+    "fresh": true,
+    "timestamp_utc": "2026-03-05T18:11:15.995178+00:00",
+    "data_points": 21
+  }
+}

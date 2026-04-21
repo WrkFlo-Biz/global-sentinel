@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.execution.strategy_learning import infer_strategy_family
+
 
 # -----------------------------
 # Helpers
@@ -268,17 +270,65 @@ class TCAShadowReport:
             }
         return out
 
+    def _strategy_context(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = row.get("metadata") or {}
+        strategy_style = row.get("strategy_style") or metadata.get("strategy_style")
+        strategy = (
+            row.get("strategy")
+            or metadata.get("strategy")
+            or row.get("template_key")
+            or strategy_style
+            or "unknown"
+        )
+        strategy_family = (
+            row.get("strategy_family")
+            or metadata.get("strategy_family")
+            or infer_strategy_family(
+                {
+                    "strategy": strategy,
+                    "strategy_style": strategy_style,
+                    "holding_period": row.get("holding_period") or metadata.get("holding_period"),
+                    "time_window_name": row.get("window_name") or metadata.get("time_window_name"),
+                },
+                default_family="unknown",
+            )
+        )
+        learning_adjusted = row.get("learning_adjusted")
+        if learning_adjusted is None:
+            learning_adjusted = metadata.get("learning_adjusted", False)
+
+        return {
+            "strategy": str(strategy),
+            "strategy_style": strategy_style,
+            "strategy_family": strategy_family,
+            "underlying_strategy": row.get("underlying_strategy") or metadata.get("underlying_strategy"),
+            "learning_adjusted": bool(learning_adjusted),
+            "learning_adjustment_detail": (
+                row.get("learning_adjustment_detail")
+                or metadata.get("learning_adjustment_detail")
+            ),
+        }
+
     def _strategy_breakdown(self, candidates: List[Dict[str, Any]], blocked: List[Dict[str, Any]]) -> Dict[str, Any]:
         stats = defaultdict(lambda: {
+            "strategy": None,
             "candidate_count": 0,
             "blocked_count": 0,
             "avg_confidence": [],
             "avg_expected_slippage_bps": [],
             "avg_reject_risk_probability": [],
+            "strategy_family_counts": defaultdict(int),
+            "strategy_style_counts": defaultdict(int),
+            "underlying_strategy_counts": defaultdict(int),
+            "learning_adjusted_candidate_count": 0,
+            "learning_adjusted_blocked_count": 0,
+            "learning_adjustment_detail_counts": defaultdict(int),
         })
 
         for c in candidates:
-            k = str(c.get("template_key", c.get("strategy_style", "unknown")))
+            strategy_context = self._strategy_context(c)
+            k = strategy_context["strategy"]
+            stats[k]["strategy"] = k
             stats[k]["candidate_count"] += 1
             stats[k]["avg_confidence"].append(safe_float(c.get("confidence_score")))
             fs = c.get("fill_sim_assessment") or {}
@@ -286,19 +336,50 @@ class TCAShadowReport:
                 stats[k]["avg_expected_slippage_bps"].append(safe_float(fs.get("expected_slippage_bps")))
             if fs.get("reject_risk_probability") is not None:
                 stats[k]["avg_reject_risk_probability"].append(safe_float(fs.get("reject_risk_probability")))
+            if strategy_context.get("strategy_family"):
+                stats[k]["strategy_family_counts"][str(strategy_context["strategy_family"])] += 1
+            if strategy_context.get("strategy_style"):
+                stats[k]["strategy_style_counts"][str(strategy_context["strategy_style"])] += 1
+            if strategy_context.get("underlying_strategy"):
+                stats[k]["underlying_strategy_counts"][str(strategy_context["underlying_strategy"])] += 1
+            if strategy_context.get("learning_adjusted"):
+                stats[k]["learning_adjusted_candidate_count"] += 1
+            learning_detail = strategy_context.get("learning_adjustment_detail")
+            if learning_detail:
+                stats[k]["learning_adjustment_detail_counts"][json.dumps(learning_detail, sort_keys=True)] += 1
 
         for b in blocked:
-            k = str(b.get("template_key", b.get("strategy_style", "unknown")))
+            strategy_context = self._strategy_context(b)
+            k = strategy_context["strategy"]
+            stats[k]["strategy"] = k
             stats[k]["blocked_count"] += 1
+            if strategy_context.get("strategy_family"):
+                stats[k]["strategy_family_counts"][str(strategy_context["strategy_family"])] += 1
+            if strategy_context.get("strategy_style"):
+                stats[k]["strategy_style_counts"][str(strategy_context["strategy_style"])] += 1
+            if strategy_context.get("underlying_strategy"):
+                stats[k]["underlying_strategy_counts"][str(strategy_context["underlying_strategy"])] += 1
+            if strategy_context.get("learning_adjusted"):
+                stats[k]["learning_adjusted_blocked_count"] += 1
+            learning_detail = strategy_context.get("learning_adjustment_detail")
+            if learning_detail:
+                stats[k]["learning_adjustment_detail_counts"][json.dumps(learning_detail, sort_keys=True)] += 1
 
         out = {}
         for k, s in stats.items():
             out[k] = {
+                "strategy": s["strategy"] or k,
                 "candidate_count": s["candidate_count"],
                 "blocked_count": s["blocked_count"],
                 "avg_confidence": mean(s["avg_confidence"]),
                 "avg_expected_slippage_bps": mean(s["avg_expected_slippage_bps"]),
                 "avg_reject_risk_probability": mean(s["avg_reject_risk_probability"]),
+                "strategy_family_counts": dict(sorted(s["strategy_family_counts"].items(), key=lambda kv: kv[1], reverse=True)),
+                "strategy_style_counts": dict(sorted(s["strategy_style_counts"].items(), key=lambda kv: kv[1], reverse=True)),
+                "underlying_strategy_counts": dict(sorted(s["underlying_strategy_counts"].items(), key=lambda kv: kv[1], reverse=True)),
+                "learning_adjusted_candidate_count": s["learning_adjusted_candidate_count"],
+                "learning_adjusted_blocked_count": s["learning_adjusted_blocked_count"],
+                "learning_adjustment_detail_counts": dict(sorted(s["learning_adjustment_detail_counts"].items(), key=lambda kv: kv[1], reverse=True)),
             }
         return dict(sorted(out.items(), key=lambda kv: kv[1]["candidate_count"], reverse=True))
 
@@ -454,6 +535,28 @@ def render_markdown_summary(report: Dict[str, Any]) -> str:
         if i >= 10:
             break
         lines.append(f"- {k}: {v}")
+    lines.append("")
+    lines.append("## Top Strategy Buckets")
+    strategy_breakdown = report.get("strategy_breakdown", {})
+    for i, (strategy, stats) in enumerate(strategy_breakdown.items()):
+        if i >= 10:
+            break
+        family = ", ".join(
+            f"{name}:{count}" for name, count in (stats.get("strategy_family_counts") or {}).items()
+        ) or "n/a"
+        underlying = ", ".join(
+            f"{name}:{count}" for name, count in (stats.get("underlying_strategy_counts") or {}).items()
+        ) or "n/a"
+        learning_adjusted_total = (
+            safe_int(stats.get("learning_adjusted_candidate_count"))
+            + safe_int(stats.get("learning_adjusted_blocked_count"))
+        )
+        lines.append(
+            f"- {strategy}: candidates={stats.get('candidate_count')} blocked={stats.get('blocked_count')} "
+            f"families={family} underlying={underlying} learning_adjusted={learning_adjusted_total}"
+        )
+    if not strategy_breakdown:
+        lines.append("- None")
     lines.append("")
     lines.append("## Operator Summary")
     lines.append(f"- {report.get('operator_summary')}")

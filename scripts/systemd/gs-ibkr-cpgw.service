@@ -1,0 +1,12 @@
+[Unit]
+Description=IBKR Client Portal Gateway
+After=network-online.target
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/ibkr-cpgw
+ExecStart=/usr/bin/java -server -Dvertx.cacheDirBase=/opt/ibkr-cpgw/.vertx -cp root:dist/ibgroup.web.core.iblink.router.clientportal.gw.jar:build/lib/runtime/* ibgroup.web.core.clientportal.gw.GatewayStart --conf conf.json
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

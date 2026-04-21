@@ -1,5 +1,29 @@
 """Tests for research guardrail checker."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
 from src.research.research_guardrail_checker import ResearchGuardrailChecker
+
+
+def _build_walk_forward_dataset(inverted: bool = False) -> dict:
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    rows = []
+    for idx in range(60):
+        score = idx / 59.0
+        realized = (score * 200.0 - 20.0)
+        if inverted:
+            realized = -realized
+        rows.append(
+            {
+                "symbol": f"SYM{idx % 5}",
+                "timestamp_utc": (base + timedelta(hours=idx)).isoformat(),
+                "base_score": round(score, 4),
+                "realized_return_bps": round(realized, 2),
+                "alpha_label": "positive" if realized > 0 else "negative",
+            }
+        )
+    return {"rows": rows}
 
 
 def test_valid_research_score():
@@ -108,3 +132,23 @@ def test_guardrail_result_to_dict():
     assert "passed" in d
     assert "checks" in d
     assert "checker_version" in d
+
+
+def test_walk_forward_validation_passes_on_large_correlated_dataset():
+    checker = ResearchGuardrailChecker(min_eval_count=30)
+    dataset = _build_walk_forward_dataset()
+
+    result = checker.check_training_dataset(dataset)
+
+    assert result.passed
+    assert any(c["name"] == "walk_forward_validation" and c["passed"] for c in result.checks)
+
+
+def test_walk_forward_validation_rejects_inverted_dataset():
+    checker = ResearchGuardrailChecker()
+    dataset = _build_walk_forward_dataset(inverted=True)
+
+    result = checker.check_walk_forward_validation(dataset)
+
+    assert not result.passed
+    assert any(c["name"] == "walk_forward_validation_passed" and not c["passed"] for c in result.checks)

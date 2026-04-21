@@ -153,11 +153,6 @@ def handle_crisis_trigger():
     TRIGGER_FILE.parent.mkdir(parents=True, exist_ok=True)
     TRIGGER_FILE.touch()
     log_event("crisis_trigger_touched", {"path": str(TRIGGER_FILE)})
-    # Clear EOD flatten flag from yesterday
-    eod_flag = REPO_ROOT / "control" / "eod_flatten_active"
-    if eod_flag.exists():
-        eod_flag.unlink()
-        log_event("eod_flatten_flag_cleared", {})
 
 
 def handle_premarket_summary():

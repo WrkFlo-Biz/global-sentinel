@@ -1,0 +1,15 @@
+[Unit]
+Description=Global Sentinel What-If Learner
+After=global-sentinel-dashboard.service
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/whatif_learner.py
+Restart=on-failure
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

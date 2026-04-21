@@ -3,6 +3,8 @@
 interface Account {
   label: string;
   is_live: boolean;
+  display_label?: string;
+  broker?: string;
 }
 
 interface Props {
@@ -49,7 +51,7 @@ export default function AccountSwitcher({ accounts, selected, onSelect }: Props)
             {isLive && (
               <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-white" : "bg-green-400"} pulse-live`} />
             )}
-            {LABELS[acct.label] || acct.label}
+            {acct.display_label || LABELS[acct.label] || acct.label}
           </button>
         );
       })}

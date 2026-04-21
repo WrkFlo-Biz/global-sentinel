@@ -3,8 +3,9 @@ Description=Global Sentinel Healthcheck
 
 [Service]
 Type=oneshot
-User=gsadmin
-Group=gsadmin
-WorkingDirectory=/home/gsadmin/global-sentinel
-EnvironmentFile=/home/gsadmin/global-sentinel/.env
-ExecStart=/home/gsadmin/global-sentinel/.venv/bin/python scripts/healthcheck.py
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/opt/global-sentinel/.venv/bin/python scripts/healthcheck.py

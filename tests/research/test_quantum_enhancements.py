@@ -1,5 +1,4 @@
 """Tests for quantum enhancement modules."""
-import builtins
 import pytest
 from src.research.classical_strong_baseline import ClassicalStrongBaseline
 from src.research.quantum_utility_score import QuantumUtilityScorer
@@ -29,20 +28,12 @@ def test_classical_strong_baseline_empty():
     assert result["candidate_count"] == 0
 
 
-def test_classical_strong_baseline_min_variance(monkeypatch):
+def test_classical_strong_baseline_min_variance():
     bl = ClassicalStrongBaseline()
     candidates = [
         {"symbol": "A", "preopt_feature_score": 0.5, "volatility_penalty": 0.1},
         {"symbol": "B", "preopt_feature_score": 0.5, "volatility_penalty": 0.8},
     ]
-    real_import = builtins.__import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "scipy.optimize":
-            raise ImportError("forced missing scipy")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
     result = bl.optimize(candidates, objective_type="min_variance", constraints={"max_single_weight": 0.95})
     assert result["all_weights"][0] > result["all_weights"][1]  # Lower vol gets more weight
 

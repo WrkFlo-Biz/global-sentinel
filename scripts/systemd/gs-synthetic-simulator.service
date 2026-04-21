@@ -1,0 +1,17 @@
+[Unit]
+Description=Global Sentinel 24/7 Synthetic Trade Simulator
+After=network-online.target
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/strategies/synthetic_trade_simulator.py
+Restart=on-failure
+RestartSec=30
+CPUQuota=100%
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+[Install]
+WantedBy=multi-user.target

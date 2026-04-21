@@ -1,0 +1,9 @@
+[Unit]
+Description=Global Sentinel 0DTE Picker Timer (Mon-Fri 13:20 UTC / 9:20 AM ET)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

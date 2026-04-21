@@ -90,13 +90,3 @@ experiments:
     artifact_schema: quantum_experiment_artifact.v1
     reproducibility_required: true
     notes: "Maximum drawdown minimization via VQE."
-
-  quantum_reservoir_regime_detection:
-    problem_family: regime_detection
-    algorithm_family: quantum_reservoir_computing
-    local_sim_support: true
-    qcloud_support: false
-    classical_comparator: random_forest
-    artifact_schema: quantum_experiment_artifact.v1
-    reproducibility_required: true
-    notes: "6-qubit quantum reservoir computing for volatility regime classification (calm/transition/crisis). PennyLane default.qubit simulator with logistic regression readout."

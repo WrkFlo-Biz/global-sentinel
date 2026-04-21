@@ -1,0 +1,17 @@
+[Unit]
+Description=Global Sentinel - Daily Session Memory Snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -m src.research.session_memory save
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

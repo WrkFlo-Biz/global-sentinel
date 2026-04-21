@@ -35,6 +35,30 @@ def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def enrich_evaluation_with_validation(
+    evaluation: Dict[str, Any],
+    trade_outcomes: Dict[str, Any],
+) -> Dict[str, Any]:
+    enriched = dict(evaluation)
+    trades = trade_outcomes.get("trades") or []
+    enriched["trade_count"] = len(trades)
+    enriched["executed_trade_count"] = sum(
+        1 for row in trades if isinstance(row, dict) and row.get("trade_executed")
+    )
+    enriched["walk_forward_validation"] = (
+        trade_outcomes.get("walk_forward_validation")
+        or trade_outcomes.get("validation")
+        or {}
+    )
+    return enriched
+
+
+def research_score_allows_downstream_flow(research_score: Dict[str, Any]) -> bool:
+    validation = research_score.get("validation") or {}
+    guardrail_result = research_score.get("guardrail_result") or {}
+    return bool(validation.get("passed")) and bool(guardrail_result.get("passed"))
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Run full research score pipeline")
     p.add_argument("--request-json", required=True)
@@ -79,6 +103,7 @@ def main():
         quantum_result=quantum.to_dict(),
         trade_outcomes=trade_outcomes,
     )
+    evaluation = enrich_evaluation_with_validation(evaluation, trade_outcomes)
 
     eval_out = Path(args.evaluation_out)
     eval_out.parent.mkdir(parents=True, exist_ok=True)
@@ -86,22 +111,35 @@ def main():
     logger.info("Evaluation: winner=%s", evaluation.get("winner"))
 
     # Step 4: Write research score
-    research_score = build_research_score(evaluation)
+    research_score = build_research_score(evaluation, require_validation=True)
     rs_out = Path(args.research_score_out)
     rs_out.parent.mkdir(parents=True, exist_ok=True)
     rs_out.write_text(json.dumps(research_score, indent=2), encoding="utf-8")
-    logger.info("Research score: %.4f (%s)", research_score["research_score"], research_score["recommended_influence"])
+    pipeline_blocked = not research_score_allows_downstream_flow(research_score)
+    logger.info(
+        "Research score: %.4f (%s) blocked=%s",
+        research_score["research_score"],
+        research_score["recommended_influence"],
+        pipeline_blocked,
+    )
 
     # Step 5: Optionally attach to snapshot
     if args.snapshot_json:
-        snapshot = load_json(Path(args.snapshot_json))
-        merged = attach_research_score(snapshot, research_score)
-        snap_out = Path(args.snapshot_out)
-        snap_out.parent.mkdir(parents=True, exist_ok=True)
-        snap_out.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-        logger.info("Snapshot with research score: %s", snap_out)
+        if pipeline_blocked:
+            logger.warning("Skipping snapshot attachment because research score validation/guardrails failed")
+        else:
+            snapshot = load_json(Path(args.snapshot_json))
+            merged = attach_research_score(snapshot, research_score)
+            snap_out = Path(args.snapshot_out)
+            snap_out.parent.mkdir(parents=True, exist_ok=True)
+            snap_out.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            logger.info("Snapshot with research score: %s", snap_out)
 
-    print(json.dumps({"evaluation": str(eval_out), "research_score": str(rs_out)}, indent=2))
+    print(json.dumps({
+        "evaluation": str(eval_out),
+        "research_score": str(rs_out),
+        "pipeline_status": "blocked" if pipeline_blocked else "ok",
+    }, indent=2))
 
 
 if __name__ == "__main__":

@@ -70,6 +70,7 @@ def main():
         runtime_flags=runtime_flags,
         time_window_state=time_window_state,
         regime_state=regime_state,
+        session_context=time_window_state.get("session_context") if isinstance(time_window_state.get("session_context"), dict) else None,
     )
 
     req = QuantumRequestBuilder().build(

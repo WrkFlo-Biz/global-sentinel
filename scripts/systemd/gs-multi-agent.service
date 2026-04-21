@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Sentinel multi-agent
+After=network-online.target
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/src/research/multi_agent_ensemble.py
+StandardOutput=journal
+StandardError=journal

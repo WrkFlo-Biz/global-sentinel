@@ -1,0 +1,14 @@
+[Unit]
+Description=Global Sentinel Walk-Forward Backtester
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+Environment=GLOBAL_SENTINEL_REPO_ROOT=/opt/global-sentinel
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/walk_forward_backtest.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600

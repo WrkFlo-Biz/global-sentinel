@@ -39,6 +39,8 @@ class SessionClassification:
     market: str
     session: str
     session_label: str
+    intraday_phase: str
+    session_bucket: str
     is_market_open: bool
     is_extended_hours: bool
     is_overnight: bool
@@ -73,6 +75,8 @@ class MarketSessionClassifier:
                 market=market,
                 session="continuous",
                 session_label="crypto_24_7",
+                intraday_phase="continuous",
+                session_bucket="continuous",
                 is_market_open=True,
                 is_extended_hours=False,
                 is_overnight=False,
@@ -84,7 +88,13 @@ class MarketSessionClassifier:
             )
 
         session = self._classify_equity_session(dt_et)
-        constraints = self._equity_constraints(session)
+        intraday_phase = self._equity_intraday_phase(dt_et, session)
+        session_bucket = intraday_phase if session == "regular" else session
+        constraints = self._equity_constraints(
+            session,
+            intraday_phase=intraday_phase,
+            session_bucket=session_bucket,
+        )
         return SessionClassification(
             timestamp_utc=dt_utc.isoformat(),
             timestamp_et=dt_et.isoformat(),
@@ -92,6 +102,8 @@ class MarketSessionClassifier:
             market=market,
             session=session,
             session_label=session,
+            intraday_phase=intraday_phase,
+            session_bucket=session_bucket,
             is_market_open=session != "closed",
             is_extended_hours=session in {"overnight", "pre_market", "after_hours"},
             is_overnight=session == "overnight",
@@ -125,7 +137,26 @@ class MarketSessionClassifier:
             return "after_hours"
         return "overnight"
 
-    def _equity_constraints(self, session: str) -> Dict[str, Any]:
+    def _equity_intraday_phase(self, dt_et: datetime, session: str) -> str:
+        if session != "regular":
+            return session
+
+        current = dt_et.time()
+        if current < dt_time(10, 30):
+            return "opening"
+        if current < dt_time(14, 30):
+            return "midday"
+        if current < dt_time(16, 0):
+            return "power_hour"
+        return "regular"
+
+    def _equity_constraints(
+        self,
+        session: str,
+        *,
+        intraday_phase: str,
+        session_bucket: str,
+    ) -> Dict[str, Any]:
         if session == "overnight":
             return {
                 "alpaca_24_5": True,
@@ -133,6 +164,9 @@ class MarketSessionClassifier:
                 "allowed_time_in_force": ["day"],
                 "requires_overnight_tradable": True,
                 "requires_not_overnight_halted": True,
+                "session_phase": "overnight",
+                "session_bucket": session_bucket,
+                "liquidity_profile": "thin",
             }
         if session in {"pre_market", "after_hours"}:
             return {
@@ -140,17 +174,32 @@ class MarketSessionClassifier:
                 "extended_hours": True,
                 "limit_only": False,
                 "allowed_time_in_force": ["day", "gtc"],
+                "session_phase": intraday_phase,
+                "session_bucket": session_bucket,
+                "liquidity_profile": "thin",
             }
         if session == "regular":
+            liquidity_profile = {
+                "opening": "opening_whipsaw",
+                "midday": "midday_lull",
+                "power_hour": "power_hour",
+                "regular": "regular",
+            }.get(intraday_phase, "regular")
             return {
                 "alpaca_24_5": False,
                 "extended_hours": False,
                 "limit_only": False,
                 "allowed_time_in_force": ["day", "gtc", "ioc", "fok", "opg", "cls"],
+                "session_phase": intraday_phase,
+                "session_bucket": session_bucket,
+                "liquidity_profile": liquidity_profile,
             }
         return {
             "alpaca_24_5": False,
             "extended_hours": False,
             "limit_only": False,
             "allowed_time_in_force": [],
+            "session_phase": intraday_phase,
+            "session_bucket": session_bucket,
+            "liquidity_profile": "closed",
         }

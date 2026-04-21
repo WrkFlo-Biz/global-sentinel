@@ -1,0 +1,15 @@
+[Unit]
+Description=Global Sentinel Weekend Crypto Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/global-sentinel
+ExecStart=/usr/bin/python3 -u /opt/global-sentinel/scripts/ops/crypto_weekend_monitor.py
+Restart=on-failure
+RestartSec=30
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

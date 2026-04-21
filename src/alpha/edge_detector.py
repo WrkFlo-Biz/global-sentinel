@@ -56,20 +56,6 @@ KNOWN_CASCADES: list[dict[str, Any]] = [
         "lag_days_min": 0,
         "lag_days_max": 0,
     },
-    {
-        "primary": "oil",
-        "secondary_symbols": ["CORN", "SOYB"],
-        "label": "oil → ethanol → corn/soy spread",
-        "lag_days_min": 1,
-        "lag_days_max": 3,
-    },
-    {
-        "primary": "nat_gas",
-        "secondary_symbols": ["CORN", "SOYB", "NTR"],
-        "label": "nat_gas → nitrogen fertilizer → corn planting cost → soy rotation",
-        "lag_days_min": 14,
-        "lag_days_max": 21,
-    },
 ]
 
 # Regime-probability thresholds that matter for positioning

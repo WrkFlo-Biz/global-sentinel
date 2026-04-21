@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily FRED Release Calendar (7 AM ET / 11:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 11:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

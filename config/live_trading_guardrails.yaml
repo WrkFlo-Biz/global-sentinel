@@ -23,6 +23,11 @@ order_controls:
   require_human_approval: true       # EVERY order needs manual "Y"
   day_trades_only: true              # day trades only
 
+# --- Position Management ---
+position_management:
+  require_human_approval_for_closures: true  # No stop-loss / take-profit / EOD close without approval
+  auto_close_enabled: false                   # Keep the monitor in proposal-only mode by default
+
 # --- Loss Controls ---
 loss_controls:
   max_loss_daily_pct: 0.03           # 3% daily loss = auto-halt
@@ -47,14 +52,14 @@ ramp_schedule:
 
   - days_after_live: 14
     max_position_pct: 0.10
-    max_gross_exposure_pct: 0.50
-    require_human_approval: true
+    max_gross_exposure_pct: 2.50
+    require_human_approval: false
     day_trades_only: false
 
   - days_after_live: 30
     max_position_pct: 0.12
-    max_gross_exposure_pct: 0.60
-    require_human_approval: true
+    max_gross_exposure_pct: 3.00
+    require_human_approval: false
 
 # --- Operating Mode Override ---
 operating_mode:

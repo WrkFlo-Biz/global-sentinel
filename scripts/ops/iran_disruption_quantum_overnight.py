@@ -24,7 +24,6 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
@@ -54,29 +53,6 @@ def _iso_now() -> str:
 
 def _log(message: str) -> None:
     print(f"[{_iso_now()}] {message}", flush=True)
-
-
-# Market hours scheduling: pause training during 09:15-16:30 ET to free CPU
-_ET = ZoneInfo("America/New_York")
-_MARKET_OPEN_ET = (9, 15)
-_MARKET_CLOSE_ET = (16, 30)
-_OFFHOURS_SLEEP = 300
-
-
-def _is_market_hours():
-    now_et = datetime.now(_ET)
-    if now_et.weekday() >= 5:
-        return False
-    t = (now_et.hour, now_et.minute)
-    return _MARKET_OPEN_ET <= t < _MARKET_CLOSE_ET
-
-
-def _seconds_until_market_close():
-    now_et = datetime.now(_ET)
-    close_today = now_et.replace(hour=_MARKET_CLOSE_ET[0], minute=_MARKET_CLOSE_ET[1], second=0, microsecond=0)
-    delta = (close_today - now_et).total_seconds()
-    return max(0, int(delta))
-
 
 
 def _load_script_module(name: str, path: Path):
@@ -396,19 +372,16 @@ class IranDisruptionQuantumOvernight:
             _log(f"completed iteration {iteration}/{self.iterations}")
 
             if not self._is_last_iteration(iteration) and self.sleep_seconds > 0:
-                # Run 24/7 with consistent sleep between iterations
-                effective_sleep = min(self.sleep_seconds, _OFFHOURS_SLEEP)
                 self._update_status(
                     phase="sleeping",
                     started_at=started_at,
                     current_iteration=iteration,
                     completed_iterations=iteration,
-                    sleep_seconds=effective_sleep,
-                    next_wake_eta=(datetime.now(timezone.utc) + timedelta(seconds=effective_sleep)).isoformat(),
-                    reason="continuous training (24/7)",
+                    sleep_seconds=self.sleep_seconds,
+                    next_wake_eta=(datetime.now(timezone.utc) + timedelta(seconds=self.sleep_seconds)).isoformat(),
                 )
-                _log(f"sleeping {effective_sleep}s before next iteration")
-                time.sleep(effective_sleep)
+                _log(f"sleeping for {self.sleep_seconds} seconds before next iteration")
+                time.sleep(self.sleep_seconds)
 
         if self.iterations <= 0:
             return run_report
@@ -505,11 +478,7 @@ class IranDisruptionQuantumOvernight:
         if iteration % self.retrain_every == 0:
             self._update_status(phase="retraining", current_iteration=iteration)
             _log("running bounded retraining pass")
-            try:
-                retraining_result = QuantumRetrainingJob(str(self.repo_root)).run()
-            except Exception as retrain_err:
-                _log(f"retraining failed (non-fatal): {retrain_err}")
-                retraining_result = {"error": str(retrain_err)}
+            retraining_result = QuantumRetrainingJob(str(self.repo_root)).run()
 
         iteration_report = {
             "iteration": iteration,

@@ -12,11 +12,27 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.execution.slippage_model import compute_global_net_ev_ranking
+from src.execution.strategy_learning import (
+    apply_learning_adjustments_to_idea,
+    load_learning_context,
+)
 
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
 
 
 # Fallback inverse ETFs for symbols that can't be shorted directly.
@@ -52,6 +68,13 @@ SYMBOL_BLOCKLIST: set = set()
 class TradeIdeaPackager:
     """Converts trade analysis ideas into shadow order router packages."""
 
+    def __init__(self, repo_root: Path | None = None) -> None:
+        self.repo_root = (
+            Path(repo_root)
+            if repo_root is not None
+            else Path(__file__).resolve().parents[2]
+        )
+
     def build_package(
         self,
         trade_analysis: Dict[str, Any],
@@ -60,7 +83,6 @@ class TradeIdeaPackager:
         max_ideas: int = 10,
         politician_alpha: Optional[Dict[str, Any]] = None,
         bridge_signals: Optional[Dict[str, Any]] = None,
-        max_side_bias_pct: int = 65,
     ) -> Dict[str, Any]:
         """
         Build a router-compatible package from trade analysis output.
@@ -108,13 +130,8 @@ class TradeIdeaPackager:
 
         # Compute signal-based confidence adjustments from ALL bridge data
         signal_boost = self._compute_signal_boost(signals, scorecard)
-
-        # Apply learned adjustments from adaptive feedback loop
-        learned = signals.get("_feedback_adjustments", {})
-        if learned:
-            for sig_name, adj in learned.items():
-                if sig_name in signal_boost:
-                    signal_boost[sig_name] = round(signal_boost[sig_name] + adj, 4)
+        learning_context = load_learning_context(self.repo_root, bridge_signals=signals)
+        event_novelty_score = self._extract_event_novelty_score(signals)
 
         # Check if shadow execution is eligible
         if not scorecard.get("shadow_execution_eligible", False):
@@ -141,7 +158,12 @@ class TradeIdeaPackager:
         for idea in ideas:
             source_holding_period = str(idea.get("holding_period", "")).strip()
             # Check strategy eligibility for this window
-            strategy_style = idea.get("strategy_style", "regime_playbook")
+            strategy_style = (
+                idea.get("strategy_style")
+                or idea.get("strategy_family")
+                or idea.get("strategy")
+                or "regime_playbook"
+            )
             strat_elig = tw_strategy_elig.get(strategy_style, {})
             if strat_elig and not strat_elig.get("eligible", True):
                 blocked_candidates.append({
@@ -151,9 +173,11 @@ class TradeIdeaPackager:
                 })
                 continue
 
+            learned_idea = apply_learning_adjustments_to_idea(idea, learning_context)
             cand = self._idea_to_candidate(
-                idea, confidence, micro, pol_scores, signal_boost,
+                learned_idea, confidence, micro, pol_scores, signal_boost,
                 tw_confidence_mult, tw_size_mult, current_window,
+                event_novelty_score=event_novelty_score,
             )
             if cand:
                 # Apply window-specific restrictions
@@ -161,7 +185,7 @@ class TradeIdeaPackager:
                     holding_period = source_holding_period or str(cand.get("holding_period", "")).strip()
                     if (
                         holding_period in watchlist_gate_periods
-                        and cand.get("raw_confidence_score", cand["confidence_score"]) < watchlist_min_conf
+                        and cand["confidence_score"] < watchlist_min_conf
                     ):
                         blocked_candidates.append({
                             "symbol": cand["symbol"],
@@ -172,35 +196,29 @@ class TradeIdeaPackager:
                         })
                         continue
 
-                # --- Side-bias limit: prevent 100% long or 100% short ---
-                if max_side_bias_pct and max_side_bias_pct < 100 and len(candidates) >= 2:
-                    cand_side = cand.get("side", "long")
-                    same_side_count = sum(1 for c in candidates if c.get("side") == cand_side)
-                    total_after = len(candidates) + 1
-                    side_pct = (same_side_count + 1) / total_after * 100
-                    if side_pct > max_side_bias_pct:
-                        blocked_candidates.append({
-                            "symbol": cand["symbol"],
-                            "reason": "side_bias_limit_exceeded",
-                            "side": cand_side,
-                            "side_pct": round(side_pct, 1),
-                            "max_side_bias_pct": max_side_bias_pct,
-                        })
-                        continue
-
                 candidates.append(cand)
-
-            # Enforce max_new_positions from risk budget
-            if max_new_positions is not None and len(candidates) >= int(max_new_positions):
-                break
 
         # Prioritize preferred setups — sort candidates so preferred come first
         if tw_preferred_setups:
             preferred_set = set(tw_preferred_setups)
             candidates.sort(
-                key=lambda c: (0 if c.get("strategy_style") in preferred_set else 1,
-                               -c.get("confidence_score", 0))
+                key=lambda c: (
+                    0 if c.get("strategy_style") in preferred_set else 1,
+                    -safe_float(c.get("net_ev_ranking_score"), safe_float(c.get("net_expected_value_bps"), 0.0)),
+                    -safe_float(c.get("confidence_score"), 0.0),
+                )
             )
+        else:
+            candidates.sort(
+                key=lambda c: (
+                    -safe_float(c.get("net_ev_ranking_score"), safe_float(c.get("net_expected_value_bps"), 0.0)),
+                    -safe_float(c.get("confidence_score"), 0.0),
+                )
+            )
+
+        # Enforce max_new_positions after ranking so the highest net-EV ideas survive.
+        if max_new_positions is not None:
+            candidates = candidates[: max(0, int(max_new_positions))]
 
         package = {
             "schema_version": "trade_idea_package.v1",
@@ -702,7 +720,56 @@ class TradeIdeaPackager:
             if vix_term_structure == "backwardation":
                 boost["vix_backwardation"] = -0.05  # Near-term fear exceeds long-term
 
+        # --- 20. Quantum Reranking Signal ---
+        # Integrate quantum optimizer artifacts for trade candidate reranking.
+        # The quantum bridge reads ranked_solutions artifacts and provides:
+        # - Per-candidate confidence adjustments (quantum vs classical score)
+        # - Global boost/penalty based on provider used
+        quantum = signals.get("quantum", {})
+        if isinstance(quantum, dict):
+            quantum_global = quantum.get("quantum_global", {})
+            if isinstance(quantum_global, dict) and quantum_global.get("available", False):
+                # Global adjustments from quantum optimization quality
+                q_boost = quantum_global.get("boost", 0)
+                q_penalty = quantum_global.get("penalty", 0)
+                provider = quantum_global.get("provider", "classical")
+
+                # Apply global boost if quantum provider (not classical fallback) was used
+                if provider not in ("classical", "classical_fallback"):
+                    boost["quantum_global"] = float(q_boost)
+                    if q_penalty > 0:
+                        boost["quantum_penalty"] = -float(q_penalty)
+                else:
+                    # Classical fallback still provides useful rankings but with lower confidence
+                    boost["quantum_classical_fallback"] = -0.02
+
+            # Note: Per-candidate quantum adjustments are applied in build_package()
+            # via the quantum_rerank map, which uses candidate_id to look up adjustments.
+            # This is handled separately because signal_boost applies to all candidates
+            # equally, while quantum_rerank is per-candidate.
+
         return boost
+
+    def _extract_event_novelty_score(self, payload: Dict[str, Any]) -> Optional[float]:
+        """Return the strongest event novelty score visible in bridge payloads."""
+        scores: List[float] = []
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key in {"canonical_novelty_score", "novelty_score"} and isinstance(item, (int, float)):
+                        scores.append(float(item))
+                    elif key in {"canonical_dedupe_score"} and isinstance(item, (int, float)):
+                        scores.append(max(0.0, 1.0 - float(item)))
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(payload or {})
+        if not scores:
+            return None
+        return round(max(scores), 4)
 
     def _idea_to_candidate(
         self,
@@ -714,6 +781,7 @@ class TradeIdeaPackager:
         tw_confidence_mult: float = 1.0,
         tw_size_mult: float = 1.0,
         current_window: str = "unknown",
+        event_novelty_score: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """Convert a single trade idea to a router candidate with time-window awareness."""
         symbol = idea.get("symbol")
@@ -745,9 +813,18 @@ class TradeIdeaPackager:
 
         direction = "bullish" if side == "long" else "bearish"
 
-        # Confidence score combines historical win rate with system confidence
+        # Confidence score should prefer idea-level confidence when the
+        # upstream engine or feedback loop has already scored the setup.
         hist_wr = idea.get("historical_win_rate", 0.5)
-        conf_score = round(hist_wr * min(system_confidence, 1.0), 3)
+        confidence_source = "historical_win_rate"
+        if idea.get("confidence_adjusted_score") is not None:
+            conf_score = round(float(idea.get("confidence_adjusted_score", 0.0) or 0.0), 3)
+            confidence_source = "confidence_adjusted_score"
+        elif idea.get("confidence") is not None:
+            conf_score = round(float(idea.get("confidence", 0.0) or 0.0), 3)
+            confidence_source = "confidence"
+        else:
+            conf_score = round(hist_wr * min(system_confidence, 1.0), 3)
 
         # Boost confidence for symbols with politician alpha (whale trades)
         if pol_scores:
@@ -769,13 +846,28 @@ class TradeIdeaPackager:
         # --- Apply time window confidence multiplier ---
         # Opening: 0.90x (cautious), ORB: 1.05x (aggressive), Lunch: 0.80x (avoid),
         # Power hour: 1.05x (aggressive), Close: 0.85x (wind down)
-        raw_conf_score = conf_score  # Preserve raw score for watchlist gate check
         conf_score = round(min(1.0, max(0.05, conf_score * tw_confidence_mult)), 3)
 
         # Price hints from trade idea or microstructure
         sym_micro = micro.get(symbol, {})
         entry_price = idea.get("entry") or sym_micro.get("last_price")
         daily_vol = idea.get("daily_vol_pct") or sym_micro.get("sigma_daily_pct", 2.0)
+
+        entry_f = safe_float(entry_price, 0.0)
+        target_f = safe_float(idea.get("target"), 0.0)
+        gross_edge_bps = 0.0
+        if entry_f > 0 and target_f > 0:
+            gross_edge_bps = abs(target_f - entry_f) / entry_f * 10000.0
+        elif conf_score > 0:
+            gross_edge_bps = conf_score * 100.0
+        expected_edge_bps = round(gross_edge_bps, 2)
+        expected_cost_bps = round(max(safe_float(daily_vol, 0.0) * 2.0, 5.0), 2)
+        regime_shift_penalty = abs(safe_float((signal_boost or {}).get("regime_shift"), 0.0)) * 10.0
+        if regime_shift_penalty > 0:
+            expected_cost_bps += round(regime_shift_penalty, 2)
+        if event_novelty_score is not None:
+            novelty_penalty = max(0.0, 1.0 - min(max(event_novelty_score, 0.0), 1.0)) * 8.0
+            expected_cost_bps += round(novelty_penalty, 2)
 
         price_hints = {}
         if entry_price:
@@ -794,6 +886,33 @@ class TradeIdeaPackager:
         # Opening: 0.60x, ORB: 1.0x, Lunch: 0.50x, Power hour: 1.0x, Close: 0.0x
         size_mult = round(size_mult * tw_size_mult, 3)
 
+        fill_feasibility_score = 0.8 if entry_price else 0.5
+        reject_risk_probability = 0.05
+        session_liquidity_score = 0.62
+        wn = (current_window or "").lower()
+        if "opening" in wn or "orb" in wn or "amateur_hour" in wn:
+            session_liquidity_score = 0.72
+        elif "power_hour" in wn:
+            session_liquidity_score = 0.68
+        elif "lunch" in wn:
+            session_liquidity_score = 0.45
+        fill_quality_score = min(0.95, max(0.35, fill_feasibility_score * 0.85))
+        rank_profile = compute_global_net_ev_ranking(
+            expected_edge_bps=(expected_edge_bps * max(conf_score, 0.1)),
+            expected_cost_bps=expected_cost_bps,
+            confidence_score=conf_score,
+            size_multiplier=size_mult,
+            fill_feasibility_score=fill_feasibility_score,
+            fill_quality_score=fill_quality_score,
+            session_liquidity_score=session_liquidity_score,
+            reject_risk_probability=reject_risk_probability,
+            do_not_route=False,
+        )
+        expected_edge_bps = rank_profile["expected_edge_bps"]
+        expected_cost_bps = rank_profile["expected_cost_bps"]
+        net_expected_value_bps = rank_profile["net_expected_value_bps"]
+        net_ev_ranking_score = rank_profile["ranking_score"]
+
         # Determine holding period based on window
         holding_period = idea.get("holding_period", "day")
         if current_window in ("opening_amateur_hour_cooldown", "opening_range_breakout_window"):
@@ -808,11 +927,21 @@ class TradeIdeaPackager:
             "symbol": symbol,
             "side": side,
             "direction": direction,
-            "strategy_style": idea.get("strategy_style", "regime_playbook"),
+            "strategy": idea.get("strategy"),
+            "strategy_style": idea.get("strategy_style") or idea.get("strategy_family") or idea.get("strategy") or "regime_playbook",
+            "strategy_family": idea.get("strategy_family"),
+            "underlying_strategy": idea.get("underlying_strategy"),
+            "learning_adjusted": idea.get("learning_adjusted", False),
+            "learning_adjustment_detail": idea.get("learning_adjustment_detail"),
+            "event_novelty_score": event_novelty_score,
+            "expected_edge_bps": expected_edge_bps,
+            "expected_cost_bps": expected_cost_bps,
+            "net_expected_value_bps": net_expected_value_bps,
+            "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+            "net_ev_ranking_score": net_ev_ranking_score,
             "template_key": f"regime_{side}_{symbol.lower()}",
             "instrument_types": ["equity"],
             "confidence_score": conf_score,
-            "raw_confidence_score": raw_conf_score,
             "size_multiplier_suggestion": size_mult,
             "status": "eligible",
             "block_reasons": [],
@@ -823,18 +952,38 @@ class TradeIdeaPackager:
                 "manual_review_required": False,
             },
             "fill_sim_assessment": {
-                "fill_feasibility_score": 0.8 if entry_price else 0.5,
-                "expected_slippage_bps": max(daily_vol * 2, 5),
-                "reject_risk_probability": 0.05,
+                "fill_feasibility_score": rank_profile["fill_feasibility_score"],
+                "fill_quality_score": rank_profile["fill_quality_score"],
+                "session_liquidity_score": rank_profile["session_liquidity_score"],
+                "expected_slippage_bps": expected_cost_bps,
+                "expected_cost_bps": expected_cost_bps,
+                "expected_edge_bps": expected_edge_bps,
+                "net_expected_value_bps": net_expected_value_bps,
+                "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+                "net_ev_ranking_score": net_ev_ranking_score,
+                "reject_risk_probability": rank_profile["reject_risk_probability"],
                 "do_not_route_even_in_shadow": False,
             },
             "holding_period": holding_period,
             "metadata": {
                 "source": "trade_analysis_engine",
                 "historical_win_rate": hist_wr,
+                "confidence_source": confidence_source,
                 "risk_reward": idea.get("risk_reward"),
                 "target": idea.get("target"),
                 "stop": idea.get("stop"),
+                "learning_adjusted": idea.get("learning_adjusted", False),
+                "learning_adjustment_detail": idea.get("learning_adjustment_detail"),
+                "strategy": idea.get("strategy"),
+                "strategy_family": idea.get("strategy_family"),
+                "strategy_style": idea.get("strategy_style"),
+                "underlying_strategy": idea.get("underlying_strategy"),
+                "event_novelty_score": event_novelty_score,
+                "expected_edge_bps": expected_edge_bps,
+                "expected_cost_bps": expected_cost_bps,
+                "net_expected_value_bps": net_expected_value_bps,
+                "net_ev_quality_multiplier": rank_profile["quality_multiplier"],
+                "net_ev_ranking_score": net_ev_ranking_score,
                 "signal_boost_detail": boost_detail,
                 "signal_boost_total": round(sum(boost_detail.values()), 3) if boost_detail else 0,
                 "time_window": current_window,

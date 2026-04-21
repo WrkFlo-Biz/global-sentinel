@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.execution.strategy_learning import infer_strategy_family
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -68,10 +70,14 @@ class ManualReviewQueueReport:
         broker_counts = defaultdict(int)
         symbol_counts = defaultdict(int)
         strategy_counts = defaultdict(int)
+        strategy_family_counts = defaultdict(int)
+        underlying_strategy_counts = defaultdict(int)
+        learning_adjusted_count = 0
 
         detailed_rows = []
 
         for r in manual:
+            strategy_context = self._strategy_context(r)
             created = parse_ts(r.get("timestamp_utc")) or parse_ts(((r.get("audit") or {}).get("created_at_utc")))
             parse_ts(((r.get("audit") or {}).get("updated_at_utc")))  # noqa: F841
             parse_ts(((r.get("reconciliation") or {}).get("last_reconciled_at_utc")))  # noqa: F841
@@ -87,7 +93,13 @@ class ManualReviewQueueReport:
 
             cand = r.get("candidate_context") or {}
             symbol_counts[str(cand.get("symbol", "UNKNOWN"))] += 1
-            strategy_counts[str(cand.get("strategy_style", "unknown"))] += 1
+            strategy_counts[str(strategy_context.get("strategy") or "unknown")] += 1
+            if strategy_context.get("strategy_family"):
+                strategy_family_counts[str(strategy_context["strategy_family"])] += 1
+            if strategy_context.get("underlying_strategy"):
+                underlying_strategy_counts[str(strategy_context["underlying_strategy"])] += 1
+            if strategy_context.get("learning_adjusted"):
+                learning_adjusted_count += 1
 
             # infer latest manual-review reason from audit history
             mr_reason = self._latest_manual_review_reason(r)
@@ -102,7 +114,12 @@ class ManualReviewQueueReport:
                 "candidate_id": r.get("candidate_id"),
                 "client_order_id": r.get("client_order_id"),
                 "symbol": cand.get("symbol"),
-                "strategy_style": cand.get("strategy_style"),
+                "strategy": strategy_context.get("strategy"),
+                "strategy_style": strategy_context.get("strategy_style"),
+                "strategy_family": strategy_context.get("strategy_family"),
+                "underlying_strategy": strategy_context.get("underlying_strategy"),
+                "learning_adjusted": strategy_context.get("learning_adjusted"),
+                "learning_adjustment_detail": strategy_context.get("learning_adjustment_detail"),
                 "broker_name": broker_name,
                 "broker_order_id": ((r.get("broker_binding") or {}).get("broker_order_id")),
                 "broker_status": ((r.get("broker_state") or {}).get("status")) if r.get("broker_state") else None,
@@ -126,13 +143,23 @@ class ManualReviewQueueReport:
                 "avg_age_minutes": (sum(age_minutes) / len(age_minutes)) if age_minutes else None,
                 "max_age_minutes": max(age_minutes) if age_minutes else None,
                 "age_bucket_counts": dict(age_buckets),
+                "learning_adjusted_count": learning_adjusted_count,
             },
             "reason_counts": dict(sorted(reason_counts.items(), key=lambda kv: kv[1], reverse=True)),
             "broker_counts": dict(sorted(broker_counts.items(), key=lambda kv: kv[1], reverse=True)),
             "symbol_counts_top": dict(sorted(symbol_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]),
             "strategy_counts_top": dict(sorted(strategy_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]),
+            "strategy_family_counts_top": dict(sorted(strategy_family_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]),
+            "underlying_strategy_counts_top": dict(sorted(underlying_strategy_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]),
             "oldest_unresolved": detailed_rows_sorted[:25],
-            "operator_summary": self._operator_summary(len(manual), age_minutes, age_buckets, reason_counts),
+            "operator_summary": self._operator_summary(
+                len(manual),
+                age_minutes,
+                age_buckets,
+                reason_counts,
+                strategy_counts,
+                strategy_family_counts,
+            ),
         }
         return out
 
@@ -152,6 +179,49 @@ class ManualReviewQueueReport:
                 return details.get("reason") or details.get("manual_review_reason")
         return None
 
+    def _strategy_context(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        candidate_context = row.get("candidate_context") or {}
+        metadata = candidate_context.get("metadata") or {}
+        strategy_style = candidate_context.get("strategy_style") or metadata.get("strategy_style")
+        strategy = (
+            candidate_context.get("strategy")
+            or metadata.get("strategy")
+            or candidate_context.get("template_key")
+            or strategy_style
+            or "unknown"
+        )
+        strategy_family = (
+            candidate_context.get("strategy_family")
+            or metadata.get("strategy_family")
+            or infer_strategy_family(
+                {
+                    "strategy": strategy,
+                    "strategy_style": strategy_style,
+                    "holding_period": candidate_context.get("holding_period") or metadata.get("holding_period"),
+                    "time_window_name": candidate_context.get("time_window_name") or metadata.get("time_window_name"),
+                },
+                default_family="unknown",
+            )
+        )
+        learning_adjusted = candidate_context.get("learning_adjusted")
+        if learning_adjusted is None:
+            learning_adjusted = metadata.get("learning_adjusted", False)
+
+        return {
+            "strategy": str(strategy),
+            "strategy_style": strategy_style,
+            "strategy_family": strategy_family,
+            "underlying_strategy": (
+                candidate_context.get("underlying_strategy")
+                or metadata.get("underlying_strategy")
+            ),
+            "learning_adjusted": bool(learning_adjusted),
+            "learning_adjustment_detail": (
+                candidate_context.get("learning_adjustment_detail")
+                or metadata.get("learning_adjustment_detail")
+            ),
+        }
+
     def _age_bucket(self, age_minutes: float) -> str:
         if age_minutes < 15:
             return "<15m"
@@ -163,14 +233,21 @@ class ManualReviewQueueReport:
             return "4h-24h"
         return ">24h"
 
-    def _operator_summary(self, count, age_minutes, age_buckets, reason_counts) -> str:
+    def _operator_summary(self, count, age_minutes, age_buckets, reason_counts, strategy_counts, strategy_family_counts) -> str:
         avg_age = (sum(age_minutes) / len(age_minutes)) if age_minutes else None
         top_reason = None
         if reason_counts:
             top_reason = sorted(reason_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
+        top_strategy = None
+        if strategy_counts:
+            top_strategy = sorted(strategy_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
+        top_family = None
+        if strategy_family_counts:
+            top_family = sorted(strategy_family_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
         return (
             f"manual review queue | count={count} | avg_age_min={avg_age} | "
-            f">24h={age_buckets.get('>24h', 0)} | top_reason={top_reason}"
+            f">24h={age_buckets.get('>24h', 0)} | top_reason={top_reason} | "
+            f"top_strategy={top_strategy} | top_family={top_family}"
         )
 
 
@@ -188,6 +265,21 @@ def render_markdown(rep: Dict[str, Any]) -> str:
         lines.append(f"- {k}: {v}")
     lines.append("")
 
+    lines.append("## Top Strategies")
+    for k, v in list((rep.get("strategy_counts_top") or {}).items())[:15]:
+        lines.append(f"- {k}: {v}")
+    lines.append("")
+
+    lines.append("## Top Strategy Families")
+    for k, v in list((rep.get("strategy_family_counts_top") or {}).items())[:15]:
+        lines.append(f"- {k}: {v}")
+    lines.append("")
+
+    lines.append("## Top Underlying Strategies")
+    for k, v in list((rep.get("underlying_strategy_counts_top") or {}).items())[:15]:
+        lines.append(f"- {k}: {v}")
+    lines.append("")
+
     lines.append("## Top Manual Review Reasons")
     for k, v in list((rep.get("reason_counts") or {}).items())[:15]:
         lines.append(f"- {k}: {v}")
@@ -195,12 +287,14 @@ def render_markdown(rep: Dict[str, Any]) -> str:
 
     lines.append("## Oldest Unresolved (Top 10)")
     lines.append("")
-    lines.append("| Intent ID | Symbol | Strategy | Broker | Broker Status | Reason | Age (min) |")
-    lines.append("|---|---|---|---|---|---|---:|")
+    lines.append("| Intent ID | Symbol | Strategy | Family | Underlying | Learned | Broker | Broker Status | Reason | Age (min) |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---:|")
     for row in (rep.get("oldest_unresolved") or [])[:10]:
         lines.append(
-            f"| {row.get('intent_id')} | {row.get('symbol')} | {row.get('strategy_style')} | "
-            f"{row.get('broker_name')} | {row.get('broker_status')} | {row.get('manual_review_reason')} | {row.get('age_minutes')} |"
+            f"| {row.get('intent_id')} | {row.get('symbol')} | {row.get('strategy')} | "
+            f"{row.get('strategy_family')} | {row.get('underlying_strategy')} | "
+            f"{'yes' if row.get('learning_adjusted') else 'no'} | {row.get('broker_name')} | "
+            f"{row.get('broker_status')} | {row.get('manual_review_reason')} | {row.get('age_minutes')} |"
         )
     return "\n".join(lines)
 

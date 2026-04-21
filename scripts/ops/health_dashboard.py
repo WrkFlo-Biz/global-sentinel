@@ -45,9 +45,10 @@ CRITICAL_SERVICES = [
     "gs-synthetic-simulator",
     "gs-fred-alerts",
     "gs-stop-loss",
+    "gs-broker-router",
+    "gs-conditional-orders",
     "gs-vol-trader",
     "global-sentinel",
-    # NOTE: gs-broker-router, gs-conditional-orders intentionally masked (2026-04-13)
 ]
 
 BRIDGES_24_7 = {
@@ -74,7 +75,6 @@ BRIDGES_MARKET = {
 BRIDGE_REFRESH_CMDS = {
     "defi_data.json": "python3 src/bridges/defi_llama_bridge.py",
     "cboe_vix_data.json": "python3 src/bridges/cboe_vix_bridge.py",
-    "treasury_fiscal.json": "python3 src/bridges/treasury_bridge.py",
 }
 
 _env: Dict[str, str] = {}
