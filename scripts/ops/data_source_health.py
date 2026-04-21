@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Global Sentinel — Data Source Health Monitor
+
+Checks journalctl for bridge errors and sends Telegram alerts.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from collections import defaultdict
+import sys
+
+# --- Telegram topic routing ---
+sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
+try:
+    from src.monitoring.telegram_router import send as _send_topic
+except Exception:
+    _send_topic = None
+
+STATE_FILE = Path("/opt/global-sentinel/data/health_alert_state.json")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+ERROR_THRESHOLD = 5
+LOOKBACK_MINUTES = 60
+
+
+def _load_state() -> dict:
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_state(state: dict):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def _send_telegram(message: str):
+    if _send_topic:
+        try:
+            _send_topic(message[:4000] if isinstance(message, str) else str(message)[:4000], topic="system")
+            return
+        except Exception:
+            pass
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"[DRY RUN] {message}")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML", "message_thread_id": 74}).encode()
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Telegram send failed: {e}")
+
+
+def check_health():
+    result = subprocess.run(
+        ["journalctl", "-u", "global-sentinel", "-u", "gs-data-gatherer",
+         f"--since={LOOKBACK_MINUTES} min ago", "--no-pager", "-q"],
+        capture_output=True, text=True, timeout=30
+    )
+
+    error_pattern = re.compile(
+        r"\[(\w+(?:Bridge|bridge|SearchBridge|Gatherer))\].*(?:Error|error|ERR).*"
+        r"(?:40[1-3]|429|timeout|Unauthorized|NO_MORE_CREDITS|rate limit|Blocked)",
+        re.IGNORECASE
+    )
+
+    errors = defaultdict(int)
+    for line in result.stdout.splitlines():
+        m = error_pattern.search(line)
+        if m:
+            source = m.group(1)
+            errors[source] += 1
+
+    state = _load_state()
+    now = datetime.now(timezone.utc).isoformat()
+    alerts = []
+
+    for source, count in errors.items():
+        if count >= ERROR_THRESHOLD:
+            last_alert = state.get(source, "")
+            if last_alert and (datetime.now(timezone.utc) - datetime.fromisoformat(last_alert)).total_seconds() < 3600:
+                continue
+            alerts.append(f"  - <b>{source}</b>: {count} errors in {LOOKBACK_MINUTES}min")
+            state[source] = now
+
+    if alerts:
+        msg = f"🚨 <b>GS Data Source Alert</b>\n\n" + "\n".join(alerts)
+        _send_telegram(msg)
+        print(f"Sent alert for {len(alerts)} sources")
+
+    _save_state(state)
+    print(f"Health check: {len(errors)} sources with errors, {len(alerts)} new alerts")
+
+
+if __name__ == "__main__":
+    check_health()

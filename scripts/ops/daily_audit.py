@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""
+Global Sentinel Daily Comprehensive Audit & Auto-Fix Agent
+Runs daily at 6 AM UTC (1 AM ET) — full system health check with auto-remediation.
+"""
+
+import json, os, sys, time, subprocess, datetime, glob, shutil, urllib.request
+from pathlib import Path
+
+# --- Telegram topic routing ---
+sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
+try:
+    from src.monitoring.telegram_router import send as _send_topic
+except Exception:
+    _send_topic = None
+
+REPO = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
+QF = REPO / "data/quantum_feed"
+LOGS = REPO / "logs"
+AUDIT_LOG = LOGS / "daily_audit.log"
+
+env = {}
+env_path = REPO / ".env"
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        if "=" in line and not line.strip().startswith("#"):
+            k, v = line.strip().split("=", 1)
+            env[k] = v
+
+def iso_now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def log(msg, level="INFO"):
+    ts = iso_now()
+    line = f"[{ts}] [{level}] {msg}"
+    print(line)
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(AUDIT_LOG, "a") as f:
+        f.write(line + "\n")
+
+def run(cmd, timeout=60):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip(), r.returncode
+    except Exception as e:
+        return str(e), 1
+
+def send_telegram(msg):
+    if _send_topic:
+        try:
+            _send_topic(msg[:4000] if isinstance(msg, str) else str(msg)[:4000], topic="system")
+            return
+        except Exception:
+            pass
+    try:
+        token = env.get("TELEGRAM_BOT_TOKEN", "")
+        if not token: return
+        payload = json.dumps({"chat_id": "7091381625", "text": msg[:4000], "parse_mode": "HTML", "message_thread_id": 74}).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                     data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+    except: pass
+
+# ============================================================
+# AUDIT CHECKS
+# ============================================================
+
+def check_services():
+    """Check all GS services, restart failed ones."""
+    fixes = []
+    always_on = [
+        "gs-quantum-learner", "gs-data-gatherer", "gs-paper-trader",
+        "gs-synthetic-simulator", "gs-vol-trader",
+        "gs-stop-loss", "gs-whatif-learner",
+        # NOTE: gs-broker-router, gs-conditional-orders intentionally masked (2026-04-13)
+    ]
+    for svc in always_on:
+        out, rc = run(f"systemctl is-active {svc}")
+        if out.strip() != "active":
+            log(f"Service {svc} is {out.strip()} — restarting", "WARN")
+            run(f"sudo systemctl restart {svc}", timeout=30)
+            time.sleep(2)
+            out2, _ = run(f"systemctl is-active {svc}")
+            if out2.strip() == "active":
+                fixes.append(f"Restarted {svc}")
+                log(f"  {svc} restarted OK")
+            else:
+                fixes.append(f"FAILED to restart {svc}")
+                log(f"  {svc} restart FAILED", "ERROR")
+    return fixes
+
+def check_stale_bridges():
+    """Check bridge freshness, re-run stale ones."""
+    fixes = []
+    now = time.time()
+    et_hour = int(datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-4))).strftime("%H"))
+    is_market_hours = 8 <= et_hour <= 18 and datetime.datetime.now().weekday() < 5
+
+    # Bridges that should always be fresh (24/7)
+    always_fresh = {
+        "social_trending.json": ("src.bridges.social_trending_bridge", "SocialTrendingBridge", 24),
+        "defi_data.json": ("src.bridges.defi_llama_bridge", "DeFiLlamaBridge", 24),
+        "cboe_vix_data.json": ("src.bridges.cboe_vix_bridge", "CBOEVixBridge", 24),
+        "treasury_fiscal.json": ("src.bridges.treasury_bridge", "TreasuryFiscalBridge", 24),
+        "news_impact.json": ("src.bridges.news_impact_bridge", None, 12),
+        "hmm_regime.json": (None, None, 24),  # special: run detector
+        "self_improver_state.json": (None, None, 48),  # updated by feedback loop
+    }
+
+    # Market-hours bridges (only check during trading hours)
+    market_bridges = {
+        "technical_analysis.json": ("src.bridges.technical_analysis_bridge", "TechnicalAnalysisBridge", 4),
+        "short_interest.json": ("src.bridges.finra_short_interest_bridge", "FINRAShortInterestBridge", 24),
+        "insider_clusters.json": ("src.bridges.insider_trading_bridge", "InsiderTradingBridge", 24),
+    }
+
+    bridges = dict(always_fresh)
+    if is_market_hours:
+        bridges.update(market_bridges)
+
+    for fname, (mod_path, cls_name, ttl_hours) in bridges.items():
+        fpath = QF / fname
+        if not fpath.exists():
+            age_h = 999
+        else:
+            age_h = (now - fpath.stat().st_mtime) / 3600
+
+        if age_h <= ttl_hours:
+            continue
+
+        log(f"Bridge {fname} stale ({age_h:.1f}h > {ttl_hours}h TTL)", "WARN")
+
+        # Special cases
+        if fname == "hmm_regime.json":
+            out, rc = run(f"cd {REPO} && PYTHONPATH={REPO} python3 src/research/hmm_regime_detector.py", timeout=120)
+            if rc == 0:
+                fixes.append(f"Refreshed {fname}")
+                log(f"  {fname} refreshed via HMM detector")
+            continue
+
+        if fname == "self_improver_state.json":
+            out, rc = run(f"cd {REPO} && PYTHONPATH={REPO} python3 src/research/feedback_loop.py", timeout=120)
+            if rc == 0:
+                fixes.append(f"Refreshed {fname}")
+            continue
+
+        if fname == "news_impact.json":
+            # News impact is regenerated by data gatherer cycle
+            continue
+
+        if mod_path and cls_name:
+            cmd = (f"cd {REPO} && PYTHONPATH={REPO} python3 -c \""
+                   f"from {mod_path} import {cls_name}; b = {cls_name}(); b.poll()\"")
+            out, rc = run(cmd, timeout=60)
+            if rc == 0:
+                fixes.append(f"Refreshed {fname}")
+                log(f"  {fname} refreshed via {cls_name}.poll()")
+            else:
+                log(f"  {fname} refresh FAILED: {out[:200]}", "ERROR")
+
+    return fixes
+
+def check_memory():
+    """Check swap/memory, kill runaway processes."""
+    fixes = []
+    out, _ = run("free -m | grep Swap")
+    parts = out.split()
+    if len(parts) >= 3:
+        swap_total = int(parts[1])
+        swap_used = int(parts[2])
+        if swap_total > 0 and swap_used / swap_total > 0.90:
+            log(f"Swap critical: {swap_used}/{swap_total}MB ({swap_used*100//swap_total}%)", "WARN")
+            # Find top memory hog that's not critical
+            out2, _ = run("ps aux --sort=-%mem | head -10")
+            for line in out2.splitlines()[1:]:
+                cols = line.split()
+                if len(cols) > 10:
+                    pid, mem_pct, cmd = cols[1], float(cols[3]), " ".join(cols[10:])
+                    # Don't kill critical services
+                    critical = ["quantum_continuous_learner", "openclaw-gateway", "broker_state",
+                                "paper_trade", "data_gatherer", "stop_loss"]
+                    if mem_pct > 15 and not any(c in cmd for c in critical):
+                        log(f"Killing memory hog: PID {pid} ({mem_pct}% mem) — {cmd[:80]}", "WARN")
+                        run(f"kill {pid}")
+                        fixes.append(f"Killed PID {pid} ({mem_pct}% mem)")
+                        break
+    return fixes
+
+def check_disk():
+    """Check disk usage, clean if > 85%."""
+    fixes = []
+    out, _ = run("df -h / | tail -1")
+    pct = int(out.split()[4].replace("%", "")) if out else 0
+    if pct >= 85:
+        log(f"Disk at {pct}% — running cleanup", "WARN")
+        # Purge old files
+        cleanups = [
+            (f"find {LOGS}/dead_letter/ -mtime +3 -delete 2>/dev/null", "dead_letter"),
+            (f"find {LOGS}/risk_checks/ -mtime +3 -delete 2>/dev/null", "risk_checks"),
+            (f"find {REPO}/reports/research/ -mtime +14 -delete 2>/dev/null", "old research"),
+            (f"find {REPO}/reports/paper_trades/ -mtime +14 -delete 2>/dev/null", "old paper trades"),
+            (f"find {LOGS}/ -name '*.log' -size +100M -exec truncate -s 10M {{}} \;", "oversized logs"),
+            (f"find {LOGS}/ -name '*.jsonl' -size +100M -exec sh -c 'tail -5000 \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"' _ {{}} \;", "oversized jsonl"),
+            ("sudo journalctl --vacuum-size=500M 2>/dev/null", "journal"),
+        ]
+        for cmd, label in cleanups:
+            run(cmd, timeout=30)
+        out2, _ = run("df -h / | tail -1")
+        new_pct = int(out2.split()[4].replace("%", "")) if out2 else pct
+        fixes.append(f"Disk cleanup: {pct}% → {new_pct}%")
+        log(f"  Disk: {pct}% → {new_pct}%")
+    return fixes
+
+def check_zombie_processes():
+    """Clean up zombie processes."""
+    fixes = []
+    out, _ = run("ps aux | awk '$8 ~ /Z/ {print $2, $11}' | head -5")
+    if out.strip():
+        count = len(out.strip().splitlines())
+        log(f"Found {count} zombie processes", "WARN")
+        # Zombies can only be cleaned by reaping parent or restart
+        fixes.append(f"{count} zombies detected (cosmetic)")
+    return fixes
+
+def check_log_sizes():
+    """Truncate any log files over 100MB."""
+    fixes = []
+    for pattern in [f"{LOGS}/**/*.jsonl", f"{LOGS}/**/*.log"]:
+        for f in glob.glob(str(pattern), recursive=True):
+            try:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                if size_mb > 100:
+                    log(f"Log {f} is {size_mb:.0f}MB — truncating", "WARN")
+                    # Keep last 5000 lines
+                    run(f'tail -5000 "{f}" > "{f}.tmp" && mv "{f}.tmp" "{f}"', timeout=30)
+                    fixes.append(f"Truncated {os.path.basename(f)} ({size_mb:.0f}MB)")
+            except: pass
+    return fixes
+
+def check_stop_loss():
+    """Ensure stop-loss monitor isn't stuck in paused state."""
+    fixes = []
+    pause_file = Path("/tmp/gs_trading_paused")
+    if pause_file.exists():
+        age_h = (time.time() - pause_file.stat().st_mtime) / 3600
+        if age_h > 18:  # Paused for more than 18 hours = stuck
+            log(f"Stop-loss paused for {age_h:.0f}h — clearing", "WARN")
+            pause_file.unlink()
+            Path("/tmp/gs_trading_resume").touch()
+            run("sudo systemctl restart gs-stop-loss")
+            fixes.append(f"Unpaused stop-loss (was stuck {age_h:.0f}h)")
+    return fixes
+
+def check_env_permissions():
+    """Ensure .env is not world-readable."""
+    fixes = []
+    out, _ = run(f"stat -c %a {REPO}/.env")
+    if out.strip() != "600":
+        run(f"chmod 600 {REPO}/.env")
+        fixes.append(".env permissions fixed to 600")
+        log(".env was not 600 — fixed", "WARN")
+    return fixes
+
+def check_data_quality():
+    """Check for zero/empty data files in quantum_feed."""
+    fixes = []
+    problem_files = []
+    for f in QF.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            # Check for empty/zero patterns
+            if isinstance(data, dict):
+                vals = list(data.values())
+                if all(v in (0, 0.0, "", [], {}, None) for v in vals if not isinstance(v, str) or v != data.get("timestamp", "")):
+                    problem_files.append(f.name)
+        except: pass
+
+    if problem_files:
+        log(f"Data quality: {len(problem_files)} files with zero/empty data: {problem_files[:5]}", "WARN")
+        fixes.append(f"{len(problem_files)} files with potential data quality issues")
+    return fixes
+
+def check_cpu_load():
+    """Check for runaway processes."""
+    fixes = []
+    out, _ = run("cat /proc/loadavg")
+    if out:
+        load_1m = float(out.split()[0])
+        out2, _ = run("nproc")
+        cores = int(out2) if out2.isdigit() else 4
+        if load_1m > cores * 2:
+            log(f"CPU overloaded: load {load_1m} on {cores} cores", "WARN")
+            # Find biggest CPU hog that's not essential
+            out3, _ = run("ps aux --sort=-%cpu | head -5")
+            for line in out3.splitlines()[1:]:
+                cols = line.split()
+                if len(cols) > 10:
+                    pid, cpu_pct, cmd = cols[1], float(cols[2]), " ".join(cols[10:])
+                    essential = ["quantum_continuous_learner", "openclaw-gateway", "broker_state",
+                                 "paper_trade", "data_gatherer", "stop_loss", "sshd", "systemd"]
+                    if cpu_pct > 150 and not any(e in cmd for e in essential):
+                        log(f"CPU hog: PID {pid} at {cpu_pct}% — sending SIGTERM", "WARN")
+                        run(f"kill {pid}")
+                        fixes.append(f"Killed CPU hog PID {pid} ({cpu_pct}%)")
+                        break
+    return fixes
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    log("=" * 60)
+    log("DAILY COMPREHENSIVE AUDIT STARTING")
+    log("=" * 60)
+
+    all_fixes = []
+    checks = [
+        ("Services", check_services),
+        ("Stop-Loss", check_stop_loss),
+        ("Memory", check_memory),
+        ("CPU Load", check_cpu_load),
+        ("Disk", check_disk),
+        ("Log Sizes", check_log_sizes),
+        ("Stale Bridges", check_stale_bridges),
+        ("Data Quality", check_data_quality),
+        ("Zombies", check_zombie_processes),
+        (".env Permissions", check_env_permissions),
+    ]
+
+    results = {}
+    for name, fn in checks:
+        log(f"--- Checking: {name} ---")
+        try:
+            fixes = fn()
+            results[name] = "FIXED" if fixes else "OK"
+            all_fixes.extend(fixes)
+        except Exception as e:
+            log(f"  Check {name} crashed: {e}", "ERROR")
+            results[name] = "ERROR"
+
+    # Summary
+    log("=" * 60)
+    log(f"AUDIT COMPLETE: {len(all_fixes)} fixes applied")
+    for name, status in results.items():
+        log(f"  {name:20s}: {status}")
+    log("=" * 60)
+
+    # Telegram summary
+    msg = f"<b>Daily Audit — {datetime.date.today().isoformat()}</b>\n\n"
+    msg += f"Fixes applied: {len(all_fixes)}\n\n"
+    for name, status in results.items():
+        icon = "✅" if status == "OK" else "🔧" if status == "FIXED" else "❌"
+        msg += f"{icon} {name}: {status}\n"
+    if all_fixes:
+        msg += "\n<b>Actions taken:</b>\n"
+        for fix in all_fixes[:10]:
+            msg += f"• {fix}\n"
+
+    send_telegram(msg)
+    log(f"Telegram summary sent")
+
+if __name__ == "__main__":
+    main()

@@ -30,6 +30,13 @@ try:
     import yaml
 except ImportError:
     print("Missing dependency: pyyaml", file=sys.stderr)
+
+# FRED rate limiter
+try:
+    from src.utils.fred_rate_limiter import acquire_fred_token, save_fred_state
+    _HAS_FRED_LIMITER = True
+except ImportError:
+    _HAS_FRED_LIMITER = False
     sys.exit(1)
 
 
@@ -102,6 +109,8 @@ class FREDBridge:
 
         self.api_base = (self.fred_cfg.get("api_base") or "https://api.stlouisfed.org/fred").rstrip("/")
         self.api_key = os.getenv("FRED_API_KEY")
+        self.api_v2_token = os.getenv("FRED_API_V2_TOKEN")
+        self.api_v2_base = "https://api.stlouisfed.org/fred"  # v2 endpoint
 
         self.series_by_category = self._load_series_map()
         self.rate_check_thresholds = self._load_rate_check_thresholds()
@@ -359,12 +368,24 @@ class FREDBridge:
         return f"https://fred.stlouisfed.org/series/{series_id}"
 
     def _fred_api_get(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        # FRED rate limiting: acquire token before each API call
+        if _HAS_FRED_LIMITER:
+            if not acquire_fred_token(timeout=5.0):
+                series_id = params.get("series_id", "unknown")
+                raise RuntimeError(f"FRED rate limit exceeded for {series_id}, skipping")
+            save_fred_state()
         q = dict(params)
         q["file_type"] = "json"
         if self.api_key:
             q["api_key"] = self.api_key
         url = f"{self.api_base}/{endpoint}?{urllib.parse.urlencode(q)}"
-        return read_json_url(url)
+        headers = {"User-Agent": "GlobalSentinelFREDBridge/2.0"}
+        # Add v2 bearer token as additional auth when available
+        if self.api_v2_token:
+            headers["Authorization"] = f"Bearer {self.api_v2_token}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
     def _get_series_meta(self, series_id: str) -> Dict[str, Any]:
         return self._fred_api_get("series", {"series_id": series_id})

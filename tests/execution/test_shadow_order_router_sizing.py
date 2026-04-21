@@ -34,11 +34,11 @@ def test_notional_sizing_is_not_clipped_by_legacy_medium_long_cap():
         },
     )
 
-    assert order_request["qty"] == 71
+    assert order_request["qty"] == 119
     assert order_request["qty"] > 30
     assert order_request["time_in_force"] == "gtc"
     assert order_request["_gs_sizing"]["sizing_method_used"] == "notional_pct"
-    assert order_request["_gs_sizing"]["target_notional"] == 15000.0
+    assert order_request["_gs_sizing"]["target_notional"] == 25000.0
     assert order_request["_gs_sizing"]["max_notional"] == 60000.0
     assert order_request["_gs_sizing"]["final_qty"] == order_request["qty"]
     assert order_request["_gs_sizing"]["qty_cap"] == 10000

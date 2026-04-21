@@ -227,6 +227,11 @@ class StrategyManager:
             "",
         ]
 
+
+        acct_label = positions[0].get("_account_label") if positions and isinstance(positions[0], dict) else None
+        if acct_label:
+            lines.insert(4, f"Account: {acct_label}")
+
         for pos in positions:
             sym = pos.get("symbol", "?")
             entry = pos.get("avg_entry_price", 0)

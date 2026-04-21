@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Pre-Market Telegram Briefing — sends at 8:30 AM ET (Mon-Fri)."""
+
+import json
+import os
+import sys
+import time
+import requests
+from datetime import datetime, timezone
+from collections import defaultdict
+
+# --- Telegram topic routing ---
+sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
+try:
+    from src.monitoring.telegram_router import send as _send_topic
+except Exception:
+    _send_topic = None
+
+DATA_DIR = os.environ.get("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel") + "/data/quantum_feed"
+DOTENV = os.environ.get("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel") + "/.env"
+
+# ── Load .env ──────────────────────────────────────────────────────
+def load_env():
+    if os.path.exists(DOTENV):
+        with open(DOTENV) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+load_env()
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "7091381625")
+ALPACA_KEY = os.environ.get("ALPACA_API_KEY", "")
+ALPACA_SECRET = os.environ.get("ALPACA_SECRET_KEY", "")
+ALPACA_BASE = "https://paper-api.alpaca.markets"
+
+# ── Helpers ────────────────────────────────────────────────────────
+def load_json(filename):
+    path = os.path.join(DATA_DIR, filename)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[WARN] Could not load {filename}: {e}", file=sys.stderr)
+        return None
+
+def send_telegram(text):
+    if _send_topic:
+        try:
+            _send_topic(text[:4000] if isinstance(text, str) else str(text)[:4000], topic="trading")
+            return
+        except Exception:
+            pass
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    # Telegram max message length is 4096
+    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+    for chunk in chunks:
+        resp = requests.post(url, json={
+            "chat_id": CHAT_ID,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True, "message_thread_id": 74,
+        }, timeout=15)
+        if not resp.ok:
+            print(f"[ERROR] Telegram send failed: {resp.status_code} {resp.text}", file=sys.stderr)
+        time.sleep(0.3)
+
+def get_account_equity():
+    try:
+        resp = requests.get(
+            f"{ALPACA_BASE}/v2/account",
+            headers={"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        acct = resp.json()
+        return float(acct.get("equity", 0)), float(acct.get("last_equity", 0))
+    except Exception as e:
+        print(f"[WARN] Alpaca account fetch failed: {e}", file=sys.stderr)
+        return None, None
+
+# ── Section builders ───────────────────────────────────────────────
+def build_overnight_gaps():
+    data = load_json("overnight_gap_signals.json")
+    if not data:
+        return "<b>Overnight Gaps:</b> data unavailable\n"
+    signals = data.get("signals", [])
+    # Sort by absolute gap percentage
+    signals = sorted(signals, key=lambda x: abs(x.get("gap_pct", 0)), reverse=True)
+    top5 = signals[:5]
+    if not top5:
+        return "<b>Overnight Gaps:</b> none detected\n"
+    lines = ["<b>📊 Overnight Gaps (Top 5):</b>"]
+    for s in top5:
+        sym = s.get("symbol", "?")
+        gap = s.get("gap_pct", 0)
+        direction = "▲" if gap > 0 else "▼" if gap < 0 else "─"
+        sig = s.get("signal", "")
+        price = s.get("current", s.get("prev_close", 0))
+        lines.append(f"  {direction} <b>{sym}</b>  {gap:+.2f}%  @ ${price:.2f}  [{sig}]")
+    return "\n".join(lines) + "\n"
+
+def build_sr_levels():
+    data = load_json("technical_analysis.json")
+    if not data:
+        return "<b>S/R Levels:</b> data unavailable\n"
+    watchlist = {"SPY", "QQQ", "NVDA", "TSLA"}
+    # Collect from all_scores, top_bullish, top_bearish
+    all_items = data.get("all_scores", []) + data.get("top_bullish", []) + data.get("top_bearish", [])
+    found = {}
+    for item in all_items:
+        sym = item.get("symbol", "")
+        if sym in watchlist and sym not in found:
+            sr = item.get("support_resistance", {})
+            found[sym] = {
+                "price": item.get("price", 0),
+                "support": sr.get("support_levels", [sr.get("support")]) if sr else [],
+                "resistance": sr.get("resistance_levels", [sr.get("resistance")]) if sr else [],
+                "rsi": item.get("rsi_14", None),
+            }
+    lines = ["<b>📐 Key S/R Levels:</b>"]
+    for sym in ["SPY", "QQQ", "NVDA", "TSLA"]:
+        if sym in found:
+            d = found[sym]
+            sup = ", ".join(f"${v:.2f}" for v in (d["support"] or [])[:2] if v)
+            res = ", ".join(f"${v:.2f}" for v in (d["resistance"] or [])[:2] if v)
+            rsi_str = f"  RSI {d['rsi']:.0f}" if d.get("rsi") else ""
+            lines.append(f"  <b>{sym}</b> ${d['price']:.2f}{rsi_str}  S: {sup or 'n/a'}  R: {res or 'n/a'}")
+        else:
+            lines.append(f"  <b>{sym}</b> — not in current analysis")
+    return "\n".join(lines) + "\n"
+
+def build_regime():
+    hmm = load_json("hmm_regime.json")
+    qr = load_json("quantum_regime_prediction.json")
+    lines = ["<b>🔮 Regime Status:</b>"]
+    if hmm:
+        regime = hmm.get("current_regime", "unknown")
+        lines.append(f"  HMM: <b>{regime.upper()}</b>")
+    else:
+        lines.append("  HMM: data unavailable")
+    if qr:
+        qp = qr.get("quantum_prediction", {})
+        regime = qp.get("regime", "unknown")
+        conf = qp.get("confidence", 0)
+        probs = qp.get("probabilities", {})
+        prob_str = "  ".join(f"{k}: {v:.0%}" for k, v in probs.items())
+        lines.append(f"  Quantum: <b>{regime.upper()}</b> ({conf:.0%} conf)")
+        if prob_str:
+            lines.append(f"  Probs: {prob_str}")
+    else:
+        lines.append("  Quantum: data unavailable")
+    return "\n".join(lines) + "\n"
+
+def build_alpha_picks():
+    data = load_json("qlib_alpha_scores.json")
+    if not data:
+        return "<b>Alpha Picks:</b> data unavailable\n"
+    scores = data.get("scores", [])
+    top = scores[:5]
+    if not top:
+        return "<b>Alpha Picks:</b> none\n"
+    lines = ["<b>🎯 Top Alpha Picks:</b>"]
+    for s in top:
+        sym = s.get("symbol", "?")
+        alpha = s.get("alpha_score", 0)
+        direction = s.get("direction", "?")
+        strength = s.get("signal_strength", 0)
+        lines.append(f"  <b>{sym}</b>  α={alpha:.4f}  {direction}  strength={strength:.1f}%")
+    return "\n".join(lines) + "\n"
+
+def build_signal_consensus():
+    """Find symbols where 3+ data sources agree on direction."""
+    signals = defaultdict(lambda: {"bullish": [], "bearish": []})
+
+    # 1. Overnight gaps
+    gaps = load_json("overnight_gap_signals.json")
+    if gaps:
+        for s in gaps.get("signals", []):
+            sym = s.get("symbol", "")
+            gap = s.get("gap_pct", 0)
+            if gap > 0.3:
+                signals[sym]["bullish"].append("gap")
+            elif gap < -0.3:
+                signals[sym]["bearish"].append("gap")
+
+    # 2. Alpha scores
+    alpha = load_json("qlib_alpha_scores.json")
+    if alpha:
+        for s in alpha.get("scores", [])[:15]:
+            sym = s.get("symbol", "")
+            if s.get("direction") == "long" and s.get("alpha_score", 0) > 0.03:
+                signals[sym]["bullish"].append("alpha")
+            elif s.get("direction") == "short":
+                signals[sym]["bearish"].append("alpha")
+
+    # 3. Technical analysis
+    ta = load_json("technical_analysis.json")
+    if ta:
+        for s in ta.get("top_bullish", []):
+            signals[s.get("symbol", "")]["bullish"].append("technical")
+        for s in ta.get("top_bearish", []):
+            signals[s.get("symbol", "")]["bearish"].append("technical")
+
+    # 4. Ensemble signals
+    ens = load_json("ensemble_signals.json")
+    if ens:
+        for s in (ens.get("signals", []) if isinstance(ens.get("signals"), list) else []):
+            sym = s.get("symbol", "")
+            if s.get("direction") == "long" or s.get("signal", "") in ("BUY", "STRONG_BUY"):
+                signals[sym]["bullish"].append("ensemble")
+            elif s.get("direction") == "short" or s.get("signal", "") in ("SELL", "STRONG_SELL"):
+                signals[sym]["bearish"].append("ensemble")
+
+    # 5. Sentiment
+    sent = load_json("finbert_sentiment.json")
+    if sent:
+        for s in (sent.get("scores", sent.get("sentiments", sent.get("results", []))) if isinstance(sent, dict) else []):
+            if isinstance(s, dict):
+                sym = s.get("symbol", "")
+                score = s.get("sentiment_score", s.get("score", 0))
+                if score > 0.3:
+                    signals[sym]["bullish"].append("sentiment")
+                elif score < -0.3:
+                    signals[sym]["bearish"].append("sentiment")
+
+    # Filter for 3+ sources
+    consensus = []
+    for sym, dirs in signals.items():
+        if not sym:
+            continue
+        if len(dirs["bullish"]) >= 3:
+            consensus.append((sym, "BULLISH", dirs["bullish"]))
+        elif len(dirs["bearish"]) >= 3:
+            consensus.append((sym, "BEARISH", dirs["bearish"]))
+
+    consensus.sort(key=lambda x: len(x[2]), reverse=True)
+
+    if not consensus:
+        return "<b>🤝 Signal Consensus (3+):</b> no strong consensus today\n"
+
+    lines = ["<b>🤝 Signal Consensus (3+ sources):</b>"]
+    for sym, direction, sources in consensus[:8]:
+        src_str = ", ".join(sources)
+        emoji = "🟢" if direction == "BULLISH" else "🔴"
+        lines.append(f"  {emoji} <b>{sym}</b> {direction} ({len(sources)} sources: {src_str})")
+    return "\n".join(lines) + "\n"
+
+def build_account():
+    equity, last_equity = get_account_equity()
+    if equity is None:
+        return "<b>Paper Account:</b> unavailable\n"
+    change = equity - last_equity if last_equity else 0
+    pct = (change / last_equity * 100) if last_equity else 0
+    arrow = "▲" if change >= 0 else "▼"
+    return f"<b>💰 Paper Account:</b> ${equity:,.2f}  {arrow} ${change:+,.2f} ({pct:+.2f}%)\n"
+
+# ── Main ───────────────────────────────────────────────────────────
+def main():
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d %H:%M UTC")
+
+    sections = [
+        f"<b>═══ PRE-MARKET BRIEFING ═══</b>\n<i>{date_str}</i>\n",
+        build_account(),
+        build_regime(),
+        build_overnight_gaps(),
+        build_sr_levels(),
+        build_alpha_picks(),
+        build_signal_consensus(),
+    ]
+
+    message = "\n".join(sections)
+    print(message)
+    send_telegram(message)
+    print("\n[OK] Pre-market briefing sent.", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
