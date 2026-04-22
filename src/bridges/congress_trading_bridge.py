@@ -157,7 +157,7 @@ def score_trade(trade, today):
                 score += 15
             else:
                 score += 5
-        except:
+        except Exception:
             score += 5
     else:
         score += 5
@@ -303,7 +303,7 @@ def run():
     # Send Telegram alerts
     alerts_sent = 0
     if alerts:
-        msg = f"<b>Congress Trading Alert</b>\n\n"
+        msg = "<b>Congress Trading Alert</b>\n\n"
         msg += f"{len(alerts)} significant buy(s) in tracked symbols:\n\n"
         for a in alerts[:10]:
             msg += f"<b>{a['symbol']}</b> — {a['member'].strip()}\n"
@@ -342,7 +342,7 @@ def run():
     append_jsonl(HISTORY_FILE, history_entry)
 
     print(f"  Output saved to {OUTPUT_FILE}")
-    print(f"  Done.")
+    print("  Done.")
 
 
 def _is_recent(trade, cutoff_date):
@@ -353,7 +353,7 @@ def _is_recent(trade, cutoff_date):
     try:
         td = datetime.date.fromisoformat(d[:10])
         return td >= cutoff_date
-    except:
+    except Exception:
         return False
 
 

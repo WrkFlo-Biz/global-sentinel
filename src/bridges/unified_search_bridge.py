@@ -107,7 +107,7 @@ def search_openclaw(query):
         # OpenClaw gateway can execute web searches if configured
         # This is a placeholder — needs the gateway to expose a search endpoint
         return []
-    except:
+    except Exception:
         return []
 
 def unified_search(query, search_type="general", symbol=None, max_results=15):

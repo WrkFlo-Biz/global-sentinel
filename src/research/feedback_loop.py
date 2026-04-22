@@ -31,14 +31,14 @@ def collect_trade_outcomes():
                     "pnl": pos.get("realized_pnl", 0),
                     "profitable": pos.get("realized_pnl", 0) > 0,
                 })
-        except:
+        except Exception:
             pass
     # Paper medlong
     for f in sorted(glob.glob(str(REPO_ROOT / "reports/paper_trades/medlong_*.json"))):
         try:
             data = json.loads(Path(f).read_text())
             outcomes.append({"source": "paper_medlong", "data": data})
-        except:
+        except Exception:
             pass
     # Live trades via Alpaca
     try:
@@ -101,7 +101,7 @@ def collect_signals_at_time(date_str):
             fpath = REPO_ROOT / "data/quantum_feed" / fname
             if fpath.exists():
                 signals[fname.replace(".json", "")] = True
-        except:
+        except Exception:
             pass
     return signals
 

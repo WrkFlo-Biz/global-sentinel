@@ -18,3 +18,4 @@ dashboard/frontend/.next/
 logs/heartbeat.json
 logs/execution/*.jsonl
 logs/iran_disruption_quantum_launcher.log
+._*
