@@ -36,7 +36,7 @@ def iso_now():
 def load_json(path):
     try:
         return json.loads(Path(path).read_text())
-    except:
+    except Exception:
         return {}
 
 def gather_context():

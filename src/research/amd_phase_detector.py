@@ -34,7 +34,7 @@ def get_intraday_bars(symbol, key, secret):
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
         return data.get("bars", {}).get(symbol, [])
-    except:
+    except Exception:
         return []
 
 def detect_range(bars, lookback=12):

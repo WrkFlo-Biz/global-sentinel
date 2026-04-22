@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ACLED Conflict Data Bridge — real-time political violence events."""
-import json, os, time, datetime, urllib.request
+import json, time, datetime, urllib.request
 
 ACLED_BASE = "https://api.acleddata.com/acled/read"
 REGIONS = {

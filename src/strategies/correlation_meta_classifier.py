@@ -32,9 +32,9 @@ def load_strategy_returns():
                     strat = t.get("strategy", "unknown")
                     pnl = t.get("pnl_pct", 0)
                     returns.setdefault(strat, []).append(pnl)
-            except:
+            except Exception:
                 pass
-    
+
     # From strategy outputs
     for f in QF.glob("strategy_*.json"):
         try:
@@ -44,9 +44,9 @@ def load_strategy_returns():
             for s in signals:
                 score = s.get("score", s.get("ensemble_signal", s.get("alpha_score", 0)))
                 returns.setdefault(strat, []).append(float(score) if score else 0)
-        except:
+        except Exception:
             pass
-    
+
     return returns
 
 def compute_correlation_matrix(returns):

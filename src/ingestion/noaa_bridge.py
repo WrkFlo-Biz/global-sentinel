@@ -7,9 +7,12 @@ weather can disrupt energy production, agriculture, and supply chains.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.request
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from src.packets.physical_flow_event import make_physical_flow_event
 
@@ -115,5 +118,6 @@ class NOAABridge:
                 data = json.loads(resp.read().decode("utf-8"))
                 self._cache[cache_key] = data
                 return data
-        except Exception:
+        except Exception as e:
+            logger.warning("NOAA fetch failed, using cache: %s", e)
             return self._cache.get(cache_key, {})

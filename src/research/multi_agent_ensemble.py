@@ -33,7 +33,7 @@ class BaseAgent:
             try:
                 action, _ = self.model.predict(np.array(features, dtype=np.float32), deterministic=True)
                 return float(action[0]) if hasattr(action, '__len__') else float(action)
-            except:
+            except Exception:
                 pass
         return self._heuristic_signal(features)
 
@@ -60,7 +60,7 @@ def momentum_features(data):
         vol = data.get("volatility", 0.02) * 10
         trend = data.get("trend_strength", 0)
         return [ret_1d * 10, ret_5d * 5, rsi, macd, vol, trend, 0]
-    except:
+    except Exception:
         return None
 
 def mean_rev_features(data):
@@ -71,7 +71,7 @@ def mean_rev_features(data):
         vol_ratio = data.get("vol_ratio", 1)
         rsi = data.get("rsi", 50) / 100
         return [zscore, bb_pct, dist_ma20, vol_ratio, rsi, 0, 0]
-    except:
+    except Exception:
         return None
 
 def event_features(data):
@@ -82,7 +82,7 @@ def event_features(data):
         insider_buy = data.get("insider_signal", 0)
         catalyst = data.get("catalyst_score", 0)
         return [earnings_surprise, news_sentiment, analyst_change, insider_buy, catalyst, 0, 0]
-    except:
+    except Exception:
         return None
 
 def vol_features(data):
@@ -93,7 +93,7 @@ def vol_features(data):
         uvxy_change = data.get("uvxy_change", 0) * 3
         put_call = data.get("put_call_ratio", 1)
         return [vix, vix_change, term_structure, uvxy_change, put_call, 0, 0]
-    except:
+    except Exception:
         return None
 
 def sentiment_features(data):
@@ -104,7 +104,7 @@ def sentiment_features(data):
         news_velocity = data.get("news_velocity", 0)
         social_volume = data.get("social_volume", 0) / 100
         return [finbert, stocktwits, reddit, news_velocity, social_volume, 0, 0]
-    except:
+    except Exception:
         return None
 
 class MomentumAgent(BaseAgent):
@@ -169,7 +169,7 @@ def gather_market_data(sym):
             if fpath.exists():
                 d = json.loads(fpath.read_text())
                 data[fname.replace(".json", "")] = d
-        except:
+        except Exception:
             pass
 
     try:
@@ -197,7 +197,7 @@ def gather_market_data(sym):
             ema26 = hist['Close'].ewm(span=26).mean()
             data["macd_signal"] = float(ema12.iloc[-1] - ema26.iloc[-1])
             data["trend_strength"] = float(data["ret_5d"] * 2)
-    except:
+    except Exception:
         pass
 
     # Enrich from news impact data
@@ -210,7 +210,7 @@ def gather_market_data(sym):
                     data["news_sentiment"] = t.get("avg_impact_score", 0) / 5.0
                     data["news_velocity"] = t.get("headline_count", 0) / 10.0
                     break
-    except:
+    except Exception:
         pass
 
     # VIX data
@@ -220,7 +220,7 @@ def gather_market_data(sym):
             vix = json.loads(vix_path.read_text())
             data["vix"] = vix.get("data", {}).get("vix_current", vix.get("vix", 20))
             data["vix_change"] = vix.get("data", {}).get("vix_change_pct", 0) / 100.0
-    except:
+    except Exception:
         pass
 
     return data
