@@ -841,6 +841,10 @@ def _execute_ibkr(symbol: str, qty: int, side: str, order_type: str,
     try:
         if not IBKR_ACCOUNT:
             return {"error": "ibkr_account_missing"}
+        if asset_class == "futures":
+            return _execute_ibkr_futures(symbol, qty, side, order_type, limit_price, exchange)
+        if asset_class == "forex":
+            return _execute_ibkr_forex(symbol, qty, side, order_type, limit_price)
         if asset_class not in ("auto", "us_equity", "stock", "international"):
             return {"error": f"ibkr_client_portal_unsupported_asset_class:{asset_class}"}
 
@@ -900,6 +904,99 @@ def _execute_ibkr(symbol: str, qty: int, side: str, order_type: str,
         return {"error": f"ibkr_http_{e.code}"}
     except Exception as e:
         return {"error": f"ibkr: {str(e)[:300]}"}
+
+
+def _execute_ibkr_futures(symbol: str, qty: int, side: str, order_type: str,
+                          limit_price: Optional[float], exchange: str = "GLOBEX") -> Dict[str, Any]:
+    """Execute futures trade via IBKR ib_async (not Client Portal — it only handles stocks)."""
+    try:
+        from ib_async import IB, Contract, MarketOrder, LimitOrder
+    except ImportError:
+        return {"error": "ib_async_not_installed"}
+
+    EXCHANGE_MAP = {
+        "ES": "GLOBEX", "NQ": "GLOBEX", "RTY": "GLOBEX", "YM": "CBOT",
+        "CL": "NYMEX", "NG": "NYMEX", "HO": "NYMEX", "RB": "NYMEX",
+        "GC": "COMEX", "SI": "COMEX", "HG": "COMEX",
+        "ZB": "CBOT", "ZN": "CBOT", "ZF": "CBOT",
+    }
+    exch = EXCHANGE_MAP.get(symbol, exchange)
+
+    try:
+        ib = IB()
+        host = os.getenv("IB_GATEWAY_HOST", "127.0.0.1")
+        port = int(os.getenv("IB_GATEWAY_PORT", "4001"))
+        ib.connect(host, port, clientId=int(os.getenv("IB_CLIENT_ID_FUTURES", "3")))
+
+        contract = Contract(secType="FUT", symbol=symbol, exchange=exch, currency="USD")
+        ib.qualifyContracts(contract)
+
+        if order_type == "limit" and limit_price:
+            order = LimitOrder("BUY" if side == "buy" else "SELL", abs(qty), float(limit_price))
+        else:
+            order = MarketOrder("BUY" if side == "buy" else "SELL", abs(qty))
+
+        trade = ib.placeOrder(contract, order)
+        ib.sleep(2)
+        ib.disconnect()
+
+        return {
+            "status": "submitted",
+            "broker": "ibkr_futures",
+            "order_id": str(trade.order.orderId),
+            "order_status": trade.orderStatus.status,
+            "symbol": symbol,
+            "sec_type": "FUT",
+            "exchange": exch,
+            "side": side,
+            "qty": str(qty),
+        }
+    except Exception as e:
+        return {"error": f"ibkr_futures: {str(e)[:300]}"}
+
+
+def _execute_ibkr_forex(symbol: str, qty: int, side: str, order_type: str,
+                        limit_price: Optional[float]) -> Dict[str, Any]:
+    """Execute forex trade via IBKR ib_async on IDEALPRO."""
+    try:
+        from ib_async import IB, Contract, MarketOrder, LimitOrder
+    except ImportError:
+        return {"error": "ib_async_not_installed"}
+
+    base = symbol[:3].upper()
+    quote = symbol[3:].upper() if len(symbol) == 6 else "USD"
+
+    try:
+        ib = IB()
+        host = os.getenv("IB_GATEWAY_HOST", "127.0.0.1")
+        port = int(os.getenv("IB_GATEWAY_PORT", "4001"))
+        ib.connect(host, port, clientId=int(os.getenv("IB_CLIENT_ID_FOREX", "4")))
+
+        contract = Contract(secType="CASH", symbol=base, exchange="IDEALPRO", currency=quote)
+        ib.qualifyContracts(contract)
+
+        if order_type == "limit" and limit_price:
+            order = LimitOrder("BUY" if side == "buy" else "SELL", abs(qty), float(limit_price))
+        else:
+            order = MarketOrder("BUY" if side == "buy" else "SELL", abs(qty))
+
+        trade = ib.placeOrder(contract, order)
+        ib.sleep(2)
+        ib.disconnect()
+
+        return {
+            "status": "submitted",
+            "broker": "ibkr_forex",
+            "order_id": str(trade.order.orderId),
+            "order_status": trade.orderStatus.status,
+            "symbol": symbol,
+            "sec_type": "CASH",
+            "pair": f"{base}/{quote}",
+            "side": side,
+            "qty": str(qty),
+        }
+    except Exception as e:
+        return {"error": f"ibkr_forex: {str(e)[:300]}"}
 
 
 # ---------------------------------------------------------------------------

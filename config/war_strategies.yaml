@@ -40,6 +40,8 @@ strategy_tiers:
       - oil_mean_reversion          # Counter-trend fade on spikes
       - zahloria_optimized           # EMA/VWAP/RSI pullback — 5x Sharpe optimized by @deltatrendtrading
       - amd_power_of_3               # ICT AMD — accumulation/manipulation/distribution stop hunt reversal
+      - crypto_vol_sell              # Sell high IV crypto puts on TastyTrade (income)
+      - crypto_momentum_calls        # Buy OTM crypto calls on momentum breakouts
   tier_3:  # 10% allocation — speculative / cascade-dependent / event-driven
     allocation_pct: 10
     strategies:
@@ -56,6 +58,10 @@ strategy_tiers:
       - asia_energy_cascade         # Cascade phase: em_pressure
       - europe_pre_open             # European session gap
       - commodity_currency_divergence  # FX divergence from commodity moves
+      - fx_carry_trade                 # FX carry: long high-yield vs short low-yield currencies
+      - fx_crisis_hedge                # FX safe haven: buy JPY/CHF on geopolitical risk spikes
+      - futures_momentum               # ES/NQ index futures momentum via IBKR
+      - commodity_hedge                 # CL/GC futures as geopolitical risk hedges
 
 accounts:
   day_trade:
@@ -915,8 +921,84 @@ strategies:
         side: long
 
   # ═══════════════════════════════════════
-  # STRATEGY 28: SIMONS PATTERN RECOGNITION (Renaissance Technologies Inspired)
-  # Source: @verbal.is.here — Jim Simons topology/pattern recognition reel (7,837 likes)
+  # STRATEGY 28: CRYPTO VOL SELL (TastyTrade Crypto Options)
+  # Sell high IV crypto puts when IV > 80th percentile — income strategy
+  # Requires: crypto_options_bridge + TastyTrade crypto-enabled account
+  # ═══════════════════════════════════════
+  crypto_vol_sell:
+    account: live
+    target_daily_pnl: 15
+    timeframe: swing
+    hold_period_days: [1, 14]
+    shock_overrides:
+      stop_loss_pct: 8.0
+      take_profit_pct: 5.0
+      size_multiplier: 1.0
+    thesis: "Crypto IV is structurally elevated. Sell OTM puts when IV > 80th percentile to capture premium decay. Cash-secured on TastyTrade — no margin risk. BTC and ETH options have wide bid-ask, so limit orders only."
+    entry_rules:
+      - "crypto_options_bridge IV percentile > 80 for underlier"
+      - "Sell OTM puts with delta between -0.15 and -0.30"
+      - "Expiration 7-14 DTE for optimal theta decay"
+      - "Only enter on red days (BTC/ETH down 3%+ intraday)"
+      - "Max 1 contract per underlier — size_usd cap"
+    exit_rules:
+      - "Buy to close at 50% max profit"
+      - "Roll or close at 21 DTE remaining if entered on longer-dated"
+      - "Stop loss if underlying drops 15% below strike"
+      - "Close ALL if IV percentile drops below 40 (vol crush captured)"
+    positions:
+      - symbol: BTC
+        side: short_put
+        size_usd: 200
+        stop_loss_pct: -8.0
+        take_profit_pct: 5.0
+      - symbol: ETH
+        side: short_put
+        size_usd: 150
+        stop_loss_pct: -8.0
+        take_profit_pct: 5.0
+
+  # ═══════════════════════════════════════
+  # STRATEGY 29: CRYPTO MOMENTUM CALLS (TastyTrade Crypto Options)
+  # Buy OTM calls on crypto momentum breakouts
+  # Requires: crypto_options_bridge + TastyTrade crypto-enabled account
+  # ═══════════════════════════════════════
+  crypto_momentum_calls:
+    account: live
+    target_daily_pnl: 20
+    timeframe: swing
+    hold_period_days: [2, 21]
+    shock_overrides:
+      stop_loss_pct: 100.0
+      take_profit_pct: 50.0
+      size_multiplier: 1.0
+    thesis: "Crypto momentum breakouts are violent — small OTM call positions capture asymmetric upside. Buy when BTC/ETH breaks above key levels with volume confirmation. Position size is the max loss (premium paid). Low IV environment preferred to reduce cost basis."
+    entry_rules:
+      - "BTC/ETH breaks above 20-day high with 2x average volume"
+      - "crypto_options_bridge IV percentile < 50 (cheaper premium)"
+      - "Buy OTM calls with delta between 0.15 and 0.35"
+      - "Expiration 14-30 DTE for time to ride momentum"
+      - "Max 1 contract per underlier"
+    exit_rules:
+      - "Take 50% profit at 2x premium paid"
+      - "Let remaining ride with trailing stop at 50% of peak value"
+      - "Full exit if momentum fails (price closes below breakout level)"
+      - "Time stop: close at 7 DTE remaining regardless"
+    positions:
+      - symbol: BTC
+        side: long_call
+        size_usd: 150
+        stop_loss_pct: -100.0
+        take_profit_pct: 100.0
+      - symbol: ETH
+        side: long_call
+        size_usd: 100
+        stop_loss_pct: -100.0
+        take_profit_pct: 100.0
+
+  # ═══════════════════════════════════════
+  # STRATEGY 30: SIMONS PATTERN RECOGNITION (Renaissance Technologies Inspired)
+  # Source: @verbal.is.here -- Jim Simons topology/pattern recognition reel (7,837 likes)
   # Framework: Multi-signal fusion + anomaly detection (Medallion Fund approach)
   # ═══════════════════════════════════════
   simons_pattern_recognition:
@@ -957,6 +1039,180 @@ strategies:
         stop_loss_pct: -2.0
         take_profit_pct: 4.0
         side: long
+
+  # ═══════════════════════════════════════
+  # STRATEGY 31: FX CARRY TRADE
+  # Long high-yield vs short low-yield currencies
+  # Data source: fx_bridge (FRED exchange rates + policy rate differentials)
+  # Execution: IBKR (IDEALPRO) or TastyTrade FX
+  # ═══════════════════════════════════════
+  fx_carry_trade:
+    account: live
+    target_daily_pnl: 15
+    timeframe: swing
+    hold_period_days: [7, 60]
+    asset_class: forex
+    shock_overrides:
+      stop_loss_pct: 3.0
+      take_profit_pct: 5.0
+      size_multiplier: 0.8
+    thesis: "Carry trade profits from interest rate differentials between currencies. Long high-yield currencies (AUD, GBP, USD) against low-yield currencies (JPY, CHF). Collect daily swap/rollover income. Works best in low-volatility, risk-on environments. Unwind when VIX spikes or geopolitical risk elevates — carry trades blow up in crisis."
+    entry_rules:
+      - "fx_bridge carry_trade_rankings shows differential > 2.0%"
+      - "VIX below 25 (risk-on environment favors carry)"
+      - "crisis_monitor mode is NORMAL or ELEVATED (not CRISIS)"
+      - "Pair trending in carry direction (momentum_5d confirms)"
+      - "Volatility_20d below pair's 6-month average"
+    exit_rules:
+      - "Unwind ALL if VIX > 35 or crisis_monitor mode = CRISIS"
+      - "Unwind if carry differential narrows below 1.0%"
+      - "Stop loss at -3% spot move against position"
+      - "Take profit at +5% spot move in carry direction"
+      - "Time stop: reassess every 30 days"
+    positions:
+      - symbol: AUD/USD
+        size_usd: 200
+        stop_loss_pct: -3.0
+        take_profit_pct: 5.0
+        side: long
+        routing: ibkr_idealpro
+      - symbol: USD/JPY
+        size_usd: 200
+        stop_loss_pct: -3.0
+        take_profit_pct: 5.0
+        side: long
+        routing: ibkr_idealpro
+      - symbol: GBP/USD
+        size_usd: 200
+        stop_loss_pct: -3.0
+        take_profit_pct: 5.0
+        side: long
+        routing: ibkr_idealpro
+
+  # ═══════════════════════════════════════
+  # STRATEGY 32: FX CRISIS HEDGE
+  # Buy safe-haven currencies (JPY, CHF) when geopolitical risk spikes
+  # Data source: fx_bridge + crisis_monitor + gpr_index_bridge
+  # Execution: IBKR (IDEALPRO) or TastyTrade FX
+  # ═══════════════════════════════════════
+  fx_crisis_hedge:
+    account: live
+    target_daily_pnl: 20
+    timeframe: event_driven
+    hold_period_days: [1, 14]
+    asset_class: forex
+    shock_overrides:
+      stop_loss_pct: 4.0
+      take_profit_pct: 8.0
+      size_multiplier: 1.5
+    thesis: "JPY and CHF are classic safe-haven currencies. When geopolitical risk spikes (war escalation, sanctions, chokepoint disruption), capital flows into JPY and CHF. This strategy buys safe havens via FX when crisis_monitor detects elevated risk. Inverse of carry trade — profits from the same events that destroy carry positions. Natural portfolio hedge."
+    trigger: "crisis_monitor mode >= ELEVATED or GPR index > 150 or fx_bridge geo_risk_score > 0.6"
+    entry_rules:
+      - "crisis_monitor mode = ELEVATED or CRISIS"
+      - "fx_bridge geopolitical_risk_score > 0.5"
+      - "GPR index above 150 (via gpr_index_bridge)"
+      - "Sell USD/JPY (buy JPY) when signal = bearish with strength > 0.3"
+      - "Sell USD/CHF (buy CHF) when signal = bearish with strength > 0.3"
+      - "Enter within 1 hour of crisis_monitor mode escalation"
+    exit_rules:
+      - "Close when crisis_monitor downgrades to NORMAL for 24+ hours"
+      - "Close when GPR index falls below 120"
+      - "Take profit at -3% USD/JPY or -2% USD/CHF (safe haven appreciation)"
+      - "Stop loss at +4% move against (risk-on reversal)"
+      - "Time stop: 14 days max hold — crisis premium decays"
+    positions:
+      - symbol: USD/JPY
+        size_usd: 250
+        stop_loss_pct: -4.0
+        take_profit_pct: 6.0
+        side: short
+        routing: ibkr_idealpro
+      - symbol: USD/CHF
+        size_usd: 200
+        stop_loss_pct: -4.0
+        take_profit_pct: 6.0
+        side: short
+        routing: ibkr_idealpro
+      - symbol: EUR/USD
+        size_usd: 150
+        stop_loss_pct: -3.0
+        take_profit_pct: 5.0
+        side: long
+        routing: ibkr_idealpro
+
+  # ── Strategy 33: Futures Momentum (IBKR) ──
+  # Data source: futures_bridge (basis, cross-asset momentum)
+  # Logic: Trade ES/NQ on cross-asset momentum divergence signals
+  futures_momentum:
+    account: medium_long
+    asset_class: futures
+    target_daily_pnl: 50
+    timeframe: swing
+    hold_period_days: [1, 10]
+    shock_overrides:
+      stop_loss_pct: 2.0
+      take_profit_pct: 4.0
+      size_multiplier: 0.5
+    thesis: "Index futures track cross-asset momentum — equity-commodity divergences revert. Trade ES/NQ when basis premium or cross-asset signals diverge from spot."
+    entry_rules:
+      - "futures_bridge cross_asset_divergence > 0.5"
+      - "futures_bridge basis_bps outside [-10, 30] range"
+      - "VIX < 35 (avoid crisis-mode whipsaws)"
+    exit_rules:
+      - "target profit hit OR hold period expires"
+      - "VIX > 40 = immediate flatten"
+    positions:
+      - symbol: ES
+        size_usd: 500
+        stop_loss_pct: -2.0
+        take_profit_pct: 4.0
+        side: long
+        exchange: GLOBEX
+        routing: ibkr_futures
+      - symbol: NQ
+        size_usd: 400
+        stop_loss_pct: -2.5
+        take_profit_pct: 5.0
+        side: long
+        exchange: GLOBEX
+        routing: ibkr_futures
+
+  # ── Strategy 34: Commodity Hedge (IBKR) ──
+  # Data source: futures_bridge + crisis_monitor + acled_conflict_bridge
+  # Logic: Long CL/GC futures when geopolitical risk elevates
+  commodity_hedge:
+    account: medium_long
+    asset_class: futures
+    target_daily_pnl: 30
+    timeframe: event_driven
+    hold_period_days: [1, 21]
+    shock_overrides:
+      stop_loss_pct: 3.0
+      take_profit_pct: 6.0
+      size_multiplier: 1.5
+    thesis: "Crude oil and gold futures rise on geopolitical escalation — chokepoint risk, sanctions, and conflict intensity drive physical commodity premiums."
+    entry_rules:
+      - "crisis_monitor mode >= ELEVATED"
+      - "chokepoint_risk hormuz > 0.4 OR bab_el_mandeb > 0.3"
+      - "acled_conflict_bridge middle_east intensity > 3.0"
+    exit_rules:
+      - "crisis_monitor mode returns to NORMAL for 48h"
+      - "target profit hit OR stop loss"
+    positions:
+      - symbol: CL
+        size_usd: 400
+        stop_loss_pct: -3.0
+        take_profit_pct: 6.0
+        side: long
+        exchange: NYMEX
+        routing: ibkr_futures
+      - symbol: GC
+        size_usd: 350
+        stop_loss_pct: -2.5
+        take_profit_pct: 5.0
+        side: long
+        exchange: COMEX
+        routing: ibkr_futures
 
 # Hidden opportunity watchlist — scanner monitors these continuously
 hidden_opportunities:
