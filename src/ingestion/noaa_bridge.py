@@ -18,7 +18,7 @@ from src.packets.physical_flow_event import make_physical_flow_event
 
 NWS_ALERTS = (
     "https://api.weather.gov/alerts/active"
-    "?status=actual&severity=Extreme,Severe"
+    "?status=actual&severity=Extreme&severity=Severe"
 )
 
 # Severity to disruption score mapping

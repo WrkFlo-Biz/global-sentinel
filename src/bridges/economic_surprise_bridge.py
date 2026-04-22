@@ -186,7 +186,7 @@ def fetch_economic_calendar_fmp(from_date: str, to_date: str) -> List[Dict[str, 
     """Fetch economic calendar from Financial Modeling Prep as fallback."""
     if not FMP_KEY:
         return []
-    url = "https://financialmodelingprep.com/api/v3/economic_calendar"
+    url = "https://financialmodelingprep.com/stable/economic-calendar"
     params = {"from": from_date, "to": to_date, "apikey": FMP_KEY}
     try:
         resp = requests.get(url, params=params, timeout=30)
