@@ -23,7 +23,27 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.execution.slippage_model import compute_global_net_ev_ranking
+# Trade approval workflow
+try:
+    from src.execution.trade_approval import request_approval as _trade_approval
+    _HAS_TRADE_APPROVAL = True
+except ImportError:
+    _HAS_TRADE_APPROVAL = False
+
+# --- Paper/training broker constants ---
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
+_FALSY_ENV = {"0", "false", "no", "off"}
+_PAPER_TRAINING_BROKERS = {"mock", "alpaca_paper", "tradier_sandbox"}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read an env var as a boolean flag."""
+    raw = str(os.getenv(name, "")).strip().lower()
+    if raw in _TRUTHY_ENV:
+        return True
+    if raw in _FALSY_ENV:
+        return False
+    return default
 
 
 def iso_now() -> str:
@@ -277,26 +297,7 @@ class ShadowOrderRouter:
                     "intent_id": intent.get("intent_id"),
                     "client_order_id": intent.get("client_order_id"),
                     "confidence_score": cand.get("confidence_score"),
-                    "strategy": cand.get("strategy"),
                     "strategy_style": cand.get("strategy_style"),
-                    "strategy_family": cand.get("strategy_family"),
-                    "underlying_strategy": cand.get("underlying_strategy"),
-                    "learning_adjusted": cand.get("learning_adjusted"),
-                    "learning_adjustment_detail": cand.get("learning_adjustment_detail"),
-                    "event_novelty_score": cand.get("event_novelty_score"),
-                    "expected_edge_bps": cand.get("expected_edge_bps"),
-                    "expected_cost_bps": cand.get("expected_cost_bps"),
-                    "net_expected_value_bps": cand.get("net_expected_value_bps"),
-                    "net_ev_quality_multiplier": cand.get("net_ev_quality_multiplier"),
-                    "net_ev_ranking_score": cand.get("net_ev_ranking_score"),
-                    "spread_cost_bps": cand.get("spread_cost_bps"),
-                    "slippage_cost_bps": cand.get("slippage_cost_bps"),
-                    "borrow_cost_bps": cand.get("borrow_cost_bps"),
-                    "fill_quality_cost_bps": cand.get("fill_quality_cost_bps"),
-                    "session_liquidity_cost_bps": cand.get("session_liquidity_cost_bps"),
-                    "fill_quality_score": cand.get("fill_quality_score"),
-                    "session_liquidity_score": cand.get("session_liquidity_score"),
-                    "metadata": cand.get("metadata"),
                     "template_key": cand.get("template_key"),
                     "direction": cand.get("direction"),
                     "holding_period": cand.get("holding_period"),
@@ -317,8 +318,46 @@ class ShadowOrderRouter:
                     "qty_cap_source": ((order_req.get("_gs_sizing") or {}).get("qty_cap_source")),
                 })
 
-                # Route options vs equity orders through appropriate adapter method
+                # -- Trade Approval Workflow --
                 req = intent["order_request"]
+                _skip_approval = self.broker_name in _PAPER_TRAINING_BROKERS
+                if _HAS_TRADE_APPROVAL and not _skip_approval:
+                    _notional = 0
+                    try:
+                        _qty = float(req.get("qty", 0) or 0)
+                        _price = float(req.get("limit_price", 0) or 0)
+                        _notional = _qty * _price
+                        if req.get("asset_class") == "option":
+                            _notional *= 100
+                    except Exception:
+                        pass
+                    _approval_info = {
+                        "symbol": req.get("symbol"),
+                        "side": req.get("side"),
+                        "qty": req.get("qty"),
+                        "type": req.get("type"),
+                        "limit_price": req.get("limit_price"),
+                        "notional": _notional,
+                        "signal_source": cand.get("signal_source", cand.get("strategy_style", "")),
+                        "strategy_style": cand.get("strategy_style", ""),
+                        "asset_class": req.get("asset_class", "equity"),
+                        "contract_id": req.get("contract_id", ""),
+                    }
+                    try:
+                        _approval = _trade_approval(_approval_info)
+                        if not _approval.get("approved", True):
+                            import logging as _ta_log
+                            _ta_log.getLogger("global_sentinel.shadow_order_router").info(
+                                "Trade REJECTED by approval: %s - %s",
+                                req.get("symbol"), _approval.get("reason"))
+                            route_summary["skipped_by_approval"] = route_summary.get("skipped_by_approval", 0) + 1
+                            continue
+                    except Exception as _ae:
+                        import logging as _ta_log
+                        _ta_log.getLogger("global_sentinel.shadow_order_router").warning(
+                            "Trade approval error (proceeding): %s", _ae)
+
+                # Route options vs equity orders through appropriate adapter method
                 self._v6_mark_submitted(order_record)
                 if req.get("asset_class") == "option" and hasattr(self.adapter, "place_option_order"):
                     broker_order = self.adapter.place_option_order(
@@ -350,23 +389,10 @@ class ShadowOrderRouter:
                     "candidate_id": intent.get("candidate_id"),
                     "intent_id": intent.get("intent_id"),
                     "client_order_id": intent.get("client_order_id"),
-                    "event_novelty_score": cand.get("event_novelty_score"),
-                    "expected_edge_bps": cand.get("expected_edge_bps"),
-                    "expected_cost_bps": cand.get("expected_cost_bps"),
-                    "net_expected_value_bps": cand.get("net_expected_value_bps"),
-                    "net_ev_quality_multiplier": cand.get("net_ev_quality_multiplier"),
-                    "net_ev_ranking_score": cand.get("net_ev_ranking_score"),
-                    "spread_cost_bps": cand.get("spread_cost_bps"),
-                    "slippage_cost_bps": cand.get("slippage_cost_bps"),
-                    "borrow_cost_bps": cand.get("borrow_cost_bps"),
-                    "fill_quality_cost_bps": cand.get("fill_quality_cost_bps"),
-                    "session_liquidity_cost_bps": cand.get("session_liquidity_cost_bps"),
-                    "fill_quality_score": cand.get("fill_quality_score"),
-                    "session_liquidity_score": cand.get("session_liquidity_score"),
                     "broker_order_id": ((updated.get("broker_binding") or {}).get("broker_order_id")),
                     "broker_status": ((updated.get("broker_state") or {}).get("status")) if updated.get("broker_state") else None,
                     "holding_period": cand.get("holding_period"),
-                    "shadow_mode": False,
+                    "shadow_mode": True,
                     "side": order_req.get("side"),
                     "qty": order_req.get("qty"),
                     "type": order_req.get("type"),
@@ -396,27 +422,10 @@ class ShadowOrderRouter:
                     "client_order_id": intent.get("client_order_id"),
                     "broker_order_id": ((updated.get("broker_binding") or {}).get("broker_order_id")),
                     "symbol": cand.get("symbol"),
-                    "strategy": cand.get("strategy"),
                     "strategy_style": cand.get("strategy_style"),
-                    "strategy_family": cand.get("strategy_family"),
-                    "underlying_strategy": cand.get("underlying_strategy"),
-                    "learning_adjusted": cand.get("learning_adjusted"),
                     "template_key": cand.get("template_key"),
                     "direction": cand.get("direction"),
-                    "event_novelty_score": cand.get("event_novelty_score"),
-                    "expected_edge_bps": cand.get("expected_edge_bps"),
-                    "expected_cost_bps": cand.get("expected_cost_bps"),
-                    "net_expected_value_bps": cand.get("net_expected_value_bps"),
-                    "net_ev_quality_multiplier": cand.get("net_ev_quality_multiplier"),
-                    "net_ev_ranking_score": cand.get("net_ev_ranking_score"),
-                    "spread_cost_bps": cand.get("spread_cost_bps"),
-                    "slippage_cost_bps": cand.get("slippage_cost_bps"),
-                    "borrow_cost_bps": cand.get("borrow_cost_bps"),
-                    "fill_quality_cost_bps": cand.get("fill_quality_cost_bps"),
-                    "session_liquidity_cost_bps": cand.get("session_liquidity_cost_bps"),
-                    "fill_quality_score": cand.get("fill_quality_score"),
-                    "session_liquidity_score": cand.get("session_liquidity_score"),
-                    "shadow_mode": False,
+                    "shadow_mode": True,
                     "broker_status": ((updated.get("broker_state") or {}).get("status")) if updated.get("broker_state") else None,
                     "side": order_req.get("side"),
                     "qty": order_req.get("qty"),
@@ -483,106 +492,16 @@ class ShadowOrderRouter:
     # -------------------------
     def _rank_candidates(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         def score(c: Dict[str, Any]) -> float:
-            ranking = self._compute_candidate_net_ev(c)
-            return safe_float(ranking.get("ranking_score"), 0.0)
+            conf = safe_float(c.get("confidence_score"), 0.0)
+            size_mult = safe_float(c.get("size_multiplier_suggestion"), 1.0)
+            fs = c.get("fill_sim_assessment") or {}
+            fill_feas = safe_float(fs.get("fill_feasibility_score"), 0.5)
+            reject_risk = safe_float(fs.get("reject_risk_probability"), 0.0)
+            dnr = 1.0 if fs.get("do_not_route_even_in_shadow") else 0.0
+            penalty = (1.0 - min(reject_risk, 0.8) * 0.5) * (0.2 if dnr else 1.0)
+            return conf * max(size_mult, 0.01) * fill_feas * penalty
 
         return sorted(candidates, key=score, reverse=True)
-
-    def _compute_candidate_net_ev(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
-        fs = candidate.get("fill_sim_assessment") or {}
-        expected_edge = candidate.get("expected_edge_bps")
-        if expected_edge is None and fs.get("expected_edge_bps") is not None:
-            expected_edge = fs.get("expected_edge_bps")
-        if expected_edge is None:
-            expected_edge = safe_float(candidate.get("confidence_score"), 0.0) * 100.0
-
-        market_data = self._candidate_market_data(candidate)
-        direction = str(candidate.get("direction") or candidate.get("side") or "long")
-        quantity_proxy = max(
-            1,
-            int(round(max(safe_float(candidate.get("size_multiplier_suggestion"), 1.0), 0.25) * 10)),
-        )
-
-        cost_estimate: Dict[str, Any] = {}
-        if self._v6_slippage_model is not None:
-            try:
-                cost_estimate = self._v6_slippage_model.estimate(
-                    symbol=str(candidate.get("symbol") or ""),
-                    direction=direction,
-                    quantity=quantity_proxy,
-                    order_type=str(candidate.get("order_type") or "limit"),
-                    market_data=market_data,
-                )
-            except Exception:
-                cost_estimate = {}
-
-        spread_cost_bps = safe_float(cost_estimate.get("expected_spread_cost_bps"), 0.0)
-        slippage_cost_bps = safe_float(
-            cost_estimate.get("expected_slippage_bps"),
-            safe_float(fs.get("expected_slippage_bps"), 0.0),
-        )
-        borrow_cost_bps = safe_float(
-            cost_estimate.get("expected_borrow_cost_bps"),
-            safe_float(fs.get("borrow_cost_bps"), 0.0),
-        )
-        fill_quality_cost_bps = safe_float(
-            cost_estimate.get("expected_fill_quality_cost_bps"),
-            safe_float(fs.get("fill_quality_penalty_bps"), 0.0),
-        )
-        session_liquidity_cost_bps = safe_float(
-            cost_estimate.get("expected_liquidity_cost_bps"),
-            safe_float(fs.get("session_liquidity_penalty_bps"), 0.0),
-        )
-        expected_cost = candidate.get("expected_cost_bps")
-        if expected_cost is None:
-            expected_cost = cost_estimate.get("total_expected_cost_bps")
-        if expected_cost is None:
-            expected_cost = (
-                slippage_cost_bps
-                + safe_float(cost_estimate.get("expected_market_impact_bps"), 0.0)
-                + borrow_cost_bps
-                + fill_quality_cost_bps
-                + session_liquidity_cost_bps
-            )
-        fill_quality_score = safe_float(
-            cost_estimate.get("fill_quality_score"),
-            safe_float(fs.get("fill_quality_score"), 0.6),
-        )
-        session_liquidity_score = safe_float(
-            cost_estimate.get("session_liquidity_score"),
-            safe_float(fs.get("session_liquidity_score"), 0.6),
-        )
-        net_profile = compute_global_net_ev_ranking(
-            expected_edge_bps=expected_edge,
-            expected_cost_bps=expected_cost,
-            confidence_score=candidate.get("confidence_score"),
-            size_multiplier=candidate.get("size_multiplier_suggestion"),
-            fill_feasibility_score=fs.get("fill_feasibility_score"),
-            fill_quality_score=fill_quality_score,
-            session_liquidity_score=session_liquidity_score,
-            reject_risk_probability=fs.get("reject_risk_probability"),
-            do_not_route=fs.get("do_not_route_even_in_shadow"),
-        )
-
-        candidate["expected_edge_bps"] = net_profile["expected_edge_bps"]
-        candidate["expected_cost_bps"] = net_profile["expected_cost_bps"]
-        candidate["net_expected_value_bps"] = net_profile["net_expected_value_bps"]
-        candidate["net_ev_quality_multiplier"] = net_profile["quality_multiplier"]
-        candidate["net_ev_ranking_score"] = net_profile["ranking_score"]
-        candidate["spread_cost_bps"] = round(spread_cost_bps, 2)
-        candidate["slippage_cost_bps"] = round(slippage_cost_bps, 2)
-        candidate["borrow_cost_bps"] = round(borrow_cost_bps, 2)
-        candidate["fill_quality_cost_bps"] = round(fill_quality_cost_bps, 2)
-        candidate["session_liquidity_cost_bps"] = round(session_liquidity_cost_bps, 2)
-        candidate["fill_quality_score"] = net_profile["fill_quality_score"]
-        candidate["session_liquidity_score"] = net_profile["session_liquidity_score"]
-        return {
-            "net_expected_value_bps": candidate["net_expected_value_bps"],
-            "fill_quality_score": candidate["fill_quality_score"],
-            "session_liquidity_score": candidate["session_liquidity_score"],
-            "quality_multiplier": candidate["net_ev_quality_multiplier"],
-            "ranking_score": candidate["net_ev_ranking_score"],
-        }
 
     def _candidate_route_block_reason(
         self,
@@ -721,21 +640,20 @@ class ShadowOrderRouter:
             else:
                 # Notional-based sizing: % of account equity per trade
                 account_equity = self._get_account_equity()
-                base_pct = safe_float(position_sizing.get("base_pct_of_equity"), 8.0)
                 if confidence >= 0.75:
                     pct = safe_float(position_sizing.get("high_confidence_pct"), 12.0)
+                elif confidence >= 0.50:
+                    pct = safe_float(position_sizing.get("base_pct_of_equity"), 8.0)
+                elif confidence >= 0.25:
+                    pct = safe_float(position_sizing.get("base_pct_of_equity"), 8.0) * 0.75
                 else:
-                    # Scale the base allocation by confidence, but keep a floor so
-                    # low-confidence trades do not collapse back into the old share-count path.
-                    confidence_scale = max(min_size_mult, 0.2 + (0.8 * confidence))
-                    pct = base_pct * confidence_scale
+                    pct = safe_float(position_sizing.get("base_pct_of_equity"), 8.0) * 0.5
 
                 target_notional = account_equity * (pct / 100.0) * size_mult_applied
-                min_notional = round(safe_float(position_sizing.get("min_notional"), 2000), 2)
+                min_notional = safe_float(position_sizing.get("min_notional"), 2000)
                 max_pct = safe_float(position_sizing.get("max_single_position_pct"), 15.0)
-                max_notional = round(account_equity * (max_pct / 100.0), 2)
+                max_notional = account_equity * (max_pct / 100.0)
                 target_notional = max(min_notional, min(target_notional, max_notional))
-                target_notional = round(target_notional, 2)
 
                 qty = max(1, int(target_notional / decision_price))
                 sizing_method_used = "notional_pct"
@@ -797,8 +715,7 @@ class ShadowOrderRouter:
             "time_in_force": tif,
             "qty": qty,
             "extended_hours": ext_hours,
-            "shadow_mode": False,
-            "market_data": self._candidate_market_data(candidate),
+            "shadow_mode": True,
             "_gs_sizing": {
                 "sizing_method_requested": sizing_method_requested,
                 "sizing_method_used": sizing_method_used,
@@ -930,13 +847,12 @@ class ShadowOrderRouter:
             "type": order_type,
             "time_in_force": "day",
             "qty": qty,
-            "shadow_mode": False,
+            "shadow_mode": True,
             "asset_class": "option",
             "option_type": option_type,
             "contract_id": contract.get("id"),
             "strike_price": contract.get("strike_price"),
             "expiration_date": contract.get("expiration_date"),
-            "market_data": self._candidate_market_data(candidate),
             "_gs_sizing": {
                 "sizing_method_used": "options_premium_pct",
                 "confidence_score": confidence,
@@ -1229,11 +1145,6 @@ class ShadowOrderRouter:
         except Exception:
             pass  # Fail open — risk gate will handle missing data
 
-        snapshot = package.get("snapshot") or {}
-        market_micro = snapshot.get("market_microstructure") or {}
-        for candidate in candidates:
-            candidate["market_data"] = self._build_candidate_market_data(candidate, market_micro)
-
     # -------------------------
     # Risk gate
     # -------------------------
@@ -1318,100 +1229,17 @@ class ShadowOrderRouter:
                 quantity=int(order_req.get("qty") or 0),
                 order_type=str(order_req.get("type") or "market"),
                 market_data={
-                    **(order_req.get("market_data") or {}),
-                    "last_price": decision_price or safe_float((order_req.get("market_data") or {}).get("last_price"), 0.0),
-                    "bid": safe_float((order_req.get("market_data") or {}).get("bid"), safe_float(order_req.get("limit_price"), decision_price)),
-                    "ask": safe_float((order_req.get("market_data") or {}).get("ask"), safe_float(order_req.get("limit_price"), decision_price)),
+                    "last_price": decision_price,
+                    "bid": safe_float(order_req.get("limit_price"), decision_price),
+                    "ask": safe_float(order_req.get("limit_price"), decision_price),
+                    "avg_daily_volume": safe_float((order_req.get("market_data") or {}).get("avg_daily_volume"), 0.0),
+                    "realized_vol": safe_float((order_req.get("market_data") or {}).get("realized_vol"), 0.0),
+                    "vix": safe_float((order_req.get("market_data") or {}).get("vix"), 0.0),
                 },
             )
             order_req["_slippage_estimate"] = estimate
         except Exception:
             pass
-
-    def _candidate_market_data(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
-        market_data = dict(candidate.get("market_data") or {})
-        fs = candidate.get("fill_sim_assessment") or {}
-        inputs = fs.get("inputs_used") or {}
-        if inputs:
-            if inputs.get("spread_bps") is not None and market_data.get("spread_bps") is None:
-                market_data["spread_bps"] = inputs.get("spread_bps")
-            if inputs.get("rvol") is not None and market_data.get("rvol") is None:
-                market_data["rvol"] = inputs.get("rvol")
-        for key in (
-            "fill_feasibility_score",
-            "fill_completion_probability",
-            "partial_fill_probability",
-            "reject_risk_probability",
-            "fill_quality_score",
-            "session_liquidity_score",
-            "borrow_cost_bps",
-        ):
-            if fs.get(key) is not None and market_data.get(key) is None:
-                market_data[key] = fs.get(key)
-        if market_data.get("borrow_fee_bps") is None and fs.get("borrow_cost_bps") is not None:
-            market_data["borrow_fee_bps"] = fs.get("borrow_cost_bps")
-        if market_data.get("session_bucket") is None and fs.get("bucket") is not None:
-            market_data["session_bucket"] = fs.get("bucket")
-        if market_data.get("hard_to_borrow") is None:
-            market_data["hard_to_borrow"] = bool(
-                (candidate.get("execution_constraints") or {}).get("hard_to_borrow")
-            )
-        return market_data
-
-    def _build_candidate_market_data(
-        self,
-        candidate: Dict[str, Any],
-        market_micro: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        symbol = str(candidate.get("symbol") or "")
-        sym_micro = market_micro.get(symbol) or market_micro.get(symbol.upper()) or market_micro.get(symbol.lower()) or {}
-        fs = candidate.get("fill_sim_assessment") or {}
-        inputs = fs.get("inputs_used") or {}
-
-        bid = safe_float(sym_micro.get("bid"), 0.0)
-        ask = safe_float(sym_micro.get("ask"), 0.0)
-        last_price = safe_float(
-            sym_micro.get("last_price"),
-            safe_float(sym_micro.get("mid_price"), safe_float(sym_micro.get("mark_price"), 0.0)),
-        )
-        spread_bps = safe_float(sym_micro.get("spread_bps"), 0.0)
-        if spread_bps <= 0 and bid > 0 and ask > 0 and last_price > 0:
-            spread_bps = max(ask - bid, 0.0) / last_price * 10000.0
-
-        return {
-            "bid": bid,
-            "ask": ask,
-            "last_price": last_price,
-            "spread_bps": spread_bps or safe_float(inputs.get("spread_bps"), 0.0),
-            "avg_daily_volume": safe_float(
-                sym_micro.get("avg_daily_volume"),
-                safe_float(sym_micro.get("volume"), 0.0),
-            ),
-            "realized_vol": safe_float(
-                sym_micro.get("realized_vol"),
-                safe_float(sym_micro.get("volatility"), 0.0),
-            ),
-            "volatility": safe_float(sym_micro.get("volatility"), 0.0),
-            "vix": safe_float(sym_micro.get("vix"), 0.0),
-            "rvol": safe_float(sym_micro.get("rvol"), safe_float(inputs.get("rvol"), 1.0)),
-            "liquidity_score": (
-                sym_micro.get("liquidity_score")
-                if sym_micro.get("liquidity_score") is not None
-                else None
-            ),
-            "session_bucket": fs.get("bucket"),
-            "fill_quality_score": fs.get("fill_quality_score"),
-            "fill_feasibility_score": fs.get("fill_feasibility_score"),
-            "fill_completion_probability": fs.get("fill_completion_probability"),
-            "partial_fill_probability": fs.get("partial_fill_probability"),
-            "reject_risk_probability": fs.get("reject_risk_probability"),
-            "borrow_fee_bps": (
-                candidate.get("borrow_fee_bps")
-                if candidate.get("borrow_fee_bps") is not None
-                else fs.get("borrow_cost_bps")
-            ),
-            "hard_to_borrow": bool((candidate.get("execution_constraints") or {}).get("hard_to_borrow")),
-        }
 
     def _v6_create_order_record(self, candidate: Dict[str, Any], order_req: Dict[str, Any], strategy_config: Optional[Dict[str, Any]]):
         if self._v6_order_book is None:
@@ -1478,16 +1306,28 @@ class ShadowOrderRouter:
 
         if self._v6_compliance is not None:
             try:
+                # --- max_positions enforcement (fix 2026-03-11) ---
+                _exec_mode_cfg = _load_yaml(self.repo_root / "config" / "execution_mode.yaml")
+                if not _exec_mode_cfg:
+                    _exec_mode_cfg = _load_yaml(self.repo_root / "execution_mode.yaml")
+                _strategies_cfg = _exec_mode_cfg.get("strategies", {})
+                _order_strategy = (strategy_config or {}).get("name") or candidate.get("strategy_name") or "day_trade"
+                _strategy_position_counts = {_order_strategy: len(positions_list)}
+                _strategy_limits = {}
+                for _sname, _scfg in _strategies_cfg.items():
+                    if "max_positions" in _scfg:
+                        _strategy_limits[_sname] = {"max_positions": _scfg["max_positions"]}
                 portfolio = {
                     "equity": safe_float(account_state.get("equity"), 0.0),
                     "positions": {str(p.get("symbol")): p for p in positions_list},
-                    "strategy_position_counts": {},
+                    "strategy_position_counts": _strategy_position_counts,
                 }
                 rules = {}
                 guardrails_path = self.repo_root / "config" / "live_trading_guardrails.yaml"
                 if guardrails_path.exists():
                     rules = _load_yaml(guardrails_path)
                     rules.setdefault("max_single_name_pct", ((rules.get("position_limits") or {}).get("max_single_name_pct")))
+                rules["strategy_limits"] = _strategy_limits
                 comp = self._v6_compliance.pre_trade_check(
                     {
                         "symbol": order_req.get("symbol"),

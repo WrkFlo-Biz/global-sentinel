@@ -53,7 +53,7 @@ class CorporateActionsTracker:
 
         Will be wired to a live data source later; currently returns from cache.
         """
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         pending = [
             a for a in self._cache
             if a.get("ex_date", "") >= today
@@ -151,7 +151,7 @@ class CorporateActionsTracker:
             "action_type": action_type,
             "ex_date": ex_date,
             "details": details or {},
-            "added_at": datetime.utcnow().isoformat(),
+            "added_at": datetime.now(timezone.utc).isoformat(),
         }
         self._cache.append(entry)
         self.save_cache()

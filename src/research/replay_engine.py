@@ -81,7 +81,7 @@ class ReplayEngine:
             missed_opportunities: moves that occurred without prior signals
         """
         start = start_date or "1970-01-01"
-        end = end_date or datetime.utcnow().strftime("%Y-%m-%d")
+        end = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         logger.info(
             "Backtesting %s to %s, strategies=%s",
@@ -196,13 +196,13 @@ class ReplayEngine:
     ) -> Path:
         """Save backtest results to reports/operational/replay_{date}.json."""
         if date is None:
-            date = datetime.utcnow().strftime("%Y-%m-%d")
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = self.reports_dir / f"replay_{date}.json"
 
         report = {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "date": date,
             "results": backtest_results,
         }

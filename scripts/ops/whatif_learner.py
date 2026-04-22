@@ -174,7 +174,7 @@ def fetch_account():
         req = urllib.request.Request(f"{ALP_BASE}/v2/account", headers=ALP_HEADERS)
         with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
             return json.loads(r.read().decode())
-    except:
+    except Exception:
         return {}
 
 
@@ -184,7 +184,7 @@ def fetch_positions():
         req = urllib.request.Request(f"{ALP_BASE}/v2/positions", headers=ALP_HEADERS)
         with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
             return json.loads(r.read().decode())
-    except:
+    except Exception:
         return []
 
 
@@ -249,7 +249,7 @@ def analyze_patterns():
             if line:
                 try:
                     snapshots.append(json.loads(line))
-                except:
+                except Exception:
                     continue
 
     if len(snapshots) < 3:
@@ -403,7 +403,7 @@ def save_historical(scores):
     if HISTORY_FILE.exists():
         try:
             history = json.loads(HISTORY_FILE.read_text())
-        except:
+        except Exception:
             history = {}
 
     # Compute daily summary stats

@@ -80,14 +80,14 @@ def _send_telegram(msg):
             pass
     env = _get_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = "7091381625"
+    chat_id = env.get("TELEGRAM_CHAT_ID", "7091381625")
     if not token:
         return
     try:
         payload = json.dumps({
             "chat_id": chat_id,
             "text": msg,
-            "parse_mode": "HTML", "message_thread_id": 74,
+            "parse_mode": "HTML", "message_thread_id": int(env.get("TELEGRAM_TRADING_THREAD_ID", "74")),
         }).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",

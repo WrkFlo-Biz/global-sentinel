@@ -309,7 +309,7 @@ class ExperimentalSIPQCMCLane:
             "schema_version": "experimental_sipqc_mc.v1",
             "research_only": True,
             "not_for_direct_execution": True,
-            "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "scenarios_generated": len(scenarios),
             "risk_metrics": metrics,
         }

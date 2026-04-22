@@ -371,7 +371,7 @@ class OrderIntentRegistry:
     def _map_broker_status_to_intent_status(self, broker_status: Any) -> str:
         s = str(broker_status or "").lower()
         if s in {"new", "accepted", "pending"}:
-            return "open" if s in {"accepted"} else s
+            return "open"
         if s in {"partially_filled"}:
             return "partially_filled"
         if s in {"filled"}:

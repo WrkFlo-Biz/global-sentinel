@@ -91,8 +91,10 @@ class BrokerStateReconcilerLoop:
                     "current_price": p.get("market_value", 0) / max(abs(p.get("qty", 1)), 1) if p.get("qty") else 0,
                     "unrealized_pl": p.get("unrealized_pl", 0),
                 } for p in positions])
-        except Exception:
-            pass
+        except Exception as _pos_err:
+            import logging as _rec_log
+            _rec_log.getLogger("global_sentinel.reconciler").warning(
+                "Position snapshot failed: %s", _pos_err)
 
         open_orders_by_broker_id = {str(o.get("order_id")): o for o in open_orders if o.get("order_id")}
         open_orders_by_client_id = {str(o.get("client_order_id")): o for o in open_orders if o.get("client_order_id")}
