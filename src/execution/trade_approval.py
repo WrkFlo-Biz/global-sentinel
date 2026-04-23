@@ -9,7 +9,7 @@ message polling) to avoid conflicts with the existing TelegramCommandHandler.
 Configuration (.env):
     TRADE_APPROVAL_ENABLED=true
     TRADE_APPROVAL_TIMEOUT=60
-    TRADE_APPROVAL_AUTO_EXECUTE=true
+    TRADE_APPROVAL_AUTO_EXECUTE=false
 """
 
 from __future__ import annotations
@@ -31,7 +31,8 @@ REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 APPROVAL_LOG_PATH = REPO_ROOT / "logs" / "trade_approvals.jsonl"
 PENDING_DIR = Path("/tmp/gs_pending_approvals")
 
-# Minimum notional to trigger approval (small orders auto-execute)
+# Minimum notional threshold used for policy classification. In fail-closed mode,
+# below-threshold orders still block unless an explicit approval path says otherwise.
 MIN_NOTIONAL_FOR_APPROVAL = 500.0
 
 
@@ -51,6 +52,34 @@ def _log_approval(entry: dict):
             f.write(json.dumps(entry) + "\n")
     except Exception as e:
         logger.warning(f"Failed to log approval: {e}")
+
+
+def _normalize_decision(decision: Any) -> Optional[str]:
+    if not isinstance(decision, str):
+        return None
+    normalized = decision.strip().lower()
+    return {
+        "approve": "approved",
+        "approved": "approved",
+        "reject": "rejected",
+        "rejected": "rejected",
+    }.get(normalized)
+
+
+def _log_trade_blocked(order_info: Dict[str, Any], decision: str, reason: str) -> None:
+    logger.warning(
+        "Trade blocked (%s): %s | order=%s",
+        decision,
+        reason,
+        _safe_order_summary(order_info),
+    )
+
+
+def _blocked_result(ts: str, order_info: Dict[str, Any], decision: str, reason: str) -> Dict[str, Any]:
+    _log_trade_blocked(order_info, decision, reason)
+    result = {"approved": False, "decision": decision, "reason": reason}
+    _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
+    return result
 
 
 def _format_approval_message(order_info: Dict[str, Any], timeout: int, auto_exec: bool) -> str:
@@ -168,9 +197,17 @@ def _poll_callback_query(
         if decision_file.exists():
             try:
                 decision_data = json.loads(decision_file.read_text())
-                return decision_data.get("decision", "approved"), decision_data.get("raw", "")
-            except Exception:
-                pass
+                normalized = _normalize_decision(decision_data.get("decision"))
+                raw_text = str(decision_data.get("raw", ""))
+                _cleanup_pending(approval_id)
+                if normalized:
+                    return normalized, raw_text
+                logger.warning("Invalid decision file for approval %s: %r", approval_id, decision_data)
+                return "error", raw_text or "invalid_decision_file"
+            except Exception as e:
+                logger.warning("Failed to parse decision file for approval %s: %s", approval_id, e)
+                _cleanup_pending(approval_id)
+                return "error", "invalid_decision_file"
 
         # Poll for callback queries (does NOT conflict with getUpdates for messages
         # because we only process callback_query, not message)
@@ -266,58 +303,65 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         dict with keys:
             approved (bool): whether the trade should proceed
-            decision (str): 'approved', 'rejected', 'auto_approved', 'auto_skipped',
-                          'disabled', 'below_threshold', 'error'
+            decision (str): 'approved', 'rejected', 'timeout', 'disabled',
+                          'below_threshold', 'error'
             reason (str): human-readable reason
     """
     ts = datetime.now(timezone.utc).isoformat()
 
     # Check if approval is enabled
     if not _env_bool("TRADE_APPROVAL_ENABLED", False):
-        result = {"approved": True, "decision": "disabled", "reason": "TRADE_APPROVAL_ENABLED is false"}
-        _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
-        return result
+        return _blocked_result(ts, order_info, "disabled", "TRADE_APPROVAL_ENABLED is false")
 
     # Check notional threshold
-    notional = float(order_info.get("notional", 0) or 0)
-    if notional == 0:
-        qty = float(order_info.get("qty", 0) or 0)
-        price = float(order_info.get("limit_price", 0) or 0)
-        notional = qty * price
+    try:
+        notional = float(order_info.get("notional", 0) or 0)
+        if notional == 0:
+            qty = float(order_info.get("qty", 0) or 0)
+            price = float(order_info.get("limit_price", 0) or 0)
+            notional = qty * price
+    except (TypeError, ValueError) as e:
+        return _blocked_result(ts, order_info, "error", f"Invalid trade sizing for approval: {e}")
 
     if notional < MIN_NOTIONAL_FOR_APPROVAL:
-        result = {
-            "approved": True,
-            "decision": "below_threshold",
-            "reason": f"Notional ${notional:.2f} < ${MIN_NOTIONAL_FOR_APPROVAL:.2f} threshold",
-        }
-        _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
-        return result
+        return _blocked_result(
+            ts,
+            order_info,
+            "below_threshold",
+            f"Notional ${notional:.2f} < ${MIN_NOTIONAL_FOR_APPROVAL:.2f} threshold; blocking without explicit approval",
+        )
 
     # Get Telegram config
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_TOPIC_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", ""))
-    thread_id = int(os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"))
-    timeout_sec = int(os.getenv("TRADE_APPROVAL_TIMEOUT", "60"))
-    auto_execute = _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", True)
+    try:
+        thread_id = int(os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"))
+        timeout_sec = int(os.getenv("TRADE_APPROVAL_TIMEOUT", "60"))
+    except ValueError as e:
+        return _blocked_result(ts, order_info, "error", f"Invalid trade approval config: {e}")
+    auto_execute = _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", False)
+    if auto_execute:
+        logger.warning("TRADE_APPROVAL_AUTO_EXECUTE is ignored in fail-closed mode")
+        auto_execute = False
 
     if not token or not chat_id:
         logger.error("Missing TELEGRAM_BOT_TOKEN or chat_id for trade approval")
-        result = {"approved": True, "decision": "error", "reason": "Missing Telegram config, auto-approving"}
-        _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
-        return result
+        return _blocked_result(ts, order_info, "error", "Missing Telegram config for trade approval")
 
     # Generate unique approval ID
     approval_id = uuid.uuid4().hex[:12]
 
+    # Build approval request; malformed payloads must fail closed.
+    try:
+        msg_text = _format_approval_message(order_info, timeout_sec, auto_execute)
+    except Exception as e:
+        return _blocked_result(ts, order_info, "error", f"Failed to build trade approval request: {e}")
+
     # Send approval request with inline buttons
-    msg_text = _format_approval_message(order_info, timeout_sec, auto_execute)
     msg_id = _send_with_buttons(msg_text, approval_id, token, chat_id, thread_id)
 
     if msg_id is None:
-        result = {"approved": True, "decision": "error", "reason": "Failed to send Telegram message, auto-approving"}
-        _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
-        return result
+        return _blocked_result(ts, order_info, "error", "Failed to send Telegram approval request")
 
     logger.info(f"Trade approval sent (msg_id={msg_id}, approval_id={approval_id}), waiting {timeout_sec}s...")
 
@@ -329,12 +373,11 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
     elif decision == "rejected":
         result = {"approved": False, "decision": "rejected", "reason": f"User rejected: '{raw_text}'"}
     elif decision == "timeout":
-        if auto_execute:
-            result = {"approved": True, "decision": "auto_approved", "reason": f"No response in {timeout_sec}s, auto-executing"}
-        else:
-            result = {"approved": False, "decision": "auto_skipped", "reason": f"No response in {timeout_sec}s, skipping"}
+        result = {"approved": False, "decision": "timeout", "reason": f"No response in {timeout_sec}s, blocking trade"}
     else:
-        result = {"approved": True, "decision": "error", "reason": f"Unknown decision: {decision}"}
+        result = {"approved": False, "decision": "error", "reason": f"Invalid approval decision: {decision}"}
+    if not result["approved"]:
+        _log_trade_blocked(order_info, result["decision"], result["reason"])
 
     # Send confirmation
     _send_confirmation(result["approved"], order_info, result["reason"], token, chat_id, thread_id)
@@ -355,10 +398,15 @@ def resolve_pending_approval(approval_id: str, decision: str):
     if not pending_file.exists():
         return False
 
+    normalized = _normalize_decision(decision)
+    if normalized is None:
+        logger.warning("Rejecting invalid approval resolution for %s: %r", approval_id, decision)
+        return False
+
     decision_file = PENDING_DIR / f"{approval_id}.decision"
     decision_file.write_text(json.dumps({
-        "decision": decision,
-        "raw": f"text_reply_{decision}",
+        "decision": normalized,
+        "raw": f"text_reply_{normalized}",
         "ts": datetime.now(timezone.utc).isoformat(),
     }))
     return True
