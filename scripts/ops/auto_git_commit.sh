@@ -1,75 +1,21 @@
 #!/usr/bin/env bash
-# Auto Git Commit — daily snapshot at 11 PM UTC
+# Deprecated compatibility stub.
+#
+# Unattended repo mutation has been removed from supported Global Sentinel
+# runtime paths. This file remains only to absorb any leftover external cron or
+# automation entrypoints without staging, committing, or pushing changes.
 set -euo pipefail
 
-REPO_ROOT="${GLOBAL_SENTINEL_REPO_ROOT:-/opt/global-sentinel}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="${GLOBAL_SENTINEL_REPO_ROOT:-$DEFAULT_REPO_ROOT}"
 LOG_DIR="$REPO_ROOT/logs"
 LOG_FILE="$LOG_DIR/auto_git.log"
-DATE_STR=$(date -u +"%Y-%m-%d")
-TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+TIMESTAMP="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 
 mkdir -p "$LOG_DIR"
 
-log() {
-    echo "[$TIMESTAMP] $1" | tee -a "$LOG_FILE"
-}
+MESSAGE="auto_git_commit.sh is disabled; unattended git commit/push is no longer supported in runtime."
 
-cd "$REPO_ROOT"
-
-log "=== Auto-commit starting ==="
-
-# Stage tracked directories, excluding sensitive/generated paths
-# Use pathspec exclusions; ignore warnings about .gitignore matches
-git add \
-    src/ \
-    scripts/ \
-    config/ \
-    tests/ \
-    -- \
-    ':!.env' \
-    ':!data/' \
-    ':!reports/' \
-    ':!logs/' \
-    ':!.github/workflows/' \
-    2>&1 | tee -a "$LOG_FILE" || true
-
-# Check if anything is staged
-if git diff --cached --quiet; then
-    log "No changes to commit. Skipping."
-    exit 0
-fi
-
-# Show what we're committing
-CHANGED=$(git diff --cached --stat)
-log "Staged changes:\n$CHANGED"
-
-# Commit
-git commit -m "Auto-commit: daily snapshot $DATE_STR" 2>&1 | tee -a "$LOG_FILE"
-
-# Push — pull with rebase first to avoid rejection when remote has new commits
-if git remote -v | grep -q origin; then
-    BRANCH="$(git branch --show-current)"
-    log "Pulling with rebase before push..."
-    # Stash any unstaged/untracked changes so rebase can proceed on a clean tree
-    STASHED=false
-    if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-        git stash push -u -m "auto-git: temp stash before rebase" 2>&1 | tee -a "$LOG_FILE"
-        STASHED=true
-    fi
-    if ! git pull --rebase origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
-        log "ERROR: pull --rebase failed. Aborting push to avoid data loss."
-        if [ "$STASHED" = true ]; then
-            git stash pop 2>&1 | tee -a "$LOG_FILE" || true
-        fi
-        exit 1
-    fi
-    if [ "$STASHED" = true ]; then
-        git stash pop 2>&1 | tee -a "$LOG_FILE" || log "WARNING: stash pop had conflicts, check manually"
-    fi
-    git push origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
-    log "Push complete."
-else
-    log "No remote 'origin' configured. Skipping push."
-fi
-
-log "=== Auto-commit finished ==="
+printf '[%s] %s\n' "$TIMESTAMP" "$MESSAGE" | tee -a "$LOG_FILE" >&2
+exit 0
