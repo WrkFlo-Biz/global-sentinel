@@ -5,22 +5,9 @@ Repo: `/home/moses/projects/global-sentinel`
 
 ## Scope
 
-- Searched the full repo for the deprecated unattended repo-mutation surface and
-  removed the remaining in-repo references.
 - Audited every file in the repo root for unattended automation risk.
 - Focused on root entrypoints and automation-adjacent config, not the full
   `scripts/systemd/` tree.
-
-## Deprecated Repo Mutation Surface
-
-- Repo-wide search for the deprecated auto-commit helper returned only:
-  - documentation references
-  - the compatibility stub under `scripts/ops/`
-- No runtime imports, cron entries, GitHub workflow hooks, or systemd units in
-  this repo referenced that helper.
-- Action taken:
-  - removed the deprecated stub from `scripts/ops/`
-  - removed the remaining documentation references
 
 ## Root File Audit
 
