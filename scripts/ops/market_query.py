@@ -3,41 +3,29 @@
 Global Sentinel — Conversational Market Query (LLM-powered)
 
 Takes a natural language question about the market, gathers context
-from ALL quantum_feed JSON files, and calls Azure OpenAI (gpt-5-mini)
-to generate an informed answer.
+from ALL quantum_feed JSON files, and routes the request through the
+GS-side Foundry client boundary.
 
 Usage:
   python3 market_query.py "What is the best trade setup right now?"
   python3 market_query.py "Is NVDA overvalued?"
   python3 market_query.py "Which sectors are rotating?"
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
-import urllib.request
-import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
+REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", Path(__file__).resolve().parents[2]))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-# Load .env
-_env = {}
-_env_path = REPO_ROOT / ".env"
-if _env_path.exists():
-    for line in _env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            _env[k.strip()] = v.strip()
-
-AZURE_ENDPOINT = _env.get("AZURE_OPENAI_ENDPOINT", "https://moses-8586-resource.services.ai.azure.com/")
-AZURE_KEY = _env.get("AZURE_OPENAI_API_KEY", _env.get("AZURE_CLAUDE_API_KEY", ""))
-AZURE_DEPLOYMENT = _env.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
-API_VERSION = _env.get("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
+from src.inference.foundry_client import FoundryResponse, send_request
 
 
 def gather_all_context() -> Dict[str, Any]:
@@ -46,11 +34,10 @@ def gather_all_context() -> Dict[str, Any]:
     context = {}
     if not feed_dir.exists():
         return context
-    for f in sorted(feed_dir.glob("*.json")):
+    for path in sorted(feed_dir.glob("*.json")):
         try:
-            data = json.loads(f.read_text())
-            # Truncate large arrays to save token budget
-            context[f.stem] = _truncate(data)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            context[path.stem] = _truncate(data)
         except Exception:
             pass
     return context
@@ -63,7 +50,7 @@ def _truncate(obj: Any, max_list: int = 10, max_depth: int = 3, depth: int = 0) 
             return f"[truncated at depth {depth}]"
         return obj
     if isinstance(obj, dict):
-        return {k: _truncate(v, max_list, max_depth, depth + 1) for k, v in list(obj.items())[:30]}
+        return {key: _truncate(value, max_list, max_depth, depth + 1) for key, value in list(obj.items())[:30]}
     if isinstance(obj, list):
         truncated = [_truncate(item, max_list, max_depth, depth + 1) for item in obj[:max_list]]
         if len(obj) > max_list:
@@ -72,13 +59,47 @@ def _truncate(obj: Any, max_list: int = 10, max_depth: int = 3, depth: int = 0) 
     return obj
 
 
-def call_llm(question: str, context: Dict[str, Any]) -> str:
-    """Call Azure OpenAI with the question and market context."""
-    if not AZURE_KEY:
-        return "Error: AZURE_OPENAI_API_KEY not set in .env"
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
+
+def _load_control_flag(filename: str, key: str) -> bool:
+    path = REPO_ROOT / "control" / filename
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(payload.get(key, False)) if isinstance(payload, dict) else False
+
+
+def build_operating_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    hmm_regime = context.get("hmm_regime") if isinstance(context.get("hmm_regime"), dict) else {}
+    latest_signal = context.get("latest_signal") if isinstance(context.get("latest_signal"), dict) else {}
+    return {
+        "mode": (
+            hmm_regime.get("operating_mode")
+            or hmm_regime.get("mode")
+            or latest_signal.get("operating_mode")
+            or latest_signal.get("mode")
+            or "NORMAL"
+        ),
+        "regime_shift_probability": _coerce_float(
+            hmm_regime.get("regime_shift_probability")
+            or latest_signal.get("regime_shift_probability")
+            or 0.0
+        ),
+        "manual_veto": _load_control_flag("manual_veto.json", "manual_veto"),
+        "kill_switch": _load_control_flag("kill_switch.json", "kill_switch"),
+        "execution_sensitivity": "research_only",
+    }
+
+
+def call_llm(question: str, context: Dict[str, Any], trace_context: Dict[str, str]) -> FoundryResponse:
+    """Call Foundry/orchestrator with the question and market context."""
     context_str = json.dumps(context, indent=1, default=str)
-    # Cap context at ~50k chars to stay within token limits
     if len(context_str) > 50000:
         context_str = context_str[:50000] + "\n... [context truncated]"
 
@@ -104,37 +125,44 @@ When answering:
 4. Give actionable entry/exit levels when discussing trade setups
 5. Be concise but thorough — prioritize signal over noise"""
 
-    url = f"{AZURE_ENDPOINT}openai/deployments/{AZURE_DEPLOYMENT}/chat/completions?api-version={API_VERSION}"
-    body = json.dumps({
-        "messages": [
+    return send_request(
+        intent_type="market_query",
+        target_role="planner",
+        operating_context=build_operating_context(context),
+        latency_class="interactive",
+        trace_context=trace_context,
+        messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"MARKET DATA CONTEXT:\n{context_str}\n\nQUESTION: {question}"},
         ],
-        "temperature": 0.3,
-        "max_tokens": 2000,
-    }).encode()
-
-    req = urllib.request.Request(url, data=body, headers={
-        "Content-Type": "application/json",
-        "api-key": AZURE_KEY,
-    })
-
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        return f"LLM API error ({exc.code}): {error_body[:500]}"
-    except Exception as exc:
-        return f"LLM error: {exc}"
+    )
 
 
 def query(question: str) -> Dict[str, Any]:
     """Run a market query and return structured result."""
-    ts = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    ts = now.isoformat()
+    query_id = now.strftime("%Y%m%d%H%M%S")
     context = gather_all_context()
-    answer = call_llm(question, context)
+    output_path = REPO_ROOT / "data" / "quantum_feed" / "last_market_query.json"
+    trace_context = {
+        "trace_id": f"market-query-{query_id}",
+        "intent_id": f"market-query-{query_id}",
+        "package_id": f"market-query-{query_id}",
+        "report_path": str(output_path),
+    }
+
+    try:
+        response = call_llm(question, context, trace_context)
+        answer = response.output
+        route = response.route
+        trace_id = response.trace_id
+        policy_annotations = response.policy_annotations
+    except Exception as exc:
+        answer = f"LLM error: {exc}"
+        route = {}
+        trace_id = trace_context["trace_id"]
+        policy_annotations = {"error": str(exc)}
 
     result = {
         "source": "market_query",
@@ -142,13 +170,14 @@ def query(question: str) -> Dict[str, Any]:
         "question": question,
         "answer": answer,
         "context_sources": list(context.keys()),
-        "model": AZURE_DEPLOYMENT,
+        "model": route.get("model"),
+        "route": route,
+        "trace_id": trace_id,
+        "policy_annotations": policy_annotations,
     }
 
-    # Save last query result
-    output_path = REPO_ROOT / "data" / "quantum_feed" / "last_market_query.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2, default=str))
+    output_path.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
 
     return result
 
@@ -168,11 +197,11 @@ def main():
     print("Gathering market context...")
     result = query(question)
     print(f"\nSources consulted: {len(result['context_sources'])}")
-    sources_str = ', '.join(result['context_sources'])
+    sources_str = ", ".join(result["context_sources"])
     print(f"  {sources_str}")
-    print("\n" + "="*60)
-    print(result['answer'])
-    print("="*60)
+    print("\n" + "=" * 60)
+    print(result["answer"])
+    print("=" * 60)
 
 
 if __name__ == "__main__":

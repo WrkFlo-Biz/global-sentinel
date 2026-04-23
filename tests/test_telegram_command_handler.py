@@ -29,6 +29,36 @@ def test_dispatch_command_accepts_gs_prefix_with_bot_suffix(tmp_path: Path, monk
     assert sent == [("-1003898688720", "SYSTEM STATUS")]
 
 
+def test_tier_2_commands_return_orchestrator_stub_without_mutation(tmp_path: Path, monkeypatch):
+    handler = TelegramCommandHandler(
+        bot_token="test-token",
+        allowed_chat_ids={"-1003898688720"},
+        strategy="day_trade",
+        repo_root=tmp_path,
+    )
+
+    def fail(*args, **kwargs):
+        raise AssertionError("demoted command should not hit legacy mutation path")
+
+    monkeypatch.setattr(handler, "_dashboard_post", fail)
+    monkeypatch.setattr(handler, "_request_confirmation", fail)
+    monkeypatch.setattr(handler, "_log_command", fail)
+
+    expected = handler.ORCHESTRATOR_APPROVAL_MESSAGE
+
+    assert handler._cmd_mode("auto day_trade", "-1003898688720") == expected
+    assert handler._cmd_kill("on emergency", "-1003898688720") == expected
+    assert handler._cmd_veto("on block", "-1003898688720") == expected
+    assert handler._cmd_approve("", "-1003898688720") == expected
+    assert handler._cmd_reject("", "-1003898688720") == expected
+    assert handler._cmd_refresh("", "-1003898688720") == expected
+    assert handler._execute_kill_switch(True, "emergency") == expected
+    assert handler._execute_veto(True, "block") == expected
+
+    assert not (tmp_path / "control" / "kill_switch.json").exists()
+    assert not (tmp_path / "control" / "manual_veto.json").exists()
+
+
 def test_log_unauthorized_chat_records_private_chat_metadata(tmp_path: Path):
     handler = TelegramCommandHandler(
         bot_token="test-token",

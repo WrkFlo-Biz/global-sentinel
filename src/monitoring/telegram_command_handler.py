@@ -37,9 +37,14 @@ def iso_now() -> str:
 
 class TelegramCommandHandler:
     """Handles incoming Telegram commands for a single bot."""
+    # Tier-2 commands demoted per docs/openclaw-demotion.md
 
     RATE_LIMIT_SECONDS = 2.0
     POLL_TIMEOUT = 30  # long-poll timeout in seconds
+    ORCHESTRATOR_APPROVAL_MESSAGE = (
+        "⚠️ This command requires orchestrator approval. Use: "
+        "wrkflo-orchestrator approve --kind <kind> --target global-sentinel"
+    )
 
     def __init__(
         self,
@@ -423,91 +428,23 @@ class TelegramCommandHandler:
 
     def _cmd_mode(self, args: str, chat_id: str) -> str:
         """Toggle execution mode. Usage: /mode auto day_trade"""
-        parts = args.strip().lower().split()
-        if len(parts) < 2:
-            return "Usage: /mode <auto|manual> <day_trade|medium_long>"
-
-        mode = parts[0]
-        strategy = parts[1]
-
-        if mode not in ("auto", "manual"):
-            return "Mode must be 'auto' or 'manual'"
-        if strategy not in ("day_trade", "medium_long"):
-            return "Strategy must be 'day_trade' or 'medium_long'"
-
-        result = self._dashboard_post("/api/execution-mode", {
-            "strategy": strategy,
-            "mode": mode,
-        })
-
-        if result and result.get("status") == "ok":
-            self._log_command("mode_change", {
-                "strategy": strategy,
-                "mode": mode,
-                "chat_id": chat_id,
-            })
-            return f"Execution mode set: {strategy} -> {mode}"
-        return f"Failed to set mode: {result}"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_kill(self, args: str, chat_id: str) -> str:
         """Activate/deactivate kill switch. Usage: /kill on [reason] or /kill off"""
-        parts = args.strip().split(None, 1)
-        if not parts:
-            return "Usage: /kill <on|off> [reason]"
-
-        action = parts[0].lower()
-        reason = parts[1] if len(parts) > 1 else ""
-
-        if action == "on":
-            return self._request_confirmation(chat_id, "kill_on", {"reason": reason})
-        elif action == "off":
-            return self._request_confirmation(chat_id, "kill_off", {})
-        else:
-            return "Usage: /kill <on|off> [reason]"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_veto(self, args: str, chat_id: str) -> str:
         """Activate/deactivate manual veto. Usage: /veto on [reason] or /veto off"""
-        parts = args.strip().split(None, 1)
-        if not parts:
-            return "Usage: /veto <on|off> [reason]"
-
-        action = parts[0].lower()
-        reason = parts[1] if len(parts) > 1 else ""
-
-        if action == "on":
-            return self._request_confirmation(chat_id, "veto_on", {"reason": reason})
-        elif action == "off":
-            return self._request_confirmation(chat_id, "veto_off", {})
-        else:
-            return "Usage: /veto <on|off> [reason]"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_approve(self, args: str, chat_id: str) -> str:
         """Approve pending orders for this bot's strategy."""
-        result = self._dashboard_post("/api/telegram/approve", {
-            "strategy": self.strategy,
-            "action": "approve",
-        })
-        if result and result.get("status") == "ok":
-            self._log_command("order_approved", {
-                "strategy": self.strategy,
-                "chat_id": chat_id,
-            })
-            return f"Pending orders APPROVED for {self.strategy}"
-        return f"Failed to approve: {result}"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_reject(self, args: str, chat_id: str) -> str:
         """Reject pending orders for this bot's strategy."""
-        result = self._dashboard_post("/api/telegram/approve", {
-            "strategy": self.strategy,
-            "action": "reject",
-        })
-        if result and result.get("status") == "ok":
-            self._log_command("order_rejected", {
-                "strategy": self.strategy,
-                "chat_id": chat_id,
-            })
-            return f"Pending orders REJECTED for {self.strategy}"
-        return f"Failed to reject: {result}"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_gss(self, args: str, chat_id: str) -> str:
         """Return latest GSS signal analysis."""
@@ -640,19 +577,7 @@ class TelegramCommandHandler:
 
     def _cmd_refresh(self, args: str, chat_id: str) -> str:
         """Force a data refresh by triggering a single crisis monitor cycle."""
-        self._log_command("refresh_requested", {"chat_id": chat_id})
-        # Signal the crisis monitor to run a cycle (via SIGUSR1)
-        import signal as sig
-        try:
-            # Find crisis monitor PID
-            pid_file = self.repo_root / "logs" / "crisis_monitor.pid"
-            if pid_file.exists():
-                pid = int(pid_file.read_text().strip())
-                os.kill(pid, sig.SIGUSR1)
-                return "Refresh signal sent to crisis monitor"
-        except Exception:
-            pass
-        return "Refresh requested (crisis monitor will pick up on next cycle)"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _cmd_help(self, args: str, chat_id: str) -> str:
         """List available commands."""
@@ -663,14 +588,8 @@ class TelegramCommandHandler:
             "",
             "All commands use /gs_ prefix:",
             "",
-            "System Control:",
+            "Read-Only Status:",
             "  /gs_status - System status",
-            "  /gs_mode <auto|manual> <strategy> - Set mode",
-            "  /gs_kill <on|off> [reason] - Kill switch",
-            "  /gs_veto <on|off> [reason] - Manual veto",
-            "  /gs_approve - Approve pending orders",
-            "  /gs_reject - Reject pending orders",
-            "",
             "Market Intelligence:",
             "  /gs_gss - GSS signal analysis",
             "  /gs_portfolio - Portfolio & P&L",
@@ -679,8 +598,10 @@ class TelegramCommandHandler:
             "",
             "Configuration:",
             "  /gs_config - Execution config",
-            "  /gs_refresh - Force data refresh",
             "  /gs_help - This message",
+            "",
+            "Tier-2 commands moved to orchestrator approval:",
+            "  wrkflo-orchestrator approve --kind <kind> --target global-sentinel",
         ]
         return "\n".join(lines)
 
@@ -690,47 +611,11 @@ class TelegramCommandHandler:
 
     def _execute_kill_switch(self, active: bool, reason: str) -> str:
         """Write kill switch state to control file."""
-        path = self.repo_root / "control" / "kill_switch.json"
-        data = {
-            "active": active,
-            "kill_switch": active,
-            "reason": reason if active else None,
-            "set_by": f"telegram_{self.strategy}",
-            "set_at": iso_now(),
-            "notes": "Set to true to halt ALL monitoring and agent activity. Emergency use only.",
-        }
-        try:
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            self._log_command("kill_switch_changed", {
-                "active": active,
-                "reason": reason,
-            })
-            state = "ACTIVATED" if active else "DEACTIVATED"
-            return f"Kill switch {state}" + (f"\nReason: {reason}" if reason else "")
-        except Exception as e:
-            return f"Failed to update kill switch: {e}"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     def _execute_veto(self, active: bool, reason: str) -> str:
         """Write manual veto state to control file."""
-        path = self.repo_root / "control" / "manual_veto.json"
-        data = {
-            "active": active,
-            "manual_veto": active,
-            "reason": reason if active else None,
-            "set_by": f"telegram_{self.strategy}",
-            "set_at": iso_now(),
-            "notes": "Set to true to halt all shadow draft generation. Requires human action to clear.",
-        }
-        try:
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            self._log_command("veto_changed", {
-                "active": active,
-                "reason": reason,
-            })
-            state = "ACTIVATED" if active else "DEACTIVATED"
-            return f"Manual veto {state}" + (f"\nReason: {reason}" if reason else "")
-        except Exception as e:
-            return f"Failed to update veto: {e}"
+        return self.ORCHESTRATOR_APPROVAL_MESSAGE
 
     # ------------------------------------------------------------------
     # Audit logging
