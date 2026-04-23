@@ -90,10 +90,6 @@ durably audited, and mediated by an orchestrator approval boundary.
 
 ### Tier-2C: Repo mutation
 
-| Surface | Current code | Current mutation | Approval gap | Target gate |
-| --- | --- | --- | --- | --- |
-| Auto git commit job | `scripts/ops/auto_git_commit.sh` | Deprecated compatibility stub that logs and exits without mutating the repo. | Unattended repo mutation is no longer supported in runtime. | Keep disabled unless it is replaced by an explicitly approved manual workflow. |
-
 ## Current vs Target State
 
 ### Current
@@ -136,8 +132,7 @@ durably audited, and mediated by an orchestrator approval boundary.
      intents, not decide approval locally.
 
 5. Isolate repo mutation.
-   - `auto_git_commit.sh` is now a disabled compatibility stub and should not
-     be reintroduced into unattended runtime behavior.
+   - Unattended repo mutation should not exist in runtime behavior.
    - Any future repo mutation job should be an explicit manual workflow with
      operator approval.
 
@@ -162,6 +157,4 @@ Expected end state:
   mediation.
 - Execution code may still exist in GS, but it should require an external
   approval context rather than authorizing itself.
-- Repo mutation should not remain as an unattended runtime behavior, and
-  `auto_git_commit.sh` should only log-and-exit if invoked by stale external
-  automation.
+- Repo mutation should not remain as an unattended runtime behavior.
