@@ -4,6 +4,9 @@ Global Sentinel - Smart Inference Router
 
 Deprecated compatibility shim that preserves the legacy smart router surface
 while routing through ``src.inference.foundry_client``.
+
+No in-tree runtime callers remain. New code should call
+``src.inference.foundry_client.send_request()`` directly.
 """
 
 from __future__ import annotations
@@ -36,7 +39,8 @@ ROUTING_LOG_PATH = Path(
 )
 
 DEPRECATION_MESSAGE = (
-    "SmartInferenceRouter is deprecated; use src.inference.foundry_client.send_request() directly."
+    "SmartInferenceRouter is deprecated and has no in-tree callers; use "
+    "src.inference.foundry_client.send_request() directly."
 )
 
 # Conservative cost estimates per 1K tokens (input/output avg).
