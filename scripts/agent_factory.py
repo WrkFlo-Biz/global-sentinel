@@ -56,6 +56,7 @@ OPENCLAW_RESEARCH_REPORTS.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.core.openclaw_role_registry import load_openclaw_role_registry
+from src.core.openclaw_state_db import OpenClawStateDB, default_state_db_path
 from src.monitoring.telegram_topic_notifier import TelegramTopicNotifier
 from src.reports.openclaw_role_briefing import OpenClawRoleBriefingBuilder
 from src.reports.openclaw_recommendation_queue import OpenClawRecommendationQueueWriter
@@ -1016,10 +1017,12 @@ class OpenClawBot:
         self.results_dir = OPENCLAW_OPS_REPORTS if bot_name == "ops" else OPENCLAW_RESEARCH_REPORTS
         self.dead_letter_dir = LOG_DIR / "dead_letter"
         self.dead_letter_dir.mkdir(parents=True, exist_ok=True)
+        self.state_db = OpenClawStateDB(default_state_db_path(REPO_ROOT))
 
         self.max_workers = int(os.getenv("OPENCLAW_MAX_WORKERS", "4"))
         self.min_workers = int(os.getenv("OPENCLAW_MIN_WORKERS", "1"))
         self.workers: List[threading.Thread] = []
+        self.worker_ids: List[str] = []
         self.active_count = 0
         self.active_count_lock = threading.Lock()
 
@@ -1037,10 +1040,74 @@ class OpenClawBot:
             self._spawn_worker()
 
     def _spawn_worker(self) -> None:
-        t = threading.Thread(target=self._worker_loop, daemon=True)
+        worker_id = f"{self.bot_name}-worker-{len(self.worker_ids) + 1}"
+        self.worker_ids.append(worker_id)
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=iso_now(),
+            status="starting",
+            current_task=None,
+        )
+        t = threading.Thread(target=self._worker_loop, args=(worker_id,), daemon=True, name=worker_id)
         t.start()
         self.workers.append(t)
         log_line(self.bot_name, f"Spawned worker (total={len(self.workers)})")
+
+    def _mark_task_started(self, task: Task, worker_id: str, started_at: Optional[str] = None) -> str:
+        started_at = started_at or iso_now()
+        self.state_db.record_task_start(
+            task_id=task.task_id,
+            worker=worker_id,
+            status="running",
+            started_at=started_at,
+        )
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=started_at,
+            status="busy",
+            current_task=task.task_id,
+        )
+        return started_at
+
+    def _mark_task_result(
+        self,
+        task: Task,
+        result: AgentResult,
+        worker_id: str,
+        started_at: str,
+    ) -> None:
+        completed_at = iso_now()
+        self.state_db.record_task_status(
+            task_id=task.task_id,
+            worker=worker_id,
+            status="completed" if result.success else "failed",
+            started_at=started_at,
+            completed_at=completed_at,
+            output_summary=result.summary,
+        )
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=completed_at,
+            status="idle",
+            current_task=None,
+        )
+
+    def _mark_task_requeued(self, task: Task, worker_id: str, started_at: str, error: str) -> None:
+        completed_at = iso_now()
+        self.state_db.record_task_status(
+            task_id=task.task_id,
+            worker=worker_id,
+            status="requeued",
+            started_at=started_at,
+            completed_at=completed_at,
+            output_summary=error,
+        )
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=completed_at,
+            status="idle",
+            current_task=None,
+        )
 
     def _enqueue_followups(self, tasks: List[Task]) -> None:
         if not tasks:
@@ -1055,28 +1122,44 @@ class OpenClawBot:
                 continue
             self.enqueue(t)
 
-    def _worker_loop(self) -> None:
+    def _worker_loop(self, worker_id: str) -> None:
+        last_idle_heartbeat = 0.0
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=iso_now(),
+            status="idle",
+            current_task=None,
+        )
         while self.running:
             try:
                 _, _, task = self.task_queue.get(timeout=1.0)
             except queue.Empty:
+                if utc_ts() - last_idle_heartbeat >= 5.0:
+                    last_idle_heartbeat = utc_ts()
+                    self.state_db.update_worker_health(
+                        worker_id=worker_id,
+                        last_seen=iso_now(),
+                        status="idle",
+                        current_task=None,
+                    )
                 continue
 
             age = utc_ts() - task.created_at
             if age > task.ttl_seconds:
-                self._dead_letter(task, reason="ttl_expired")
+                self._dead_letter(task, reason="ttl_expired", worker_id=worker_id)
                 self.task_queue.task_done()
                 continue
 
             flags = control_flags()
             if flags["kill_switch"] and task.kind not in {"monitoring_alerting", "safety_audit", "proposal_review"}:
-                self._dead_letter(task, reason="kill_switch_active")
+                self._dead_letter(task, reason="kill_switch_active", worker_id=worker_id)
                 self.task_queue.task_done()
                 continue
 
             with self.active_count_lock:
                 self.active_count += 1
 
+            started_at = self._mark_task_started(task, worker_id)
             start = utc_ts()
             try:
                 runner = AGENT_RUNNERS.get(task.kind)
@@ -1084,20 +1167,28 @@ class OpenClawBot:
                     raise ValueError(f"No runner for task kind={task.kind}")
                 result = runner(task)
                 self._record_result(task, result)
+                self._mark_task_result(task, result, worker_id, started_at)
                 self._enqueue_followups(result.follow_up_tasks)
             except Exception as e:
                 task.attempts += 1
                 if task.attempts < 3 and not flags["manual_veto"]:
                     task.priority = min(task.priority + 1, 9)
                     self.enqueue(task)
+                    self._mark_task_requeued(task, worker_id, started_at, str(e))
                     log_line(self.bot_name, f"Task {task.task_id} failed, requeued: {e}")
                 else:
-                    self._dead_letter(task, reason=f"error:{e}")
+                    self._dead_letter(task, reason=f"error:{e}", worker_id=worker_id, started_at=started_at)
             finally:
                 with self.active_count_lock:
                     self.active_count -= 1
                 self.task_queue.task_done()
                 log_line(self.bot_name, f"Task done: id={task.task_id} dur={utc_ts()-start:.2f}s q={self.task_queue.qsize()}")
+        self.state_db.update_worker_health(
+            worker_id=worker_id,
+            last_seen=iso_now(),
+            status="stopped",
+            current_task=None,
+        )
 
     def _record_result(self, task: Task, result: AgentResult) -> None:
         ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -1112,7 +1203,14 @@ class OpenClawBot:
         }
         write_json(self.results_dir / f"{self.bot_name}_{task.kind}_{ts}_{task.task_id}.json", out)
 
-    def _dead_letter(self, task: Task, reason: str) -> None:
+    def _dead_letter(
+        self,
+        task: Task,
+        reason: str,
+        *,
+        worker_id: Optional[str] = None,
+        started_at: Optional[str] = None,
+    ) -> None:
         ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         out = {
             "timestamp": iso_now(), "bot": self.bot_name, "reason": reason,
@@ -1121,6 +1219,22 @@ class OpenClawBot:
             "control_flags": control_flags(),
         }
         write_json(self.dead_letter_dir / f"dead_{self.bot_name}_{task.task_id}_{ts}.json", out)
+        completed_at = iso_now()
+        self.state_db.record_task_status(
+            task_id=task.task_id,
+            worker=worker_id,
+            status="dead_letter",
+            started_at=started_at,
+            completed_at=completed_at,
+            output_summary=reason,
+        )
+        if worker_id:
+            self.state_db.update_worker_health(
+                worker_id=worker_id,
+                last_seen=completed_at,
+                status="idle",
+                current_task=None,
+            )
 
     def enqueue(self, task: Task) -> None:
         self.task_queue.put((task.priority, task.created_at, task))
@@ -1249,6 +1363,13 @@ class OpenClawBot:
 
     def stop(self) -> None:
         self.running = False
+        for worker_id in self.worker_ids:
+            self.state_db.update_worker_health(
+                worker_id=worker_id,
+                last_seen=iso_now(),
+                status="stopping",
+                current_task=None,
+            )
         log_line(self.bot_name, "Stopping OpenClaw bot")
 
 
