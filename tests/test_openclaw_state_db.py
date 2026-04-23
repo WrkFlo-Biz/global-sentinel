@@ -1,0 +1,143 @@
+import importlib.util
+import json
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+from src.core.openclaw_state_db import (
+    OpenClawStateDB,
+    TASK_HISTORY_COLUMNS,
+    TARGET_SCHEMA_VERSION,
+    WORKER_HEALTH_COLUMNS,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_agent_factory():
+    script_path = REPO_ROOT / "scripts" / "agent_factory.py"
+    module_name = "test_agent_factory_module"
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_state_db_schema_contains_task_and_worker_tables(tmp_path: Path):
+    db_path = tmp_path / "state.db"
+    state_db = OpenClawStateDB(db_path)
+
+    snapshot = state_db.schema_snapshot()
+
+    assert snapshot["db_path"] == str(db_path)
+    assert snapshot["user_version"] == TARGET_SCHEMA_VERSION
+    assert snapshot["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
+    assert snapshot["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+
+    second_snapshot = state_db.ensure_schema()
+    assert second_snapshot["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
+    assert second_snapshot["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+
+
+def test_migrate_state_db_script_is_idempotent(tmp_path: Path):
+    db_path = tmp_path / "state.db"
+    script_path = REPO_ROOT / "scripts" / "ops" / "migrate_state_db.py"
+
+    first = subprocess.run(
+        [sys.executable, str(script_path), "--db-path", str(db_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        [sys.executable, str(script_path), "--db-path", str(db_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+
+    first_payload = json.loads(first.stdout)
+    second_payload = json.loads(second.stdout)
+    assert first_payload["user_version"] == TARGET_SCHEMA_VERSION
+    assert second_payload["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
+    assert second_payload["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+
+
+def test_agent_factory_records_task_history_and_worker_health(tmp_path: Path, monkeypatch):
+    module = _load_agent_factory()
+    repo_root = tmp_path
+    log_dir = repo_root / "logs"
+    reports_dir = repo_root / "reports"
+    control_dir = repo_root / "control"
+    staging_dir = repo_root / "config" / "staging"
+    ops_reports = reports_dir / "openclaw_ops"
+    research_reports = reports_dir / "openclaw_research"
+
+    for path in [log_dir, reports_dir, control_dir, staging_dir, ops_reports, research_reports]:
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("OPENCLAW_MIN_WORKERS", "0")
+    monkeypatch.setenv("OPENCLAW_STATE_DB_PATH", str(repo_root / "state.db"))
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(module, "LOG_DIR", log_dir)
+    monkeypatch.setattr(module, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(module, "CONTROL_DIR", control_dir)
+    monkeypatch.setattr(module, "STAGING_DIR", staging_dir)
+    monkeypatch.setattr(module, "OPENCLAW_OPS_REPORTS", ops_reports)
+    monkeypatch.setattr(module, "OPENCLAW_RESEARCH_REPORTS", research_reports)
+
+    bot = module.OpenClawBot("ops", {})
+    task = module.Task(task_id="task-1", kind="monitoring_alerting", payload={})
+    started_at = "2026-04-23T21:00:00Z"
+    bot._mark_task_started(task, "ops-worker-1", started_at)
+    result = module.AgentResult(task_id=task.task_id, success=True, summary="health ok")
+    bot._mark_task_result(task, result, "ops-worker-1", started_at)
+    bot._dead_letter(
+        module.Task(task_id="task-2", kind="safety_audit", payload={}),
+        reason="ttl_expired",
+    )
+
+    with sqlite3.connect(repo_root / "state.db") as conn:
+        task_row = conn.execute(
+            """
+            SELECT task_id, worker, status, started_at, completed_at, output_summary
+            FROM task_history
+            WHERE task_id = 'task-1'
+            """
+        ).fetchone()
+        dead_row = conn.execute(
+            """
+            SELECT task_id, worker, status, output_summary
+            FROM task_history
+            WHERE task_id = 'task-2'
+            """
+        ).fetchone()
+        worker_row = conn.execute(
+            """
+            SELECT worker_id, status, current_task
+            FROM worker_health
+            WHERE worker_id = 'ops-worker-1'
+            """
+        ).fetchone()
+
+    assert task_row[0] == "task-1"
+    assert task_row[1] == "ops-worker-1"
+    assert task_row[2] == "completed"
+    assert task_row[3] == started_at
+    assert task_row[4] is not None
+    assert task_row[5] == "health ok"
+
+    assert dead_row[0] == "task-2"
+    assert dead_row[1] is None
+    assert dead_row[2] == "dead_letter"
+    assert dead_row[3] == "ttl_expired"
+
+    assert worker_row[0] == "ops-worker-1"
+    assert worker_row[1] == "idle"
+    assert worker_row[2] is None
