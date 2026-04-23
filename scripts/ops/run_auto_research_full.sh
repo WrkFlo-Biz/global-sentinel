@@ -59,7 +59,7 @@ log "Researcher exit: $RESEARCHER_EXIT, Optimizer exit: $OPTIMIZER_EXIT"
 SUMMARY="$REPO_ROOT/data/quantum_feed/auto_research_optimizer.json"
 if [ -f "$SUMMARY" ]; then
     log "--- Optimizer Summary ---"
-    cat "$SUMMARY" | tee -a "$LOG_FILE"
+    tee -a "$LOG_FILE" < "$SUMMARY"
 fi
 
 exit $OPTIMIZER_EXIT

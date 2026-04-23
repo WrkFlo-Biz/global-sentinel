@@ -13,15 +13,21 @@ print_header() {
   printf '\n== %s ==\n' "$1"
 }
 
+remote_python() {
+  ssh "openclaw@${GS_HOST}" python3 - "$GS_REMOTE_ROOT"
+}
+
 print_header "Services"
 ssh "openclaw@${GS_HOST}" "sudo systemctl is-active global-sentinel global-sentinel-dashboard global-sentinel-reconciler"
 
 print_header "Latest Crisis Monitor Event"
-ssh "openclaw@${GS_HOST}" "python3 - <<'PY'
+remote_python <<'PY'
 import json
+import sys
 from pathlib import Path
 
-path = Path('${GS_REMOTE_ROOT}/logs/events/crisis_monitor_events.jsonl')
+remote_root = Path(sys.argv[1])
+path = remote_root / 'logs/events/crisis_monitor_events.jsonl'
 if not path.exists() or path.stat().st_size == 0:
     print('missing')
     raise SystemExit(0)
@@ -37,14 +43,16 @@ print(json.dumps({
     'orders_submitted': payload.get('orders_submitted'),
     'candidates': payload.get('candidates'),
 }, indent=2))
-PY"
+PY
 
 print_header "Latest Shadow Diagnostics"
-ssh "openclaw@${GS_HOST}" "python3 - <<'PY'
+remote_python <<'PY'
 import json
+import sys
 from pathlib import Path
 
-path = Path('${GS_REMOTE_ROOT}/logs/events/crisis_monitor_events.jsonl')
+remote_root = Path(sys.argv[1])
+path = remote_root / 'logs/events/crisis_monitor_events.jsonl'
 if not path.exists() or path.stat().st_size == 0:
     print('missing')
     raise SystemExit(0)
@@ -71,27 +79,31 @@ for row in rows[-8:]:
         'orders_submitted': payload.get('orders_submitted'),
         'candidates': payload.get('candidates'),
     }))
-PY"
+PY
 
 print_header "Heartbeat"
-ssh "openclaw@${GS_HOST}" "python3 - <<'PY'
+remote_python <<'PY'
 import json
+import sys
 from pathlib import Path
 
-path = Path('${GS_REMOTE_ROOT}/logs/heartbeat.json')
+remote_root = Path(sys.argv[1])
+path = remote_root / 'logs/heartbeat.json'
 if not path.exists() or path.stat().st_size == 0:
     print('missing')
     raise SystemExit(0)
 
 print(json.dumps(json.loads(path.read_text()), indent=2))
-PY"
+PY
 
 print_header "Latest Router Summary"
-ssh "openclaw@${GS_HOST}" "python3 - <<'PY'
+remote_python <<'PY'
 import json
+import sys
 from pathlib import Path
 
-path = Path('${GS_REMOTE_ROOT}/logs/execution/shadow_order_router.jsonl')
+remote_root = Path(sys.argv[1])
+path = remote_root / 'logs/execution/shadow_order_router.jsonl'
 if not path.exists() or path.stat().st_size == 0:
     print('missing')
     raise SystemExit(0)
@@ -111,14 +123,16 @@ print(json.dumps({
     'selected_sample': selected,
     'bound_sample': bound,
 }, indent=2))
-PY"
+PY
 
 print_header "Latest Binding Sample"
-ssh "openclaw@${GS_HOST}" "python3 - <<'PY'
+remote_python <<'PY'
 import json
+import sys
 from pathlib import Path
 
-path = Path('${GS_REMOTE_ROOT}/logs/execution/router_order_bindings.jsonl')
+remote_root = Path(sys.argv[1])
+path = remote_root / 'logs/execution/router_order_bindings.jsonl'
 if not path.exists() or path.stat().st_size == 0:
     print('missing')
     raise SystemExit(0)
@@ -137,7 +151,7 @@ for row in rows:
         'qty_cap': row.get('qty_cap'),
         'qty_cap_source': row.get('qty_cap_source'),
     }))
-PY"
+PY
 
 fetch_orders() {
   local label="$1"
@@ -153,21 +167,21 @@ fetch_orders() {
     -H "APCA-API-KEY-ID: ${key}" \
     -H "APCA-API-SECRET-KEY: ${secret}" \
     "https://paper-api.alpaca.markets/v2/orders?status=all&limit=5&direction=desc" \
-    | python3 - <<'PY'
+    | python3 -c '
 import json
 import sys
 
 rows = json.load(sys.stdin)
 for row in rows:
     print(json.dumps({
-        'submitted_at': row.get('submitted_at'),
-        'symbol': row.get('symbol'),
-        'side': row.get('side'),
-        'qty': row.get('qty'),
-        'status': row.get('status'),
-        'type': row.get('type'),
+        "submitted_at": row.get("submitted_at"),
+        "symbol": row.get("symbol"),
+        "side": row.get("side"),
+        "qty": row.get("qty"),
+        "status": row.get("status"),
+        "type": row.get("type"),
     }))
-PY
+'
 }
 
 print_header "Day Trade Recent Orders"

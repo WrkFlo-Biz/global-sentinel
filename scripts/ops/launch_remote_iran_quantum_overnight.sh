@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -15,8 +15,12 @@ JOB_LOG="${JOB_LOG:-$REMOTE_ROOT/logs/iran_disruption_quantum_overnight.out}"
 JOB_ERR_LOG="${JOB_ERR_LOG:-$REMOTE_ROOT/logs/iran_disruption_quantum_overnight.err}"
 LAUNCHER_LOG="${LAUNCHER_LOG:-/Users/mosestut/global-sentinel/logs/iran_disruption_quantum_launcher.log}"
 SLEEP_SECONDS="${SLEEP_SECONDS:-60}"
+declare -a SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
 
 mkdir -p "$(dirname "$LAUNCHER_LOG")"
+
+UNIT_FILE="$(mktemp)"
+trap 'rm -f "$UNIT_FILE"' EXIT
 
 log() {
   printf '[%s] %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" >>"$LAUNCHER_LOG"
@@ -46,17 +50,37 @@ WantedBy=multi-user.target
 EOF
 }
 
+run_remote() {
+  ssh "${SSH_OPTS[@]}" "$VM_HOST" bash -s -- "$@"
+}
+
+copy_to_remote() {
+  scp "${SSH_OPTS[@]}" "$1" "$2"
+}
+
+service_unit > "$UNIT_FILE"
+
 log "launcher started"
 
 while true; do
-  if status_output="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$VM_HOST" "sudo -n systemctl is-active ${REMOTE_SERVICE_NAME} 2>/dev/null || true" 2>&1)"; then
+  if status_output="$(
+    run_remote "$REMOTE_SERVICE_NAME" <<'EOF'
+remote_service_name="$1"
+sudo -n systemctl is-active "$remote_service_name" 2>/dev/null || true
+EOF
+  )"; then
     if [[ "${status_output}" == "active" ]]; then
       log "remote service already active: ${status_output}"
       exit 0
     fi
   fi
 
-  if output="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$VM_HOST" "mkdir -p ${REMOTE_ROOT}/scripts/ops ${REMOTE_ROOT}/logs" 2>&1)"; then
+  if output="$(
+    run_remote "$REMOTE_ROOT" 2>&1 <<'EOF'
+remote_root="$1"
+mkdir -p "$remote_root/scripts/ops" "$remote_root/logs"
+EOF
+  )"; then
     log "remote directories ready: ${output:-ok}"
   else
     log "remote directory setup failed: ${output}"
@@ -64,8 +88,22 @@ while true; do
   fi
 
   if [[ "${goto_retry:-0}" -eq 0 ]]; then
-    if deploy_output="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$VM_HOST" "cat > ${REMOTE_RUNNER} && chmod +x ${REMOTE_RUNNER}" < "$LOCAL_RUNNER" 2>&1)"; then
-      log "remote runner deployed: ${deploy_output:-ok}"
+    if deploy_output="$(copy_to_remote "$LOCAL_RUNNER" "$VM_HOST:$REMOTE_RUNNER" 2>&1)"; then
+      if chmod_output="$(
+        run_remote "$REMOTE_RUNNER" 2>&1 <<'EOF'
+remote_runner="$1"
+chmod +x "$remote_runner"
+EOF
+      )"; then
+        if [[ -n "${deploy_output}" ]]; then
+          log "remote runner deployed: ${deploy_output}; chmod: ${chmod_output:-ok}"
+        else
+          log "remote runner deployed: ${chmod_output:-ok}"
+        fi
+      else
+        log "remote runner chmod failed: ${chmod_output}"
+        goto_retry=1
+      fi
     else
       log "remote runner deploy failed: ${deploy_output}"
       goto_retry=1
@@ -73,7 +111,7 @@ while true; do
   fi
 
   if [[ "${goto_retry:-0}" -eq 0 ]]; then
-    if unit_output="$(service_unit | ssh -o BatchMode=yes -o ConnectTimeout=8 "$VM_HOST" "cat > /tmp/${REMOTE_SERVICE_NAME}" 2>&1)"; then
+    if unit_output="$(copy_to_remote "$UNIT_FILE" "$VM_HOST:/tmp/$REMOTE_SERVICE_NAME" 2>&1)"; then
       log "remote service unit staged: ${unit_output:-ok}"
     else
       log "remote service unit stage failed: ${unit_output}"
@@ -82,7 +120,16 @@ while true; do
   fi
 
   if [[ "${goto_retry:-0}" -eq 0 ]]; then
-    if install_output="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$VM_HOST" "sudo -n install -o root -g root -m 644 /tmp/${REMOTE_SERVICE_NAME} ${REMOTE_SERVICE_PATH} && sudo -n systemctl daemon-reload && sudo -n systemctl enable --now ${REMOTE_SERVICE_NAME} && sudo -n systemctl is-active ${REMOTE_SERVICE_NAME}" 2>&1)"; then
+    if install_output="$(
+      run_remote "$REMOTE_SERVICE_NAME" "$REMOTE_SERVICE_PATH" 2>&1 <<'EOF'
+remote_service_name="$1"
+remote_service_path="$2"
+sudo -n install -o root -g root -m 644 "/tmp/${remote_service_name}" "$remote_service_path"
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now "$remote_service_name"
+sudo -n systemctl is-active "$remote_service_name"
+EOF
+    )"; then
       log "remote service installed: ${install_output}"
       exit 0
     else

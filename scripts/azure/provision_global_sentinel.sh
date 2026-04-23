@@ -34,6 +34,13 @@ WORKER_PUBLIC_IP_NAME="${WORKER_PUBLIC_IP_NAME:-pip-global-sentinel-worker}"
 ENABLE_PUBLIC_WORKER_IP="${ENABLE_PUBLIC_WORKER_IP:-false}"
 KV_NAME="${AZURE_KEY_VAULT_NAME:-gs-keyvault}"
 
+declare -a TAG_VALUES=()
+declare -a TAG_ARGS=()
+if [[ -n "$TAGS" ]]; then
+  read -r -a TAG_VALUES <<< "$TAGS"
+  TAG_ARGS=(--tags "${TAG_VALUES[@]}")
+fi
+
 if [[ ! -f "$SSH_PUBLIC_KEY_PATH" ]]; then
   echo "ERROR: SSH public key not found at $SSH_PUBLIC_KEY_PATH"
   exit 1
@@ -49,7 +56,7 @@ echo "==> Creating resource group: $RESOURCE_GROUP ($LOCATION)"
 az group create \
   --name "$RESOURCE_GROUP" \
   --location "$LOCATION" \
-  --tags $TAGS >/dev/null
+  "${TAG_ARGS[@]}" >/dev/null
 
 echo "==> Creating VNet and subnets"
 if ! az network vnet show -g "$RESOURCE_GROUP" -n "$VNET_NAME" >/dev/null 2>&1; then
@@ -59,7 +66,7 @@ if ! az network vnet show -g "$RESOURCE_GROUP" -n "$VNET_NAME" >/dev/null 2>&1; 
     --address-prefixes 10.42.0.0/16 \
     --subnet-name "$SUBNET_NAME" \
     --subnet-prefixes 10.42.1.0/24 \
-    --tags $TAGS >/dev/null
+    "${TAG_ARGS[@]}" >/dev/null
 else
   echo "VNet already exists: $VNET_NAME"
 fi
@@ -74,7 +81,7 @@ fi
 
 echo "==> Creating NSG and rules"
 if ! az network nsg show -g "$RESOURCE_GROUP" -n "$NSG_NAME" >/dev/null 2>&1; then
-  az network nsg create -g "$RESOURCE_GROUP" -n "$NSG_NAME" --tags $TAGS >/dev/null
+  az network nsg create -g "$RESOURCE_GROUP" -n "$NSG_NAME" "${TAG_ARGS[@]}" >/dev/null
 fi
 
 # SSH rule (restrict source to your IP ASAP)
@@ -112,7 +119,7 @@ if ! az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" >/dev/n
     --sku Standard \
     --allocation-method Static \
     --version IPv4 \
-    --tags $TAGS >/dev/null
+    "${TAG_ARGS[@]}" >/dev/null
 fi
 
 if ! az network nic show -g "$RESOURCE_GROUP" -n "$NIC_NAME" >/dev/null 2>&1; then
@@ -123,7 +130,7 @@ if ! az network nic show -g "$RESOURCE_GROUP" -n "$NIC_NAME" >/dev/null 2>&1; th
     --subnet "$SUBNET_NAME" \
     --network-security-group "$NSG_NAME" \
     --public-ip-address "$PUBLIC_IP_NAME" \
-    --tags $TAGS >/dev/null
+    "${TAG_ARGS[@]}" >/dev/null
 fi
 
 echo "==> Creating control-plane VM: $VM_NAME"
@@ -141,7 +148,7 @@ if ! az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" >/dev/null 2>&1; then
     --enable-agent true \
     --enable-auto-update true \
     --assign-identity \
-    --tags $TAGS >/dev/null
+    "${TAG_ARGS[@]}" >/dev/null
 else
   echo "VM already exists: $VM_NAME"
 fi
@@ -170,7 +177,7 @@ if [[ "$CREATE_WORKER_VM" == "true" ]]; then
         --sku Standard \
         --allocation-method Static \
         --version IPv4 \
-        --tags $TAGS >/dev/null
+        "${TAG_ARGS[@]}" >/dev/null
     fi
   fi
 
@@ -181,8 +188,10 @@ if [[ "$CREATE_WORKER_VM" == "true" ]]; then
       --vnet-name "$VNET_NAME"
       --subnet "$WORKER_SUBNET_NAME"
       --network-security-group "$NSG_NAME"
-      --tags $TAGS
     )
+    if [[ ${#TAG_ARGS[@]} -gt 0 ]]; then
+      NIC_ARGS+=("${TAG_ARGS[@]}")
+    fi
     if [[ "$ENABLE_PUBLIC_WORKER_IP" == "true" ]]; then
       NIC_ARGS+=(--public-ip-address "$WORKER_PUBLIC_IP_NAME")
     fi
@@ -203,7 +212,7 @@ if [[ "$CREATE_WORKER_VM" == "true" ]]; then
       --enable-agent true \
       --enable-auto-update true \
       --assign-identity \
-      --tags $TAGS >/dev/null
+      "${TAG_ARGS[@]}" >/dev/null
   fi
 fi
 

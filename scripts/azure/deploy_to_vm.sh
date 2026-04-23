@@ -7,8 +7,6 @@ set -euo pipefail
 # Deploys the global-sentinel repo to the Azure VM and sets up
 # the crisis monitor as a systemd service.
 
-VM_RG="openclaw-rg"
-VM_NAME="openclaw-gateway-vm"
 VM_IP="20.124.180.8"
 REMOTE_DIR="/opt/global-sentinel"
 SSH_USER="openclaw"
@@ -35,11 +33,25 @@ rsync -avz --delete \
 
 # 2. Install Python dependencies on VM
 echo "[2/4] Installing dependencies on VM..."
-ssh "${SSH_USER}@${VM_IP}" "cd ${REMOTE_DIR} && pip3 install -r requirements.txt 2>/dev/null || pip install -r requirements.txt 2>/dev/null || echo 'pip install skipped (may need sudo)'"
+ssh "${SSH_USER}@${VM_IP}" bash -s -- "$REMOTE_DIR" <<'EOF'
+remote_dir="$1"
+
+cd "$remote_dir"
+pip3 install -r requirements.txt 2>/dev/null \
+  || pip install -r requirements.txt 2>/dev/null \
+  || echo 'pip install skipped (may need sudo)'
+EOF
 
 # 3. Copy systemd service file
 echo "[3/4] Setting up systemd service..."
-ssh "${SSH_USER}@${VM_IP}" "sudo cp ${REMOTE_DIR}/scripts/systemd/global-sentinel.service /etc/systemd/system/global-sentinel.service 2>/dev/null && sudo systemctl daemon-reload && sudo systemctl enable global-sentinel || echo 'systemd setup skipped (check permissions)'"
+ssh "${SSH_USER}@${VM_IP}" bash -s -- "$REMOTE_DIR" <<'EOF'
+remote_dir="$1"
+
+sudo cp "$remote_dir/scripts/systemd/global-sentinel.service" /etc/systemd/system/global-sentinel.service 2>/dev/null \
+  && sudo systemctl daemon-reload \
+  && sudo systemctl enable global-sentinel \
+  || echo 'systemd setup skipped (check permissions)'
+EOF
 
 # 4. Restart service
 echo "[4/4] Restarting Global Sentinel service..."

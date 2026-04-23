@@ -1,7 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # EOD Flatten: Close ALL day trade positions
 # Run daily at 15:45 ET via gs-eod-flatten.timer
 set -a
+# shellcheck source=/dev/null
 source /opt/global-sentinel/.env
 set +a
 
@@ -11,7 +12,7 @@ BASE_URL="${ALPACA_PAPER_BASE_URL:-https://paper-api.alpaca.markets}"
 LOG="/opt/global-sentinel/logs/execution/eod_flatten.log"
 FLAG="/opt/global-sentinel/control/eod_flatten_active"
 
-mkdir -p "$(dirname $LOG)" "$(dirname $FLAG)"
+mkdir -p "$(dirname "$LOG")" "$(dirname "$FLAG")"
 
 TS=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z')
 

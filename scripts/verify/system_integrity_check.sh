@@ -141,7 +141,10 @@ else
 fi
 
 # --- 12. Terminology Guard ---
-LEGACY=$(grep -rn "submitted_orders_count" "$REPO_ROOT/src/" 2>/dev/null | grep -v "\.pyc" | wc -l | tr -d ' ')
+LEGACY=$(
+    grep -Roc --exclude='*.pyc' "submitted_orders_count" "$REPO_ROOT/src/" 2>/dev/null \
+        | awk -F: '{sum += $NF} END {print sum+0}'
+)
 if [ "$LEGACY" = "0" ]; then
     check "terminology" "GREEN" "No legacy terminology found"
 else
@@ -150,7 +153,7 @@ fi
 
 # --- 13. Systemd Services ---
 if [ -d "$REPO_ROOT/scripts/systemd" ]; then
-    SVC_COUNT=$(ls "$REPO_ROOT"/scripts/systemd/*.service 2>/dev/null | wc -l | tr -d ' ')
+    SVC_COUNT=$(find "$REPO_ROOT/scripts/systemd" -maxdepth 1 -type f -name '*.service' | wc -l | tr -d ' ')
     check "systemd" "GREEN" "$SVC_COUNT service files"
 else
     check "systemd" "YELLOW" "No systemd service files found"
