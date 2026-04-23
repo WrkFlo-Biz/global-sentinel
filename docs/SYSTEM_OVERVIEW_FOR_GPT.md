@@ -13,6 +13,7 @@ The system runs on:
 - **Azure Container Apps**: For isolated quantum research jobs
 - **GitHub Actions**: CI/CD and research pipeline automation
 - **Alpaca Paper Trading**: Two accounts (day trade $100K, medium-long $500K)
+- For ambiguous multi-repo Wrk-Flo tasks, use `docs/cross-project-routing.md` to decide which repo owns the work.
 
 ---
 
