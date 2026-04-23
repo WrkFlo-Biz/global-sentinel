@@ -243,6 +243,73 @@ def test_send_request_uses_azure_claude_api_key_when_openai_key_missing(monkeypa
     assert response.policy_annotations["fallback_mode"] == "azure_direct"
 
 
+def test_send_request_loads_orchestrator_and_fallback_key_from_repo_env(monkeypatch):
+    orchestrator_url = "http://router.repo/v1/inference"
+    azure_url = (
+        "https://azure.repo/openai/deployments/repo-mini/chat/completions"
+        "?api-version=2024-06-01-preview"
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_post(url, *, json, headers=None, timeout=None):
+        calls.append(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        if url == orchestrator_url:
+            raise httpx.ConnectError("router unavailable", request=httpx.Request("POST", url))
+        return _response(
+            url,
+            {
+                "choices": [{"message": {"content": "repo env fallback answer"}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+            },
+        )
+
+    monkeypatch.delenv("ORCHESTRATOR_URL", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLAUDE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_VERSION", raising=False)
+    monkeypatch.setattr(
+        foundry_client,
+        "_load_repo_env",
+        lambda: {
+            "ORCHESTRATOR_URL": orchestrator_url,
+            "AZURE_OPENAI_ENDPOINT": "https://azure.repo/",
+            "AZURE_OPENAI_API_KEY": "repo-secret",
+            "AZURE_OPENAI_DEPLOYMENT": "repo-mini",
+            "AZURE_OPENAI_API_VERSION": "2024-06-01-preview",
+        },
+    )
+    monkeypatch.setattr(foundry_client.httpx, "post", fake_post)
+
+    response = foundry_client.send_request(
+        intent_type="market_query",
+        target_role="planner",
+        operating_context={"mode": "NORMAL"},
+        latency_class="interactive",
+        trace_context={"intent_id": "repo-env-route"},
+        messages=[{"role": "user", "content": "Route through repo env"}],
+    )
+
+    assert [call["url"] for call in calls] == [orchestrator_url, azure_url]
+    assert calls[1]["headers"] == {
+        "Content-Type": "application/json",
+        "api-key": "repo-secret",
+    }
+    assert calls[1]["timeout"] == 30.0
+    assert response.output == "repo env fallback answer"
+    assert response.route["provider"] == "azure"
+    assert response.route["model"] == "repo-mini"
+    assert response.route["tokens"] == {"input": 7, "output": 5, "total": 12}
+
+
 def test_send_request_parses_openai_style_response(monkeypatch):
     def fake_post(url, *, json, headers=None, timeout=None):
         return _response(
@@ -345,6 +412,40 @@ def test_send_request_propagates_orchestrator_http_status_error_without_fallback
         )
 
     assert calls == [orchestrator_url]
+
+
+def test_send_request_propagates_azure_fallback_http_status_error(monkeypatch):
+    orchestrator_url = "http://router.test/v1/inference"
+    azure_url = (
+        "https://azure.test/openai/deployments/fallback-mini/chat/completions"
+        "?api-version=2024-06-01-preview"
+    )
+    calls: list[str] = []
+
+    def fake_post(url, *, json, headers=None, timeout=None):
+        calls.append(url)
+        if url == orchestrator_url:
+            raise httpx.ConnectError("router unavailable", request=httpx.Request("POST", url))
+        return _error_response(url, 401, {"error": "bad api key"})
+
+    monkeypatch.setenv("ORCHESTRATOR_URL", orchestrator_url)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://azure.test/")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "fallback-mini")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2024-06-01-preview")
+    monkeypatch.setattr(foundry_client.httpx, "post", fake_post)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        foundry_client.send_request(
+            intent_type="market_query",
+            target_role="planner",
+            operating_context={"mode": "NORMAL"},
+            latency_class="interactive",
+            trace_context={"intent_id": "market-query-fallback-status-error"},
+            messages=[{"role": "user", "content": "What broke?"}],
+        )
+
+    assert calls == [orchestrator_url, azure_url]
 
 
 def test_send_request_raises_for_missing_output_text(monkeypatch):
