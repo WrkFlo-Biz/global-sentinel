@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
@@ -25,11 +26,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import requests
 
-logger = logging.getLogger("global_sentinel.trade_approval")
-
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 APPROVAL_LOG_PATH = REPO_ROOT / "logs" / "trade_approvals.jsonl"
 PENDING_DIR = Path("/tmp/gs_pending_approvals")
+APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v1"
+STATE_DB_FILENAME = "state.db"
+
+logger = logging.getLogger("global_sentinel.trade_approval")
 
 # Minimum notional threshold used for policy classification. In fail-closed mode,
 # below-threshold orders still block unless an explicit approval path says otherwise.
@@ -45,13 +48,146 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return default
 
 
-def _log_approval(entry: dict):
+def _state_db_path() -> Path:
+    override = os.getenv("GLOBAL_SENTINEL_STATE_DB_PATH") or os.getenv("OPENCLAW_STATE_DB_PATH")
+    if override:
+        return Path(override).expanduser()
+    return REPO_ROOT / STATE_DB_FILENAME
+
+
+def _ensure_approval_audit_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trade_approval_audit (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            requesting_agent TEXT,
+            decision TEXT,
+            reason TEXT,
+            fail_closed_trigger TEXT,
+            approved INTEGER,
+            trade_details_json TEXT NOT NULL,
+            metadata_json TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_approval_id
+        ON trade_approval_audit(approval_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_event_type
+        ON trade_approval_audit(event_type)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_timestamp
+        ON trade_approval_audit(timestamp)
+        """
+    )
+
+
+def _requesting_agent(order_info: Dict[str, Any]) -> str:
+    for key in ("requesting_agent", "source_agent", "agent_id", "agent", "worker", "signal_source"):
+        value = order_info.get(key)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return "system"
+
+
+def _log_approval_json(entry: Dict[str, Any]) -> None:
     try:
         APPROVAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(APPROVAL_LOG_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        with open(APPROVAL_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
     except Exception as e:
-        logger.warning(f"Failed to log approval: {e}")
+        logger.warning("Failed to write trade approval audit JSON log: %s", e)
+
+
+def _log_approval_state_db(entry: Dict[str, Any]) -> None:
+    try:
+        db_path = _state_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path, timeout=5.0) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA journal_mode = WAL")
+            _ensure_approval_audit_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO trade_approval_audit (
+                    approval_id,
+                    event_type,
+                    timestamp,
+                    requesting_agent,
+                    decision,
+                    reason,
+                    fail_closed_trigger,
+                    approved,
+                    trade_details_json,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(entry["approval_id"]),
+                    str(entry["event_type"]),
+                    str(entry["timestamp"]),
+                    str(entry["requesting_agent"]),
+                    entry.get("decision"),
+                    entry.get("reason"),
+                    entry.get("fail_closed_trigger"),
+                    None if entry.get("approved") is None else int(bool(entry.get("approved"))),
+                    json.dumps(dict(entry["trade_details"]), sort_keys=True, default=str),
+                    None
+                    if entry.get("metadata") is None
+                    else json.dumps(entry["metadata"], sort_keys=True, default=str),
+                ),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("Failed to write trade approval audit row to state.db: %s", e)
+
+
+def _record_approval_event(
+    *,
+    event_type: str,
+    timestamp: str,
+    approval_id: str,
+    order_info: Dict[str, Any],
+    decision: Optional[str],
+    reason: str,
+    approved: Optional[bool],
+    fail_closed_trigger: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    cleaned_metadata = {
+        str(key): value
+        for key, value in (metadata or {}).items()
+        if value is not None
+    } or None
+    entry = {
+        "schema_version": APPROVAL_AUDIT_SCHEMA_VERSION,
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "approval_id": approval_id,
+        "requesting_agent": _requesting_agent(order_info),
+        "trade_details": _safe_order_summary(order_info),
+        "decision": decision,
+        "reason": reason,
+        "approved": approved,
+        "fail_closed_trigger": fail_closed_trigger,
+        "metadata": cleaned_metadata,
+    }
+    _log_approval_json(entry)
+    _log_approval_state_db(entry)
 
 
 def _normalize_decision(decision: Any) -> Optional[str]:
@@ -75,10 +211,53 @@ def _log_trade_blocked(order_info: Dict[str, Any], decision: str, reason: str) -
     )
 
 
-def _blocked_result(ts: str, order_info: Dict[str, Any], decision: str, reason: str) -> Dict[str, Any]:
+def _fail_closed_trigger(decision: str, reason: str) -> Optional[str]:
+    if decision == "disabled":
+        return "approval_disabled"
+    if decision == "below_threshold":
+        return "minimum_notional_gate"
+    if decision == "timeout":
+        return "approval_timeout"
+    if decision != "error":
+        return None
+
+    lowered_reason = reason.lower()
+    if "invalid trade sizing" in lowered_reason:
+        return "invalid_trade_sizing"
+    if "invalid trade approval config" in lowered_reason:
+        return "invalid_approval_config"
+    if "missing telegram config" in lowered_reason:
+        return "missing_telegram_config"
+    if "failed to build trade approval request" in lowered_reason:
+        return "approval_payload_build_error"
+    if "failed to send telegram approval request" in lowered_reason:
+        return "telegram_send_failure"
+    if "invalid approval decision" in lowered_reason:
+        return "invalid_approval_decision"
+    return "approval_error"
+
+
+def _blocked_result(
+    ts: str,
+    approval_id: str,
+    order_info: Dict[str, Any],
+    decision: str,
+    reason: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     _log_trade_blocked(order_info, decision, reason)
     result = {"approved": False, "decision": decision, "reason": reason}
-    _log_approval({"ts": ts, "order": _safe_order_summary(order_info), **result})
+    _record_approval_event(
+        event_type="approval_decision",
+        timestamp=ts,
+        approval_id=approval_id,
+        order_info=order_info,
+        decision=decision,
+        reason=reason,
+        approved=False,
+        fail_closed_trigger=_fail_closed_trigger(decision, reason),
+        metadata=metadata,
+    )
     return result
 
 
@@ -308,10 +487,34 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
             reason (str): human-readable reason
     """
     ts = datetime.now(timezone.utc).isoformat()
+    approval_id = uuid.uuid4().hex[:12]
+
+    _record_approval_event(
+        event_type="approval_requested",
+        timestamp=ts,
+        approval_id=approval_id,
+        order_info=order_info,
+        decision="requested",
+        reason="trade approval requested",
+        approved=None,
+        metadata={
+            "fail_closed_mode": True,
+            "trade_approval_enabled": _env_bool("TRADE_APPROVAL_ENABLED", False),
+            "configured_timeout_sec": os.getenv("TRADE_APPROVAL_TIMEOUT", "60"),
+            "auto_execute_requested": _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", False),
+        },
+    )
 
     # Check if approval is enabled
     if not _env_bool("TRADE_APPROVAL_ENABLED", False):
-        return _blocked_result(ts, order_info, "disabled", "TRADE_APPROVAL_ENABLED is false")
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "disabled",
+            "TRADE_APPROVAL_ENABLED is false",
+            metadata={"stage": "preflight"},
+        )
 
     # Check notional threshold
     try:
@@ -321,14 +524,30 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
             price = float(order_info.get("limit_price", 0) or 0)
             notional = qty * price
     except (TypeError, ValueError) as e:
-        return _blocked_result(ts, order_info, "error", f"Invalid trade sizing for approval: {e}")
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            f"Invalid trade sizing for approval: {e}",
+            metadata={
+                "raw_notional": order_info.get("notional"),
+                "raw_qty": order_info.get("qty"),
+                "raw_limit_price": order_info.get("limit_price"),
+            },
+        )
 
     if notional < MIN_NOTIONAL_FOR_APPROVAL:
         return _blocked_result(
             ts,
+            approval_id,
             order_info,
             "below_threshold",
             f"Notional ${notional:.2f} < ${MIN_NOTIONAL_FOR_APPROVAL:.2f} threshold; blocking without explicit approval",
+            metadata={
+                "evaluated_notional": notional,
+                "minimum_notional_for_approval": MIN_NOTIONAL_FOR_APPROVAL,
+            },
         )
 
     # Get Telegram config
@@ -338,7 +557,17 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
         thread_id = int(os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"))
         timeout_sec = int(os.getenv("TRADE_APPROVAL_TIMEOUT", "60"))
     except ValueError as e:
-        return _blocked_result(ts, order_info, "error", f"Invalid trade approval config: {e}")
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            f"Invalid trade approval config: {e}",
+            metadata={
+                "configured_thread_id": os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"),
+                "configured_timeout_sec": os.getenv("TRADE_APPROVAL_TIMEOUT", "60"),
+            },
+        )
     auto_execute = _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", False)
     if auto_execute:
         logger.warning("TRADE_APPROVAL_AUTO_EXECUTE is ignored in fail-closed mode")
@@ -346,22 +575,40 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
 
     if not token or not chat_id:
         logger.error("Missing TELEGRAM_BOT_TOKEN or chat_id for trade approval")
-        return _blocked_result(ts, order_info, "error", "Missing Telegram config for trade approval")
-
-    # Generate unique approval ID
-    approval_id = uuid.uuid4().hex[:12]
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            "Missing Telegram config for trade approval",
+            metadata={"token_present": bool(token), "chat_id_present": bool(chat_id)},
+        )
 
     # Build approval request; malformed payloads must fail closed.
     try:
         msg_text = _format_approval_message(order_info, timeout_sec, auto_execute)
     except Exception as e:
-        return _blocked_result(ts, order_info, "error", f"Failed to build trade approval request: {e}")
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            f"Failed to build trade approval request: {e}",
+            metadata={"timeout_sec": timeout_sec},
+        )
 
     # Send approval request with inline buttons
     msg_id = _send_with_buttons(msg_text, approval_id, token, chat_id, thread_id)
 
     if msg_id is None:
-        return _blocked_result(ts, order_info, "error", "Failed to send Telegram approval request")
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            "Failed to send Telegram approval request",
+            metadata={"timeout_sec": timeout_sec, "message_thread_id": thread_id},
+        )
 
     logger.info(f"Trade approval sent (msg_id={msg_id}, approval_id={approval_id}), waiting {timeout_sec}s...")
 
@@ -382,7 +629,22 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
     # Send confirmation
     _send_confirmation(result["approved"], order_info, result["reason"], token, chat_id, thread_id)
 
-    _log_approval({"ts": ts, "approval_id": approval_id, "order": _safe_order_summary(order_info), **result})
+    _record_approval_event(
+        event_type="approval_decision",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        approval_id=approval_id,
+        order_info=order_info,
+        decision=result["decision"],
+        reason=result["reason"],
+        approved=result["approved"],
+        fail_closed_trigger=_fail_closed_trigger(result["decision"], result["reason"]),
+        metadata={
+            "message_id": msg_id,
+            "message_thread_id": thread_id,
+            "timeout_sec": timeout_sec,
+            "raw_response": raw_text,
+        },
+    )
     return result
 
 
@@ -431,6 +693,8 @@ def _safe_order_summary(order_info: Dict[str, Any]) -> dict:
         "notional": order_info.get("notional"),
         "asset_class": order_info.get("asset_class"),
         "strategy_style": order_info.get("strategy_style"),
+        "signal_source": order_info.get("signal_source"),
+        "contract_id": order_info.get("contract_id"),
     }
 
 
