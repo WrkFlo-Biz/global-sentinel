@@ -6,9 +6,8 @@ Tagged as quantum-friendly or classical-only.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List
-
-import numpy as np
 
 
 class HigherOrderObjectives:
@@ -45,20 +44,24 @@ class HigherOrderObjectives:
         alpha: float = 0.05,
     ) -> float:
         """Compute portfolio CVaR at confidence level alpha."""
-        portfolio_returns = np.array(returns) @ np.array(weights) if len(np.array(returns).shape) > 1 else np.array(returns) * np.array(weights[0]) if len(weights) == 1 else np.array(returns)
+        if not returns:
+            return 0.0
 
-        if isinstance(returns[0], (list, np.ndarray)):
-            # Matrix of scenario returns
-            port_ret = np.array(returns) @ np.array(weights)
+        if isinstance(returns[0], (list, tuple)):
+            port_ret = [
+                sum(float(row[i]) * float(weights[i]) for i in range(min(len(row), len(weights))))
+                for row in returns
+            ]
+        elif len(weights) == 1:
+            port_ret = [float(value) * float(weights[0]) for value in returns]
         else:
-            # Single scenario
-            port_ret = np.array(returns)
+            port_ret = [float(value) for value in returns]
 
-        sorted_returns = np.sort(port_ret)
-        cutoff = int(np.ceil(len(sorted_returns) * alpha))
+        sorted_returns = sorted(float(value) for value in port_ret)
+        cutoff = int(math.ceil(len(sorted_returns) * alpha))
         if cutoff == 0:
             cutoff = 1
-        cvar = float(np.mean(sorted_returns[:cutoff]))
+        cvar = sum(sorted_returns[:cutoff]) / cutoff
         return round(cvar, 6)
 
     def compute_max_drawdown(self, cumulative_returns: List[float]) -> float:
@@ -75,27 +78,30 @@ class HigherOrderObjectives:
 
     def compute_skewness(self, returns: List[float]) -> float:
         """Compute skewness of return distribution."""
-        arr = np.array(returns)
-        n = len(arr)
+        n = len(returns)
         if n < 3:
             return 0.0
-        mean = np.mean(arr)
-        std = np.std(arr, ddof=1)
+        arr = [float(value) for value in returns]
+        mean = sum(arr) / n
+        variance = sum((value - mean) ** 2 for value in arr) / (n - 1)
+        std = math.sqrt(variance)
         if std < 1e-8:
             return 0.0
-        return float(round((n / ((n-1)*(n-2))) * np.sum(((arr - mean) / std) ** 3), 6))
+        centered_cubed = sum(((value - mean) / std) ** 3 for value in arr)
+        return float(round((n / ((n - 1) * (n - 2))) * centered_cubed, 6))
 
     def compute_kurtosis(self, returns: List[float]) -> float:
         """Compute excess kurtosis."""
-        arr = np.array(returns)
-        n = len(arr)
+        n = len(returns)
         if n < 4:
             return 0.0
-        mean = np.mean(arr)
-        std = np.std(arr, ddof=1)
+        arr = [float(value) for value in returns]
+        mean = sum(arr) / n
+        variance = sum((value - mean) ** 2 for value in arr) / (n - 1)
+        std = math.sqrt(variance)
         if std < 1e-8:
             return 0.0
-        kurt = float(np.mean(((arr - mean) / std) ** 4) - 3.0)
+        kurt = sum(((value - mean) / std) ** 4 for value in arr) / n - 3.0
         return round(kurt, 6)
 
     def list_objectives(self) -> List[Dict[str, Any]]:

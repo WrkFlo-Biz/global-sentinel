@@ -180,6 +180,7 @@ def _record_approval_event(
         "approval_id": approval_id,
         "requesting_agent": _requesting_agent(order_info),
         "trade_details": _safe_order_summary(order_info),
+        "order": _safe_order_summary(order_info),
         "decision": decision,
         "reason": reason,
         "approved": approved,

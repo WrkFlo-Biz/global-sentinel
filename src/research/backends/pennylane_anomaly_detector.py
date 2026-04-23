@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import random
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +55,31 @@ def _resolve_repo_relative_path(path: str | Path) -> Path:
     return repo_root / candidate
 
 
+def _pad_features(features: List[float], target_dim: int) -> list[float]:
+    arr = [float(value) for value in features[:target_dim]]
+    if len(arr) < target_dim:
+        arr.extend([0.0] * (target_dim - len(arr)))
+    return arr
+
+
+def _weights_to_list(weights: Any) -> Any:
+    if np is not None:
+        return np.array(weights, dtype=float).tolist()
+    if isinstance(weights, list):
+        return [_weights_to_list(value) for value in weights]
+    if isinstance(weights, tuple):
+        return [_weights_to_list(value) for value in weights]
+    return float(weights)
+
+
+def _logistic(value: float) -> float:
+    return 1.0 / (1.0 + math.exp(-value))
+
+
+def _vector_norm(values: List[float]) -> float:
+    return math.sqrt(sum(float(value) * float(value) for value in values))
+
+
 class PennyLaneAnomalyDetector:
     """Quantum VQC anomaly detector using PennyLane lightning.qubit."""
 
@@ -92,11 +119,23 @@ class PennyLaneAnomalyDetector:
             self.load_weights(self._weights_path)
 
     def initialize_weights(self, seed: int = 42):
-        rng = np.random.default_rng(seed)
-        self.weights = pnp.array(
-            rng.standard_normal((self.n_layers, self.n_qubits, 3)),
-            requires_grad=True,
-        )
+        if np is not None:
+            rng = np.random.default_rng(seed)
+            raw_weights = rng.standard_normal((self.n_layers, self.n_qubits, 3))
+        else:
+            rng = random.Random(seed)
+            raw_weights = [
+                [
+                    [rng.gauss(0.0, 1.0) for _axis in range(3)]
+                    for _qubit in range(self.n_qubits)
+                ]
+                for _layer in range(self.n_layers)
+            ]
+
+        if pnp is not None:
+            self.weights = pnp.array(raw_weights, requires_grad=True)
+        else:
+            self.weights = raw_weights
         return self.weights
 
     def train(self, normal_features: List[List[float]], epochs: int = 50,
@@ -109,12 +148,7 @@ class PennyLaneAnomalyDetector:
 
         padded = []
         for f in normal_features:
-            arr = np.array(f, dtype=float)
-            if len(arr) < target_dim:
-                arr = np.pad(arr, (0, target_dim - len(arr)))
-            else:
-                arr = arr[:target_dim]
-            padded.append(arr)
+            padded.append(_pad_features(f, target_dim))
 
         total_cost = 0.0
         for _epoch in range(epochs):
@@ -130,7 +164,9 @@ class PennyLaneAnomalyDetector:
                 contamination="auto",
                 random_state=self.config.get("random_state", 42),
             )
-            self._classical_model.fit(np.array(padded, dtype=float))
+            self._classical_model.fit(
+                np.array(padded, dtype=float) if np is not None else padded
+            )
         self.trained = True
         return {"epochs": epochs, "final_avg_cost": total_cost / max(len(padded), 1)}
 
@@ -147,7 +183,7 @@ class PennyLaneAnomalyDetector:
             "n_layers": self.n_layers,
             "anomaly_threshold": self.anomaly_threshold,
             "trained": self.trained,
-            "weights": np.array(self.weights, dtype=float).tolist(),
+            "weights": _weights_to_list(self.weights),
         }
         out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return payload
@@ -179,11 +215,7 @@ class PennyLaneAnomalyDetector:
         candidate_id = candidate.get("candidate_id", candidate.get("symbol", "unknown"))
         target_dim = 2 ** self.n_qubits
 
-        arr = np.array(features, dtype=float)
-        if len(arr) < target_dim:
-            arr = np.pad(arr, (0, target_dim - len(arr)))
-        else:
-            arr = arr[:target_dim]
+        arr = _pad_features(features, target_dim)
 
         if self.weights is None:
             self.initialize_weights()
@@ -250,9 +282,9 @@ class PennyLaneAnomalyDetector:
         """Return a bounded classical anomaly score for comparison."""
         if SKLEARN_AVAILABLE and self._classical_model is not None:
             raw = float(self._classical_model.score_samples([features])[0])
-            score = 1.0 / (1.0 + float(np.exp(-raw)))
+            score = _logistic(raw)
         else:
-            magnitude = float(np.linalg.norm(features))
+            magnitude = _vector_norm(features)
             score = max(0.0, min(1.0, 1.0 - abs(magnitude - 1.0)))
         return score, score < self.anomaly_threshold
 

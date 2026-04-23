@@ -10,8 +10,6 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 
@@ -53,24 +51,24 @@ class RQAOAStructuredOptimizer:
             return self._empty_result()
 
         constraints = constraints or {}
-        scores = np.array(objective_scores[:n])
+        scores = [float(score) for score in objective_scores[:n]]
 
         # Track which variables are still free
-        free_mask = np.ones(n, dtype=bool)
-        fixed_values = np.zeros(n)  # 0 = not selected, will be overwritten
+        free_mask = [True] * n
+        fixed_values = [0.0] * n  # 0 = not selected, will be overwritten
         iterations = []
 
         for iteration in range(self.max_iterations):
-            free_indices = np.where(free_mask)[0]
+            free_indices = [index for index, is_free in enumerate(free_mask) if is_free]
             if len(free_indices) <= self.min_problem_size:
                 break
 
             # Compute correlations between candidates (using scores as proxy)
-            free_scores = scores[free_indices]
+            free_scores = [scores[index] for index in free_indices]
 
             # Fix the least ambiguous variables (highest or lowest scores)
             n_to_fix = max(1, int(len(free_indices) * self.fix_fraction))
-            sorted_idx = np.argsort(free_scores)
+            sorted_idx = sorted(range(len(free_scores)), key=lambda idx: free_scores[idx])
 
             # Fix bottom candidates to 0 (exclude)
             for i in range(n_to_fix):
@@ -80,21 +78,21 @@ class RQAOAStructuredOptimizer:
 
             iterations.append({
                 "iteration": iteration,
-                "free_count": int(np.sum(free_mask)),
-                "fixed_count": n - int(np.sum(free_mask)),
+                "free_count": sum(1 for is_free in free_mask if is_free),
+                "fixed_count": n - sum(1 for is_free in free_mask if is_free),
                 "fixed_low_score_indices": [int(free_indices[sorted_idx[i]]) for i in range(n_to_fix)],
             })
 
         # Solve remaining free variables with simple optimization
-        free_indices = np.where(free_mask)[0]
+        free_indices = [index for index, is_free in enumerate(free_mask) if is_free]
         if len(free_indices) > 0:
-            free_scores = scores[free_indices]
+            free_scores = [scores[index] for index in free_indices]
             # Allocate weights proportional to scores
-            total = np.sum(free_scores)
+            total = sum(free_scores)
             if total > 0:
-                weights = free_scores / total
+                weights = [score / total for score in free_scores]
             else:
-                weights = np.ones(len(free_indices)) / len(free_indices)
+                weights = [1.0 / len(free_indices)] * len(free_indices)
 
             for i, idx in enumerate(free_indices):
                 fixed_values[idx] = float(weights[i])
@@ -116,7 +114,7 @@ class RQAOAStructuredOptimizer:
             "optimizer": "rqaoa",
             "candidate_count": n,
             "iterations_used": len(iterations),
-            "final_free_count": int(np.sum(free_mask)),
+            "final_free_count": sum(1 for is_free in free_mask if is_free),
             "iterations": iterations,
             "selected_candidates": selected,
             "all_weights": [round(float(w), 6) for w in fixed_values],

@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 try:
     import numpy as np
+except ImportError:  # pragma: no cover - optional in test env
+    np = None  # type: ignore[assignment]
+
+try:
     from qiskit_finance.applications.optimization import PortfolioOptimization
     from qiskit_algorithms import QAOA
     from qiskit_algorithms.optimizers import COBYLA
@@ -98,7 +102,7 @@ class QiskitPortfolioOptimizer:
                 f"too_many_candidates_{n}_max_{self.MAX_ASSETS}", start
             )
 
-        expected_returns = np.array([
+        expected_returns = _as_vector([
             c.get("expected_return", c.get("score", 0.0)) for c in candidates
         ])
         cov = self._build_covariance(candidates, n)
@@ -162,15 +166,16 @@ class QiskitPortfolioOptimizer:
     # ------------------------------------------------------------------
     def _build_covariance(self, candidates: list, n: int):
         if candidates[0].get("covariance_row"):
-            return np.array([c["covariance_row"] for c in candidates])
-        vols = np.array([c.get("volatility", 0.2) for c in candidates])
-        cov = np.diag(vols ** 2)
+            return _as_matrix([c["covariance_row"] for c in candidates])
+        vols = [float(c.get("volatility", 0.2)) for c in candidates]
+        cov = [[0.0 for _col in range(n)] for _row in range(n)]
         for i in range(n):
+            cov[i][i] = vols[i] ** 2
             for j in range(i + 1, n):
                 corr = 0.3 if candidates[i].get("sector") == candidates[j].get("sector") else 0.1
                 cov[i][j] = corr * vols[i] * vols[j]
                 cov[j][i] = cov[i][j]
-        return cov
+        return _as_matrix(cov)
 
     def _meta(self, *, status: str, elapsed: float = 0, **extra) -> dict:
         m = {
@@ -200,6 +205,20 @@ class QiskitPortfolioOptimizer:
                 status="skipped", elapsed=elapsed, reason=reason
             ),
         }
+
+
+def _as_vector(values: list[Any]) -> Any:
+    normalized = [float(value) for value in values]
+    if np is not None:
+        return np.array(normalized, dtype=float)
+    return normalized
+
+
+def _as_matrix(rows: list[list[Any]]) -> Any:
+    normalized = [[float(value) for value in row] for row in rows]
+    if np is not None:
+        return np.array(normalized, dtype=float)
+    return normalized
 
 
 if __name__ == "__main__":
