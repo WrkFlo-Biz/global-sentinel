@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 3
 
 TASK_HISTORY_COLUMNS = (
     "task_id",
@@ -24,12 +25,161 @@ WORKER_HEALTH_COLUMNS = (
     "current_task",
 )
 
+AUDIT_LOG_COLUMNS = (
+    "audit_id",
+    "event_type",
+    "timestamp",
+    "agent_id",
+    "decision",
+    "reason",
+    "entry_json",
+)
+
 
 def default_state_db_path(repo_root: Path) -> Path:
     override = os.getenv("OPENCLAW_STATE_DB_PATH")
     if override:
         return Path(override).expanduser()
     return repo_root / "state.db"
+
+
+def ensure_audit_log_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            agent_id TEXT,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            entry_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_log_event_type
+        ON audit_log(event_type)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+        ON audit_log(timestamp)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_log_agent_id
+        ON audit_log(agent_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_log_decision
+        ON audit_log(decision)
+        """
+    )
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        LIMIT 1
+        """,
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _load_json_text(raw: Any, *, fallback: Any) -> Any:
+    if raw in (None, ""):
+        return fallback
+    try:
+        return json.loads(str(raw))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def migrate_legacy_trade_approval_audit(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "trade_approval_audit"):
+        return
+
+    rows = conn.execute(
+        """
+        SELECT
+            approval_id,
+            event_type,
+            timestamp,
+            requesting_agent,
+            decision,
+            reason,
+            fail_closed_trigger,
+            approved,
+            trade_details_json,
+            metadata_json
+        FROM trade_approval_audit
+        ORDER BY event_id
+        """
+    ).fetchall()
+
+    for row in rows:
+        trade_details = _load_json_text(row["trade_details_json"], fallback={})
+        if not isinstance(trade_details, dict):
+            trade_details = {"raw_trade_details": trade_details}
+
+        metadata = _load_json_text(row["metadata_json"], fallback=None)
+        if metadata is not None and not isinstance(metadata, dict):
+            metadata = {"raw_metadata": metadata}
+
+        entry = {
+            "schema_version": "trade_approval_audit.v1",
+            "approval_id": str(row["approval_id"] or ""),
+            "event_type": str(row["event_type"] or ""),
+            "timestamp": str(row["timestamp"] or ""),
+            "agent_id": str(row["requesting_agent"] or ""),
+            "requesting_agent": str(row["requesting_agent"] or ""),
+            "trade_details": trade_details,
+            "order": trade_details,
+            "decision": str(row["decision"] or ""),
+            "reason": str(row["reason"] or ""),
+            "approved": None if row["approved"] is None else bool(row["approved"]),
+            "fail_closed_trigger": row["fail_closed_trigger"],
+            "metadata": metadata,
+        }
+        entry_json = json.dumps(entry, sort_keys=True, default=str)
+
+        existing = conn.execute(
+            "SELECT 1 FROM audit_log WHERE entry_json = ? LIMIT 1",
+            (entry_json,),
+        ).fetchone()
+        if existing is not None:
+            continue
+
+        conn.execute(
+            """
+            INSERT INTO audit_log (
+                event_type,
+                timestamp,
+                agent_id,
+                decision,
+                reason,
+                entry_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(row["event_type"] or ""),
+                str(row["timestamp"] or ""),
+                str(row["requesting_agent"] or ""),
+                str(row["decision"] or ""),
+                str(row["reason"] or ""),
+                entry_json,
+            ),
+        )
 
 
 class OpenClawStateDB:
@@ -81,6 +231,8 @@ class OpenClawStateDB:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_worker_health_status ON worker_health(status)"
             )
+            ensure_audit_log_schema(conn)
+            migrate_legacy_trade_approval_audit(conn)
             conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION}")
             conn.commit()
         return self.schema_snapshot()
@@ -95,6 +247,7 @@ class OpenClawStateDB:
                 "tables": {
                     "task_history": self._table_columns(conn, "task_history"),
                     "worker_health": self._table_columns(conn, "worker_health"),
+                    "audit_log": self._table_columns(conn, "audit_log"),
                 },
             }
 
@@ -174,5 +327,38 @@ class OpenClawStateDB:
                     current_task = excluded.current_task
                 """,
                 (worker_id, last_seen, status, current_task),
+            )
+            conn.commit()
+
+    def append_audit_log(
+        self,
+        *,
+        event_type: str,
+        timestamp: str,
+        agent_id: Optional[str],
+        decision: str,
+        reason: str,
+        entry: Dict[str, Any],
+    ) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    event_type,
+                    timestamp,
+                    agent_id,
+                    decision,
+                    reason,
+                    entry_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    timestamp,
+                    agent_id,
+                    decision,
+                    reason,
+                    json.dumps(entry, sort_keys=True, default=str),
+                ),
             )
             conn.commit()

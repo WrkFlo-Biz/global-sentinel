@@ -23,7 +23,7 @@ runtime files, control files, execution mode, or broker state.
 | Surface | Current code | Why it is Tier 0 |
 | --- | --- | --- |
 | Telegram read commands | `src/monitoring/telegram_command_handler.py:352-395`, `src/monitoring/telegram_command_handler.py:484-611` | `/status`, `/gss`, `/portfolio`, `/orders`, `/alerts`, and `/config` read dashboard state only. |
-| Dashboard read endpoints | `server.py:588-602`, `server.py:655-663`, `server.py:861-870` | Read-only API surfaces expose execution config, pending orders, and control status. |
+| Dashboard read endpoints | `dashboard/api/server.py:2929-2944`, `dashboard/api/server.py:2989-3000`, `dashboard/api/server.py:4017-4026` | Read-only API surfaces expose execution config, pending orders, and control status. |
 | OpenClaw role brief context loading | `src/reports/openclaw_role_briefing.py:82-133` | Reads scorecards, operational reports, and control flags without changing system state. |
 
 ### Target rule
@@ -46,6 +46,7 @@ state, or repository state.
 | Daily thesis output | `scripts/ops/daily_thesis_generator.py:98-134` | Produces and stores a thesis plus a Telegram message; no broker or control mutation occurs in this script. |
 | Market query artifact | `scripts/ops/market_query.py:133-152` | Writes `last_market_query.json` as decision support only. |
 | OpenClaw data feed | `scripts/ops/openclaw_data_feed.py:180-275` | Writes outbound summaries and JSON snapshots for downstream consumption. |
+| Telegram Tier-2 command stubs | `src/monitoring/telegram_command_handler.py:429-447`, `src/monitoring/telegram_command_handler.py:578-618` | These paths now only return `ORCHESTRATOR_APPROVAL_MESSAGE`; they are operator UX affordances, not current mutators. |
 
 ### Tier-1 boundary violation to fix
 
@@ -68,13 +69,12 @@ durably audited, and mediated by an orchestrator approval boundary.
 
 | Surface | Current code | Current mutation | Approval gap | Target gate |
 | --- | --- | --- | --- | --- |
-| Execution mode API | `server.py:605-624` | Rewrites `config/execution_mode.yaml`. | Auth can be required via `GS_DASHBOARD_API_KEY` (`server.py:28-48`), but there is no explicit approval workflow. | Require orchestrator-issued approval for mode changes. |
-| Telegram mode command | `src/monitoring/telegram_command_handler.py:396-423` | Calls `/api/execution-mode` directly from chat. | Chat authorization is not the same as an approval record. | Remove from bot surface or proxy through orchestrator approval. |
-| Telegram approval/reject command | `src/monitoring/telegram_command_handler.py:456-482`, `server.py:629-650` | Writes `control/pending_approval_{strategy}.json`. | Direct file write after chat action; no external approval service owns the verdict. | Make orchestrator the approval source of truth. |
-| Kill/veto command handler | `src/monitoring/telegram_command_handler.py:424-454`, `src/monitoring/telegram_command_handler.py:662-704` | Writes `control/kill_switch.json` and `control/manual_veto.json`. | Only a local YES confirmation is required. | Replace with orchestrator-mediated control actions. |
-| Dashboard kill/veto APIs | `server.py:833-859` | Directly rewrites control files. | API auth is optional by env and still does not create an approval record. | Require orchestrator approval tokens and durable action IDs. |
+| Execution mode API | `dashboard/api/server.py:2946-2965` | Rewrites `config/execution_mode.yaml`. | Auth can be required via `GS_DASHBOARD_API_KEY`, but there is no explicit orchestrator approval workflow. | Require orchestrator-issued approval for mode changes. |
+| Telegram Tier-2 command stubs | `src/monitoring/telegram_command_handler.py:429-447`, `src/monitoring/telegram_command_handler.py:578-618` | No current mutation. These commands return an approval instruction string and act as a request surface only. | There is no structured orchestrator task submission yet; the UX stops at a human-readable instruction. | Replace stubs with real orchestrator task creation or remove the commands entirely from the bot UX. |
+| Trade approval API | `dashboard/api/server.py:2970-2988` | Writes `control/pending_approval_{strategy}.json`. | Local file write remains the approval authority instead of an orchestrator-owned verdict record. | Make orchestrator the approval source of truth. |
+| Dashboard kill/veto APIs | `dashboard/api/server.py:3993-4015` | Directly rewrites control files. | API auth is still not the same as a durable approval record. | Require orchestrator approval tokens and durable action IDs. |
 | Manual veto MCP | `src/risk/manual_veto_mcp.py:112-142`, `src/risk/manual_veto_mcp.py:145-176`, `src/risk/manual_veto_mcp.py:209-226` | Exposes tool calls that set or clear veto/kill flags. | No explicit approval hook; tool invocation is the authority. | Route these tool actions through orchestrator approval. |
-| Refresh signal | `src/monitoring/telegram_command_handler.py:613-627` | Sends `SIGUSR1` to the crisis monitor. | No approval gate. | Treat as a guarded control action, not a read command. |
+| Localhost remote-control CLI | `scripts/ops/gs_control.py:147-203` | Calls `/api/control/kill-switch`, `/api/control/veto`, `/api/execution-mode`, and refresh behavior directly over localhost. | This preserves a direct mutable control lane outside orchestrator approval. | Retire it or make it submit orchestrator tasks instead of mutating GS endpoints directly. |
 
 ### Tier-2B: Broker or paper/shadow execution
 
@@ -89,6 +89,19 @@ durably audited, and mediated by an orchestrator approval boundary.
 | Tradier sandbox adapter | `src/execution/tradier_sandbox_adapter.py:111-164` | Submits, cancels, and replaces orders, with shadow-mode enforcement in the adapter. | Safer than live paths, but still a side-effecting broker surface. | Keep inside Tier 2 with approval and audit. |
 
 ### Tier-2C: Repo mutation
+
+Current audit result: no unattended runtime git-mutation path was found in
+`src/`, `scripts/ops/`, `src/execution/`, `src/strategies/`, or
+`src/reports/`.
+
+The only repo/admin mutation hit in this pass was bootstrap tooling under
+`scripts/github/bootstrap_ghe.sh:26-27`, which can create a GitHub repo. That
+is Tier 2, but it is manual/bootstrap tooling rather than part of the GS
+runtime path.
+
+| Surface | Current code | Current mutation | Approval gap | Target gate |
+| --- | --- | --- | --- | --- |
+| GitHub bootstrap tooling | `scripts/github/bootstrap_ghe.sh:26-27` | Can run `gh repo create` during setup/bootstrap. | Not a runtime path, but still a repo-admin side effect with no orchestrator mediation. | Keep manual-only, or move under an explicit orchestrator GitHub worker flow if reused operationally. |
 
 ## Current vs Target State
 
@@ -114,7 +127,8 @@ durably audited, and mediated by an orchestrator approval boundary.
 ## Migration Plan
 
 1. Reclassify bot surfaces.
-   - Remove Tier-2 commands from `TelegramCommandHandler`.
+   - Keep `TelegramCommandHandler` Tier-2 commands as temporary stubs only.
+   - Replace them with real orchestrator task submission or remove them from the bot UX.
    - Keep chat surfaces to Tier 0 reads and optional Tier 1 advisory delivery.
 
 2. Put all control mutations behind one approval transport.
@@ -144,9 +158,9 @@ Use these commands after migration work:
 cd /home/moses/projects/global-sentinel
 
 rg -n "/api/execution-mode|/api/telegram/approve|/api/control/kill-switch|/api/control/veto|set_manual_veto|set_kill_switch|clear_all_flags" \
-  server.py src scripts
+  server.py dashboard/api/server.py src scripts
 
-rg -n "request_approval|auto_approved|auto-executing|route_and_execute\\(|place_order\\(|delete_order\\(|git push" \
+rg -n "request_approval|auto_approved|auto-executing|route_and_execute\\(|place_order\\(|delete_order\\(|gh repo create|git push" \
   src scripts
 ```
 
@@ -155,6 +169,8 @@ Expected end state:
 - Tier-2 control mutations should no longer be reachable directly from
   OpenClaw-linked bots or local dashboard endpoints without orchestrator
   mediation.
+- Telegram Tier-2 bot commands may still exist as stubs, but they should not
+  mutate local state themselves.
 - Execution code may still exist in GS, but it should require an external
   approval context rather than authorizing itself.
 - Repo mutation should not remain as an unattended runtime behavior.

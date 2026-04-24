@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,10 +25,12 @@ from typing import Any, Dict, Optional, Tuple
 
 import requests
 
+from src.core.openclaw_state_db import OpenClawStateDB
+
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 APPROVAL_LOG_PATH = REPO_ROOT / "logs" / "trade_approvals.jsonl"
 PENDING_DIR = Path("/tmp/gs_pending_approvals")
-APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v1"
+APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v2"
 STATE_DB_FILENAME = "state.db"
 
 logger = logging.getLogger("global_sentinel.trade_approval")
@@ -55,44 +56,6 @@ def _state_db_path() -> Path:
     return REPO_ROOT / STATE_DB_FILENAME
 
 
-def _ensure_approval_audit_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS trade_approval_audit (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            approval_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            requesting_agent TEXT,
-            decision TEXT,
-            reason TEXT,
-            fail_closed_trigger TEXT,
-            approved INTEGER,
-            trade_details_json TEXT NOT NULL,
-            metadata_json TEXT
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_approval_id
-        ON trade_approval_audit(approval_id)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_event_type
-        ON trade_approval_audit(event_type)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_trade_approval_audit_timestamp
-        ON trade_approval_audit(timestamp)
-        """
-    )
-
-
 def _requesting_agent(order_info: Dict[str, Any]) -> str:
     for key in ("requesting_agent", "source_agent", "agent_id", "agent", "worker", "signal_source"):
         value = order_info.get(key)
@@ -115,45 +78,17 @@ def _log_approval_json(entry: Dict[str, Any]) -> None:
 
 def _log_approval_state_db(entry: Dict[str, Any]) -> None:
     try:
-        db_path = _state_db_path()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(db_path, timeout=5.0) as conn:
-            conn.execute("PRAGMA busy_timeout = 5000")
-            conn.execute("PRAGMA journal_mode = WAL")
-            _ensure_approval_audit_schema(conn)
-            conn.execute(
-                """
-                INSERT INTO trade_approval_audit (
-                    approval_id,
-                    event_type,
-                    timestamp,
-                    requesting_agent,
-                    decision,
-                    reason,
-                    fail_closed_trigger,
-                    approved,
-                    trade_details_json,
-                    metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(entry["approval_id"]),
-                    str(entry["event_type"]),
-                    str(entry["timestamp"]),
-                    str(entry["requesting_agent"]),
-                    entry.get("decision"),
-                    entry.get("reason"),
-                    entry.get("fail_closed_trigger"),
-                    None if entry.get("approved") is None else int(bool(entry.get("approved"))),
-                    json.dumps(dict(entry["trade_details"]), sort_keys=True, default=str),
-                    None
-                    if entry.get("metadata") is None
-                    else json.dumps(entry["metadata"], sort_keys=True, default=str),
-                ),
-            )
-            conn.commit()
+        state_db = OpenClawStateDB(_state_db_path())
+        state_db.append_audit_log(
+            event_type=str(entry["event_type"]),
+            timestamp=str(entry["timestamp"]),
+            agent_id=str(entry["agent_id"]),
+            decision=str(entry["decision"]),
+            reason=str(entry["reason"]),
+            entry=entry,
+        )
     except Exception as e:
-        logger.warning("Failed to write trade approval audit row to state.db: %s", e)
+        logger.warning("Failed to write trade approval audit row to audit_log in state.db: %s", e)
 
 
 def _record_approval_event(
@@ -168,6 +103,8 @@ def _record_approval_event(
     fail_closed_trigger: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
+    agent_id = _requesting_agent(order_info)
+    trade_details = _safe_order_summary(order_info)
     cleaned_metadata = {
         str(key): value
         for key, value in (metadata or {}).items()
@@ -178,9 +115,10 @@ def _record_approval_event(
         "event_type": event_type,
         "timestamp": timestamp,
         "approval_id": approval_id,
-        "requesting_agent": _requesting_agent(order_info),
-        "trade_details": _safe_order_summary(order_info),
-        "order": _safe_order_summary(order_info),
+        "agent_id": agent_id,
+        "requesting_agent": agent_id,
+        "trade_details": trade_details,
+        "order": trade_details,
         "decision": decision,
         "reason": reason,
         "approved": approved,

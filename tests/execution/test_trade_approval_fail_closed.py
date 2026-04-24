@@ -54,37 +54,26 @@ def _audit_db_entries(tmp_path: Path) -> list[dict]:
         rows = conn.execute(
             """
             SELECT
-                approval_id,
                 event_type,
                 timestamp,
-                requesting_agent,
+                agent_id,
                 decision,
                 reason,
-                fail_closed_trigger,
-                approved,
-                trade_details_json,
-                metadata_json
-            FROM trade_approval_audit
-            ORDER BY event_id
+                entry_json
+            FROM audit_log
+            ORDER BY audit_id
             """
         ).fetchall()
 
     entries = []
     for row in rows:
-        entries.append(
-            {
-                "approval_id": row["approval_id"],
-                "event_type": row["event_type"],
-                "timestamp": row["timestamp"],
-                "requesting_agent": row["requesting_agent"],
-                "decision": row["decision"],
-                "reason": row["reason"],
-                "fail_closed_trigger": row["fail_closed_trigger"],
-                "approved": None if row["approved"] is None else bool(row["approved"]),
-                "trade_details": json.loads(row["trade_details_json"]),
-                "metadata": None if row["metadata_json"] is None else json.loads(row["metadata_json"]),
-            }
-        )
+        entry = json.loads(row["entry_json"])
+        assert row["event_type"] == entry["event_type"]
+        assert row["timestamp"] == entry["timestamp"]
+        assert row["agent_id"] == entry["agent_id"]
+        assert row["decision"] == entry["decision"]
+        assert row["reason"] == entry["reason"]
+        entries.append(entry)
     return entries
 
 

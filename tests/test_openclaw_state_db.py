@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from src.core.openclaw_state_db import (
+    AUDIT_LOG_COLUMNS,
     OpenClawStateDB,
     TASK_HISTORY_COLUMNS,
     TARGET_SCHEMA_VERSION,
@@ -26,7 +27,7 @@ def _load_agent_factory():
     return module
 
 
-def test_state_db_schema_contains_task_and_worker_tables(tmp_path: Path):
+def test_state_db_schema_contains_task_worker_and_audit_tables(tmp_path: Path):
     db_path = tmp_path / "state.db"
     state_db = OpenClawStateDB(db_path)
 
@@ -36,10 +37,12 @@ def test_state_db_schema_contains_task_and_worker_tables(tmp_path: Path):
     assert snapshot["user_version"] == TARGET_SCHEMA_VERSION
     assert snapshot["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
     assert snapshot["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+    assert snapshot["tables"]["audit_log"] == list(AUDIT_LOG_COLUMNS)
 
     second_snapshot = state_db.ensure_schema()
     assert second_snapshot["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
     assert second_snapshot["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+    assert second_snapshot["tables"]["audit_log"] == list(AUDIT_LOG_COLUMNS)
 
 
 def test_migrate_state_db_script_is_idempotent(tmp_path: Path):
@@ -67,6 +70,122 @@ def test_migrate_state_db_script_is_idempotent(tmp_path: Path):
     assert first_payload["user_version"] == TARGET_SCHEMA_VERSION
     assert second_payload["tables"]["task_history"] == list(TASK_HISTORY_COLUMNS)
     assert second_payload["tables"]["worker_health"] == list(WORKER_HEALTH_COLUMNS)
+    assert second_payload["tables"]["audit_log"] == list(AUDIT_LOG_COLUMNS)
+
+
+def test_state_db_appends_structured_audit_log_rows(tmp_path: Path):
+    db_path = tmp_path / "state.db"
+    state_db = OpenClawStateDB(db_path)
+    entry = {
+        "timestamp": "2026-04-23T21:00:00+00:00",
+        "agent_id": "unit-test-agent",
+        "trade_details": {"symbol": "NVDA", "side": "buy", "qty": 1},
+        "decision": "approved",
+        "reason": "User approved: 'inline_button_yes'",
+    }
+
+    state_db.append_audit_log(
+        event_type="approval_decision",
+        timestamp=entry["timestamp"],
+        agent_id=entry["agent_id"],
+        decision=entry["decision"],
+        reason=entry["reason"],
+        entry=entry,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT event_type, timestamp, agent_id, decision, reason, entry_json
+            FROM audit_log
+            ORDER BY audit_id
+            """
+        ).fetchone()
+
+    assert row[0] == "approval_decision"
+    assert row[1] == entry["timestamp"]
+    assert row[2] == entry["agent_id"]
+    assert row[3] == entry["decision"]
+    assert row[4] == entry["reason"]
+    assert json.loads(row[5]) == entry
+
+
+def test_state_db_migrates_legacy_trade_approval_rows_into_audit_log(tmp_path: Path):
+    db_path = tmp_path / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute(
+            """
+            CREATE TABLE trade_approval_audit (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                approval_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                requesting_agent TEXT,
+                decision TEXT,
+                reason TEXT,
+                fail_closed_trigger TEXT,
+                approved INTEGER,
+                trade_details_json TEXT NOT NULL,
+                metadata_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trade_approval_audit (
+                approval_id,
+                event_type,
+                timestamp,
+                requesting_agent,
+                decision,
+                reason,
+                fail_closed_trigger,
+                approved,
+                trade_details_json,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-approval-1",
+                "approval_decision",
+                "2026-04-24T00:00:00Z",
+                "legacy-agent",
+                "approved",
+                "legacy reason",
+                None,
+                1,
+                json.dumps({"symbol": "NVDA", "side": "buy"}),
+                json.dumps({"source": "legacy-test"}),
+            ),
+        )
+        conn.commit()
+
+    state_db = OpenClawStateDB(db_path)
+    state_db.ensure_schema()
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT event_type, timestamp, agent_id, decision, reason, entry_json
+            FROM audit_log
+            ORDER BY audit_id
+            """
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0][0] == "approval_decision"
+    assert rows[0][1] == "2026-04-24T00:00:00Z"
+    assert rows[0][2] == "legacy-agent"
+    assert rows[0][3] == "approved"
+    assert rows[0][4] == "legacy reason"
+
+    entry = json.loads(rows[0][5])
+    assert entry["schema_version"] == "trade_approval_audit.v1"
+    assert entry["approval_id"] == "legacy-approval-1"
+    assert entry["requesting_agent"] == "legacy-agent"
+    assert entry["trade_details"] == {"symbol": "NVDA", "side": "buy"}
+    assert entry["metadata"] == {"source": "legacy-test"}
 
 
 def test_agent_factory_records_task_history_and_worker_health(tmp_path: Path, monkeypatch):
