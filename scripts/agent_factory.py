@@ -371,8 +371,21 @@ def run_proposal_review(task: Task) -> AgentResult:
 
     advisory = {
         "timestamp": iso_now(), "review_type": review_type, "source": source,
+        "advisory_only": True,
+        "not_for_direct_execution": True,
+        "research_only": True,
         "trigger_payload": task.payload, "control_flags": flags,
-        "guardrails": {"staging_only": False, "requires_human_approval": False, "execution_enabled": True},
+        "guardrails": {
+            "advisory_only": True,
+            "staging_only": True,
+            "requires_human_approval": True,
+            "manual_approval_required": True,
+            "paper_only": True,
+            "live_execution_forbidden": True,
+            "execution_enabled": False,
+            "no_live_orders": True,
+            "no_promotion_authority": True,
+        },
         "context": {
             "replay_pass_rate": replay_latest.get("pass_rate"),
             "replay_avg_confidence": replay_latest.get("avg_confidence"),

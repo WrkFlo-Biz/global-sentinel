@@ -211,6 +211,73 @@ def test_agent_factory_control_flags_use_shared_control_snapshot(tmp_path: Path,
     assert calls == [tmp_path]
 
 
+def test_agent_factory_proposal_reviews_are_advisory_only(tmp_path: Path, monkeypatch):
+    module = _load_agent_factory()
+    repo_root = tmp_path
+    reports_dir = repo_root / "reports" / "openclaw_research"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "replay_latest.json").write_text(
+        json.dumps(
+            {
+                "pass_rate": 0.67,
+                "avg_confidence": 0.61,
+                "correlation_break_count": 2,
+                "shadow_execution_blocked_count": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        module,
+        "control_flags",
+        lambda: {
+            "manual_veto": False,
+            "kill_switch": False,
+            "strategy_executor_enabled": False,
+        },
+    )
+
+    task = module.Task(
+        task_id="proposal-review-1",
+        kind="proposal_review",
+        payload={
+            "repo_root": str(repo_root),
+            "review_type": "replay_pass_rate_low",
+            "source": "unit-test",
+        },
+    )
+
+    result = module.run_proposal_review(task)
+
+    assert result.success is True
+    advisory_path = Path(result.data["advisory_json"])
+    assert advisory_path.exists()
+
+    advisory = json.loads(advisory_path.read_text(encoding="utf-8"))
+    assert advisory["advisory_only"] is True
+    assert advisory["not_for_direct_execution"] is True
+    assert advisory["research_only"] is True
+    assert advisory["guardrails"] == {
+        "advisory_only": True,
+        "staging_only": True,
+        "requires_human_approval": True,
+        "manual_approval_required": True,
+        "paper_only": True,
+        "live_execution_forbidden": True,
+        "execution_enabled": False,
+        "no_live_orders": True,
+        "no_promotion_authority": True,
+    }
+    assert advisory["context"] == {
+        "replay_pass_rate": 0.67,
+        "replay_avg_confidence": 0.61,
+        "replay_correlation_break_count": 2,
+        "replay_shadow_execution_blocked_count": 3,
+    }
+
+
 def test_agent_factory_records_task_history_and_worker_health(tmp_path: Path, monkeypatch):
     module = _load_agent_factory()
     repo_root = tmp_path
