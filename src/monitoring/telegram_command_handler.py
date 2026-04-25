@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import requests
+from src.inference import foundry_client
 
 try:
     import yaml
@@ -277,40 +278,73 @@ class TelegramCommandHandler:
     # ------------------------------------------------------------------
 
     def _llm_reply(self, chat_id: str, text: str) -> None:
-        """Send a Claude LLM response to a free-form user message."""
+        """Send a Foundry-routed response to a free-form user message."""
         try:
             self._send_chat_action(chat_id, "typing")
-            import anthropic
-            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-            # Load latest scorecard context
-            ctx = ""
-            try:
-                import json as _json
-                sc_path = Path(self.repo_root) / "logs" / "scorecards" / "latest_signal.json"
-                if sc_path.exists():
-                    sc = _json.loads(sc_path.read_text())
-                    mode = sc.get("mode", "?")
-                    prob = sc.get("regime_shift_probability", "?")
-                    ctx = f"[GS context: mode={mode}, regime_shift_prob={prob}]\n\n"
-            except Exception:
-                pass
             system = (
                 "You are the Global Sentinel AI assistant — a live geopolitical risk and "
                 f"trading intelligence system monitoring a ${600_000:,} portfolio. "
-                "Strategy: {self.strategy}. "
+                f"Strategy: {self.strategy}. "
                 "Answer questions about markets, positions, risk, and macro events concisely. "
                 "Use HTML formatting for Telegram (bold=<b>, code=<code>)."
             )
-            msg = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=800,
-                system=system,
-                messages=[{"role": "user", "content": ctx + text}],
+            operating_context = self._freeform_operating_context()
+            context_prefix = self._freeform_context_prefix(operating_context)
+            response = foundry_client.send_request(
+                intent_type="telegram_freeform_chat",
+                target_role="planner",
+                operating_context=operating_context,
+                latency_class="interactive",
+                trace_context={
+                    "source": "telegram_command_handler",
+                    "channel": "telegram",
+                    "strategy": self.strategy,
+                    "chat_id": chat_id,
+                },
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": context_prefix + text},
+                ],
             )
-            reply = msg.content[0].text if msg.content else "No response."
-            self._send_message(chat_id, reply, parse_mode="HTML")
+            self._send_message(chat_id, response.output or "No response.", parse_mode="HTML")
         except Exception as exc:
             self._send_message(chat_id, f"⚠️ LLM error: {str(exc)[:120]}")
+
+    def _freeform_operating_context(self) -> Dict[str, Any]:
+        """Build operating context for free-form Telegram chat."""
+        context: Dict[str, Any] = {
+            "source": "telegram_command_handler",
+            "channel": "telegram",
+            "strategy": self.strategy,
+            "execution_sensitivity": "research_only",
+        }
+        try:
+            sc_path = Path(self.repo_root) / "logs" / "scorecards" / "latest_signal.json"
+            if sc_path.exists():
+                scorecard = json.loads(sc_path.read_text(encoding="utf-8"))
+                if isinstance(scorecard, dict):
+                    mode = scorecard.get("mode")
+                    if mode is not None:
+                        context["mode"] = mode
+                    regime_shift_probability = scorecard.get("regime_shift_probability")
+                    if regime_shift_probability is not None:
+                        context["regime_shift_probability"] = regime_shift_probability
+        except Exception:
+            pass
+        return context
+
+    @staticmethod
+    def _freeform_context_prefix(operating_context: Dict[str, Any]) -> str:
+        """Render a small text prefix from operating context when available."""
+        if "mode" not in operating_context and "regime_shift_probability" not in operating_context:
+            return ""
+        return (
+            "[GS context: "
+            f"mode={operating_context.get('mode', '?')}, "
+            "regime_shift_prob="
+            f"{operating_context.get('regime_shift_probability', '?')}]"
+            "\n\n"
+        )
 
     def _send_chat_action(self, chat_id: str, action: str) -> None:
         try:
@@ -323,7 +357,7 @@ class TelegramCommandHandler:
             pass
 
     def _dispatch_command(self, chat_id: str, text: str):
-        """Dispatch /gs_ commands; route everything else to LLM."""
+        """Dispatch /gs_ commands; route everything else through Foundry."""
         # Strip leading / if present
         if text.startswith("/"):
             text = text[1:]

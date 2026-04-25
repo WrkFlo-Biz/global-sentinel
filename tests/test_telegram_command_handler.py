@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import src.monitoring.telegram_command_handler as telegram_command_handler_module
 from src.monitoring.telegram_bot_manager import TelegramBotManager
 from src.monitoring.telegram_command_handler import TelegramCommandHandler
 
 
 def test_dispatch_command_accepts_gs_prefix_with_bot_suffix(tmp_path: Path, monkeypatch):
     handler = TelegramCommandHandler(
-        bot_token="test-token",
+        bot_token="",
         allowed_chat_ids={"-1003898688720"},
         strategy="day_trade",
         repo_root=tmp_path,
@@ -29,9 +31,110 @@ def test_dispatch_command_accepts_gs_prefix_with_bot_suffix(tmp_path: Path, monk
     assert sent == [("-1003898688720", "SYSTEM STATUS")]
 
 
+def test_non_command_chat_routes_through_foundry_client_boundary(tmp_path: Path, monkeypatch) -> None:
+    handler = TelegramCommandHandler(
+        bot_token="",
+        allowed_chat_ids={"-1003898688720"},
+        strategy="day_trade",
+        repo_root=tmp_path,
+    )
+    sent: list[tuple[str, str, str]] = []
+    chat_actions: list[tuple[str, str]] = []
+    captured: dict[str, object] = {}
+
+    scorecard_path = tmp_path / "logs" / "scorecards" / "latest_signal.json"
+    scorecard_path.parent.mkdir(parents=True, exist_ok=True)
+    scorecard_path.write_text(
+        json.dumps({"mode": "ELEVATED", "regime_shift_probability": 0.42}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "_send_message",
+        lambda chat_id, text, parse_mode="": sent.append((chat_id, text, parse_mode)),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_send_chat_action",
+        lambda chat_id, action: chat_actions.append((chat_id, action)),
+    )
+
+    def fake_send_request(
+        *,
+        intent_type,
+        target_role,
+        operating_context,
+        latency_class,
+        trace_context,
+        messages,
+    ):
+        captured["intent_type"] = intent_type
+        captured["target_role"] = target_role
+        captured["operating_context"] = dict(operating_context)
+        captured["latency_class"] = latency_class
+        captured["trace_context"] = dict(trace_context)
+        captured["messages"] = [dict(message) for message in messages]
+        return SimpleNamespace(output="<b>Planner reply</b>")
+
+    monkeypatch.setattr(
+        telegram_command_handler_module.foundry_client,
+        "send_request",
+        fake_send_request,
+    )
+
+    handler._dispatch_command("-1003898688720", "What is the market setup?")
+
+    assert chat_actions == [("-1003898688720", "typing")]
+    assert captured["intent_type"] == "telegram_freeform_chat"
+    assert captured["target_role"] == "planner"
+    assert captured["latency_class"] == "interactive"
+    assert captured["operating_context"]["source"] == "telegram_command_handler"
+    assert captured["operating_context"]["channel"] == "telegram"
+    assert captured["operating_context"]["strategy"] == "day_trade"
+    assert captured["operating_context"]["mode"] == "ELEVATED"
+    assert captured["operating_context"]["regime_shift_probability"] == 0.42
+    assert captured["trace_context"]["chat_id"] == "-1003898688720"
+    assert captured["messages"][0]["role"] == "system"
+    assert "Strategy: day_trade." in captured["messages"][0]["content"]
+    assert captured["messages"][1]["role"] == "user"
+    assert "[GS context: mode=ELEVATED, regime_shift_prob=0.42]" in captured["messages"][1]["content"]
+    assert captured["messages"][1]["content"].endswith("What is the market setup?")
+    assert sent == [("-1003898688720", "<b>Planner reply</b>", "HTML")]
+
+
+def test_non_command_chat_returns_concise_llm_error_on_foundry_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    handler = TelegramCommandHandler(
+        bot_token="",
+        allowed_chat_ids={"-1003898688720"},
+        strategy="day_trade",
+        repo_root=tmp_path,
+    )
+    sent: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        handler,
+        "_send_message",
+        lambda chat_id, text, parse_mode="": sent.append((chat_id, text, parse_mode)),
+    )
+    monkeypatch.setattr(handler, "_send_chat_action", lambda chat_id, action: None)
+    monkeypatch.setattr(
+        telegram_command_handler_module.foundry_client,
+        "send_request",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("planner offline")),
+    )
+
+    handler._dispatch_command("-1003898688720", "hello there")
+
+    assert sent == [("-1003898688720", "⚠️ LLM error: planner offline", "")]
+
+
 def test_tier_2_commands_return_orchestrator_stub_without_mutation(tmp_path: Path, monkeypatch):
     handler = TelegramCommandHandler(
-        bot_token="test-token",
+        bot_token="",
         allowed_chat_ids={"-1003898688720"},
         strategy="day_trade",
         repo_root=tmp_path,
@@ -64,7 +167,7 @@ def test_tier_2_commands_return_orchestrator_stub_without_mutation(tmp_path: Pat
 
 def test_help_lists_scoped_guarded_target_examples(tmp_path: Path) -> None:
     handler = TelegramCommandHandler(
-        bot_token="test-token",
+        bot_token="",
         allowed_chat_ids={"-1003898688720"},
         strategy="day_trade",
         repo_root=tmp_path,
@@ -81,7 +184,7 @@ def test_help_lists_scoped_guarded_target_examples(tmp_path: Path) -> None:
 
 def test_log_unauthorized_chat_records_private_chat_metadata(tmp_path: Path):
     handler = TelegramCommandHandler(
-        bot_token="test-token",
+        bot_token="",
         allowed_chat_ids={"-1003898688720"},
         strategy="day_trade",
         repo_root=tmp_path,
