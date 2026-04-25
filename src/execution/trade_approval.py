@@ -394,11 +394,13 @@ def _ticket_hash(order_info: Dict[str, Any], ticket_id: str) -> str:
 def _validated_ticket_hash(order_info: Dict[str, Any], ticket_id: str) -> str:
     computed = _ticket_hash(order_info, ticket_id)
     provided = _optional_text(order_info.get("ticket_hash"))
-    if provided is not None and provided != computed:
+    if provided is None:
+        raise ValueError("Missing orchestrator approval context: ticket_hash")
+    if provided != computed:
         raise ValueError(
             f"Guarded trade ticket hash mismatch: provided {provided!r} does not match computed {computed!r}"
         )
-    return provided or computed
+    return provided
 
 
 def _order_type(order_info: Dict[str, Any]) -> str:
@@ -710,5 +712,6 @@ if __name__ == "__main__":
                 str(int(time.time()) + 600),
             ),
         }
+        mock_order["ticket_hash"] = _ticket_hash(mock_order, mock_order["ticket_id"])
         os.environ.setdefault("TRADE_APPROVAL_ENABLED", "true")
         print(json.dumps(request_approval(mock_order), indent=2))

@@ -33,6 +33,8 @@ def _order(notional: float = 1000.0, **overrides: object) -> dict[str, object]:
         "order_type": "limit",
     }
     order.update(overrides)
+    if "ticket_hash" not in overrides:
+        order["ticket_hash"] = trade_approval._ticket_hash(order, str(order["ticket_id"]))
     return order
 
 
@@ -185,6 +187,28 @@ def test_request_approval_blocks_stale_approval_context(tmp_path: Path, monkeypa
     )
 
 
+def test_request_approval_blocks_missing_ticket_hash(tmp_path: Path, monkeypatch) -> None:
+    _set_paths(tmp_path, monkeypatch)
+    _set_enabled_env(monkeypatch)
+    monkeypatch.setattr(
+        trade_approval,
+        "submit_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("submit_task should not run")),
+    )
+
+    result = trade_approval.request_approval(_order(ticket_hash=None))
+
+    assert result["approved"] is False
+    assert result["decision"] == "error"
+    assert "Missing orchestrator approval context: ticket_hash" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Missing orchestrator approval context: ticket_hash",
+        "missing_guarded_context",
+    )
+
+
 def test_request_approval_blocks_target_mismatch(tmp_path: Path, monkeypatch) -> None:
     _set_paths(tmp_path, monkeypatch)
     _set_enabled_env(monkeypatch)
@@ -311,7 +335,7 @@ def test_request_approval_submits_guarded_task_and_logs_approval(
     assert payload["kind"] == "gs.trade.execute_shadow"
     assert payload["target"] == "global-sentinel/trade-ticket/ticket-123"
     assert payload["ticket_id"] == "ticket-123"
-    assert payload["ticket_hash"]
+    assert payload["ticket_hash"] == _order()["ticket_hash"]
     assert payload["symbol"] == "NVDA"
     assert payload["side"] == "buy"
     assert payload["qty"] == 1

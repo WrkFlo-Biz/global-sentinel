@@ -167,6 +167,7 @@ def _approval_order_info(trade_request: dict, *, guarded: bool) -> dict:
                 ),
             }
         )
+        order["ticket_hash"] = trade_approval._ticket_hash(order, order["ticket_id"])
     return order
 
 
@@ -246,6 +247,7 @@ def _build_router_inputs(trade_request: dict) -> tuple[dict, dict]:
 def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monkeypatch) -> None:
     response, foundry_call = _request_trade_from_foundry(monkeypatch, _trade_request("AAPL"))
     trade_request = jsonlib.loads(response.output)
+    approval_order = _approval_order_info(trade_request, guarded=True)
 
     _configure_trade_approval(tmp_path, monkeypatch)
     captured_submit = _stub_guarded_submit(
@@ -254,9 +256,7 @@ def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monke
         status="queued",
     )
 
-    approval = trade_approval.request_approval(
-        _approval_order_info(trade_request, guarded=True)
-    )
+    approval = trade_approval.request_approval(approval_order)
 
     assert foundry_call["url"] == "http://router.test/v1/inference"
     assert foundry_call["timeout"] == 30.0
@@ -276,6 +276,7 @@ def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monke
     assert payload["kind"] == "gs.trade.execute_shadow"
     assert payload["target"] == "global-sentinel/trade-ticket/integration-aapl-ticket"
     assert payload["ticket_id"] == "integration-aapl-ticket"
+    assert payload["ticket_hash"] == approval_order["ticket_hash"]
     assert payload["symbol"] == "AAPL"
     assert payload["approval_context"]["approval_jti"] == "approval-jti-aapl"
     assert payload["approval_context"]["approval_issued_by"] == "integration-human"
@@ -316,17 +317,17 @@ def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monke
 def test_rejected_trade_request_stops_before_execution_logging(tmp_path: Path, monkeypatch) -> None:
     response, _ = _request_trade_from_foundry(monkeypatch, _trade_request("MSFT"))
     trade_request = jsonlib.loads(response.output)
+    approval_order = _approval_order_info(trade_request, guarded=True)
+    approval_order["limit_price"] = float(approval_order["limit_price"]) + 1.0
 
     _configure_trade_approval(tmp_path, monkeypatch)
-    captured_submit = _stub_guarded_submit(
-        monkeypatch,
-        run_id="run-rejected-1",
-        status="rejected",
+    monkeypatch.setattr(
+        trade_approval,
+        "submit_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("submit_task should not run")),
     )
 
-    approval = trade_approval.request_approval(
-        _approval_order_info(trade_request, guarded=True)
-    )
+    approval = trade_approval.request_approval(approval_order)
 
     if approval["approved"]:
         package, strategy_config = _build_router_inputs(trade_request)
@@ -339,14 +340,11 @@ def test_rejected_trade_request_stops_before_execution_logging(tmp_path: Path, m
     approval_rows = _read_jsonl(tmp_path / "logs" / "trade_approvals.jsonl")
     assert approval["approved"] is False
     assert approval["decision"] == "error"
-    assert "guarded submit did not return an accepted run" in approval["reason"]
-    payload = captured_submit["payload"]
-    assert payload["target"] == "global-sentinel/trade-ticket/integration-msft-ticket"
+    assert "Guarded trade ticket hash mismatch" in approval["reason"]
     assert approval_rows[-1]["approved"] is False
     assert approval_rows[-1]["decision"] == "error"
     assert approval_rows[-1]["order"]["symbol"] == "MSFT"
-    assert approval_rows[-1]["metadata"]["response"]["status"] == "rejected"
-    assert approval_rows[-1]["metadata"]["target"] == payload["target"]
+    assert approval_rows[-1]["metadata"]["mediation"] == "orchestrator"
 
     assert not (tmp_path / "logs" / "execution" / "order_intents.jsonl").exists()
     assert not (tmp_path / "logs" / "execution" / "shadow_order_router.jsonl").exists()
