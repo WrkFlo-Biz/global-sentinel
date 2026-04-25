@@ -27,6 +27,50 @@ class _JsonRequest:
         return self._payload
 
 
+class _RecordingWebSocket:
+    def __init__(
+        self,
+        *,
+        disconnect_after_send_count: int | None = None,
+        disconnect_exception=None,
+        receive_messages: list[dict[str, object]] | None = None,
+    ):
+        self.sent: list[dict[str, object]] = []
+        self._disconnect_after_send_count = disconnect_after_send_count
+        self._disconnect_exception = disconnect_exception
+        self._receive_messages = list(receive_messages or [])
+
+    async def accept(self) -> None:
+        return None
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        self.sent.append(payload)
+        if (
+            self._disconnect_after_send_count is not None
+            and len(self.sent) >= self._disconnect_after_send_count
+            and self._disconnect_exception is not None
+        ):
+            raise self._disconnect_exception()
+
+    async def receive(self) -> dict[str, object]:
+        if self._receive_messages:
+            return self._receive_messages.pop(0)
+        return {"type": "websocket.disconnect"}
+
+
+class _DummyConnectionManager:
+    def __init__(self):
+        self.active = []
+
+    async def connect(self, ws) -> None:
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws) -> None:
+        if ws in self.active:
+            self.active.remove(ws)
+
+
 def _decode_json_response(response) -> dict[str, object]:
     return json.loads(response.body.decode("utf-8"))
 
@@ -51,6 +95,36 @@ def _write_execution_mode_config(repo_root: Path) -> str:
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _assert_live_control_status(payload: dict[str, object]) -> None:
+    assert isinstance(payload.get("timestamp_utc"), str)
+    assert payload["mode"] == "ELEVATED"
+    assert payload["cycle"] == 7
+    assert payload["kill_switch"] is False
+    assert payload["manual_veto"] is True
+    assert payload["shadow_eligible"] is True
+    assert payload["fallback_mode"] is False
+    assert payload["execution_mode"] == {
+        "day_trade": "auto",
+        "medium_long": "manual",
+    }
+    assert payload["evidence"] == ["spread widening", "news shock"]
+
+
+def _assert_compatibility_controls(payload: dict[str, object]) -> None:
+    assert payload["kill_switch"] == {
+        "kill_switch": False,
+        "active": False,
+        "reason": "operator override",
+        "set_at": "2026-04-25T11:00:00Z",
+    }
+    assert payload["manual_veto"] == {
+        "manual_veto": True,
+        "active": True,
+        "reason": "manual review",
+        "set_at": "2026-04-25T11:05:00Z",
+    }
 
 
 def _assert_demoted_payload(payload, module, expected_kind: str, expected_target: str) -> None:
@@ -203,6 +277,148 @@ def test_controls_wrapper_normalizes_booleans_and_preserves_metadata(
         "reason": "manual review",
         "set_at": "2026-04-25T11:05:00Z",
     }
+
+
+def test_root_websocket_emits_canonical_control_status_alongside_controls_wrapper(
+    tmp_path,
+    monkeypatch,
+):
+    _write_execution_mode_config(tmp_path)
+    _write_json(
+        tmp_path / "control" / "kill_switch.json",
+        {
+            "kill_switch": False,
+            "active": True,
+            "reason": "operator override",
+            "set_at": "2026-04-25T11:00:00Z",
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "manual_veto.json",
+        {
+            "active": True,
+            "reason": "manual review",
+            "set_at": "2026-04-25T11:05:00Z",
+        },
+    )
+    heartbeat_sequence = iter(
+        [
+            {
+                "mode": "NORMAL",
+                "cycle": 5,
+                "timestamp_utc": "2026-04-25T11:40:00+00:00",
+            },
+            {
+                "mode": "CRISIS",
+                "cycle": 6,
+                "timestamp_utc": "2026-04-25T11:41:00+00:00",
+            },
+        ]
+    )
+    scorecard = {
+        "mode": "ELEVATED",
+        "cycle": 7,
+        "regime_shift_probability": 0.42,
+        "confidence": 0.77,
+        "shadow_execution_eligible": True,
+        "fallback_mode_status": False,
+        "evidence": ["spread widening", "news shock"],
+    }
+    heartbeat_path = tmp_path / "logs" / "heartbeat.json"
+    real_load_json = root_server.load_json
+
+    def fake_load_json(path: Path):
+        if path == heartbeat_path:
+            return next(heartbeat_sequence)
+        return real_load_json(path)
+
+    async def immediate_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(root_server, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(root_server, "manager", _DummyConnectionManager())
+    monkeypatch.setattr(root_server, "load_json", fake_load_json)
+    monkeypatch.setattr(root_server, "load_scorecards", lambda limit=1: [scorecard])
+    monkeypatch.setattr(root_server.asyncio, "sleep", immediate_sleep)
+
+    websocket = _RecordingWebSocket(
+        disconnect_after_send_count=2,
+        disconnect_exception=root_server.WebSocketDisconnect,
+    )
+
+    asyncio.run(root_server.websocket_endpoint(websocket))
+
+    assert [frame["type"] for frame in websocket.sent] == ["init", "update"]
+    for frame in websocket.sent:
+        _assert_live_control_status(frame["control_status"])
+        _assert_compatibility_controls(frame["controls"])
+
+
+def test_dashboard_websocket_init_emits_canonical_control_status_alongside_controls_wrapper(
+    tmp_path,
+    monkeypatch,
+):
+    _write_execution_mode_config(tmp_path)
+    _write_json(
+        tmp_path / "logs" / "heartbeat.json",
+        {
+            "mode": "NORMAL",
+            "cycle": 5,
+            "timestamp_utc": "2026-04-25T11:40:00+00:00",
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "kill_switch.json",
+        {
+            "kill_switch": False,
+            "active": True,
+            "reason": "operator override",
+            "set_at": "2026-04-25T11:00:00Z",
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "manual_veto.json",
+        {
+            "active": True,
+            "reason": "manual review",
+            "set_at": "2026-04-25T11:05:00Z",
+        },
+    )
+    scorecard = {
+        "mode": "ELEVATED",
+        "cycle": 7,
+        "regime_shift_probability": 0.42,
+        "confidence": 0.77,
+        "shadow_execution_eligible": True,
+        "fallback_mode_status": False,
+        "evidence": ["spread widening", "news shock"],
+    }
+
+    monkeypatch.setattr(dashboard_server, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_server, "API_KEY", "")
+    monkeypatch.setattr(dashboard_server, "manager", _DummyConnectionManager())
+    monkeypatch.setattr(dashboard_server, "load_scorecards", lambda limit=1: [scorecard])
+    monkeypatch.setattr(
+        dashboard_server,
+        "_build_portfolio_payload",
+        lambda account="all": {"status": "stub"},
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_build_portfolio_history_payload",
+        lambda period="1D", timeframe="1H", account="all": {"status": "stub"},
+    )
+    monkeypatch.setattr(dashboard_server, "dashboard_live_state_manager", None)
+
+    websocket = _RecordingWebSocket(receive_messages=[{"type": "websocket.disconnect"}])
+
+    asyncio.run(dashboard_server.websocket_endpoint(websocket))
+
+    assert len(websocket.sent) == 1
+    frame = websocket.sent[0]
+    assert frame["type"] == "init"
+    _assert_live_control_status(frame["control_status"])
+    _assert_compatibility_controls(frame["controls"])
 
 
 @pytest.mark.parametrize(

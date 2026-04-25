@@ -328,6 +328,35 @@ def _controls_wrapper_payload() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def _canonical_control_status_payload(
+    *,
+    heartbeat_payload: Optional[Dict[str, Any]] = None,
+    scorecard_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    hb = heartbeat_payload if isinstance(heartbeat_payload, dict) else load_json(
+        REPO_ROOT / "logs" / "heartbeat.json"
+    )
+    sc = scorecard_payload if isinstance(scorecard_payload, dict) else {}
+    if not sc:
+        cards = load_scorecards(limit=1)
+        sc = cards[0] if cards else {}
+
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
+    return {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "mode": sc.get("mode", hb.get("mode", "UNKNOWN") if hb else "UNKNOWN"),
+        "cycle": sc.get("cycle", hb.get("cycle", 0) if hb else 0),
+        "regime_p": sc.get("regime_shift_probability", 0),
+        "confidence": sc.get("confidence", 0),
+        "kill_switch": control_snapshot["kill_switch"],
+        "manual_veto": control_snapshot["manual_veto"],
+        "shadow_eligible": sc.get("shadow_execution_eligible", False),
+        "fallback_mode": sc.get("fallback_mode_status", False),
+        "execution_mode": get_execution_mode_data(),
+        "evidence": sc.get("evidence", [])[:5],
+    }
+
+
 @app.get("/api/controls")
 def controls():
     return _controls_wrapper_payload()
@@ -764,6 +793,10 @@ async def websocket_endpoint(ws: WebSocket):
             "type": "init",
             "heartbeat": hb,
             "scorecard": cards[0] if cards else None,
+            "control_status": _canonical_control_status_payload(
+                heartbeat_payload=hb,
+                scorecard_payload=cards[0] if cards else None,
+            ),
             "controls": _controls_wrapper_payload(),
             "execution_mode": get_execution_mode_data(),
         })
@@ -780,6 +813,10 @@ async def websocket_endpoint(ws: WebSocket):
                     "type": "update",
                     "heartbeat": hb,
                     "scorecard": cards[0] if cards else None,
+                    "control_status": _canonical_control_status_payload(
+                        heartbeat_payload=hb,
+                        scorecard_payload=cards[0] if cards else None,
+                    ),
                     "controls": _controls_wrapper_payload(),
                     "execution_mode": get_execution_mode_data(),
                 })
@@ -906,34 +943,7 @@ def set_veto(req: VetoRequest):
 @app.get("/api/control/status")
 def control_status():
     """Full system status for bot consumption."""
-    hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
-    control_snapshot = read_control_state_snapshot(REPO_ROOT)
-    cards = load_scorecards(limit=1)
-    sc = cards[0] if cards else {}
-
-    # Get execution mode
-    exec_mode = {}
-    exec_mode_path = REPO_ROOT / "config" / "execution_mode.yaml"
-    if exec_mode_path.exists():
-        try:
-            import yaml
-            exec_mode = yaml.safe_load(exec_mode_path.read_text()) or {}
-        except Exception:
-            pass
-
-    return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "mode": sc.get("mode", hb.get("mode", "UNKNOWN") if hb else "UNKNOWN"),
-        "cycle": sc.get("cycle", hb.get("cycle", 0) if hb else 0),
-        "regime_p": sc.get("regime_shift_probability", 0),
-        "confidence": sc.get("confidence", 0),
-        "kill_switch": control_snapshot["kill_switch"],
-        "manual_veto": control_snapshot["manual_veto"],
-        "shadow_eligible": sc.get("shadow_execution_eligible", False),
-        "fallback_mode": sc.get("fallback_mode_status", False),
-        "execution_mode": exec_mode.get("execution_mode", {}),
-        "evidence": sc.get("evidence", [])[:5],
-    }
+    return _canonical_control_status_payload()
 
 @app.get("/api/control/portfolio-summary")
 def portfolio_summary():
