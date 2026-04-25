@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.core.control_state_snapshot import read_control_state_snapshot
 from src.core.market_session_classifier import MarketSessionClassifier
 from src.core.openclaw_role_registry import OpenClawRoleConfig
 
@@ -95,9 +96,7 @@ class OpenClawRoleBriefingBuilder:
         checkpoint = _read_json(checkpoint_path, {})
         blob_health = _read_json(blob_health_path, {})
         decision_audit = _read_json(decision_audit_path, {})
-        control_dir = self.repo_root / "control"
-        kill_switch = _read_json(control_dir / "kill_switch.json", {"kill_switch": False})
-        manual_veto = _read_json(control_dir / "manual_veto.json", {"manual_veto": False})
+        control_snapshot = read_control_state_snapshot(self.repo_root)
         dead_letter_dir = self.repo_root / "logs" / "dead_letter"
         dead_letter_count = len(list(dead_letter_dir.glob("*.json"))) if dead_letter_dir.exists() else 0
 
@@ -114,8 +113,8 @@ class OpenClawRoleBriefingBuilder:
             "blob_health": blob_health,
             "decision_audit": decision_audit,
             "control_flags": {
-                "kill_switch": bool(kill_switch.get("kill_switch", False)),
-                "manual_veto": bool(manual_veto.get("manual_veto", False)),
+                "kill_switch": control_snapshot["kill_switch"],
+                "manual_veto": control_snapshot["manual_veto"],
             },
             "dead_letter_count": dead_letter_count,
             "current_session": current_session,

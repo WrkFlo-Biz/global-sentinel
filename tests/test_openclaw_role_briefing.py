@@ -130,3 +130,16 @@ def test_builds_volatility_research_role_with_focus_areas(tmp_path: Path):
     assert "index volatility and hedge paper basket" in focus_areas
     assert any("Checkpoint blockers" in fact for fact in artifact["observed_facts"])
     assert any("paper research" in action.lower() for action in artifact["actions"])
+
+
+def test_load_context_uses_shared_control_snapshot_file_semantics(tmp_path: Path):
+    repo_root = tmp_path
+    _write_json(repo_root / "control" / "manual_veto.json", {"manual_veto": True})
+    (repo_root / "control" / "kill_switch.json").write_text("{bad-json", encoding="utf-8")
+
+    context = OpenClawRoleBriefingBuilder(repo_root)._load_context()
+
+    assert context["control_flags"] == {
+        "kill_switch": False,
+        "manual_veto": True,
+    }

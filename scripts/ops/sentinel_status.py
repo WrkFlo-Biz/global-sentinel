@@ -20,6 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 
 def load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -46,8 +52,7 @@ def mode_emoji(mode: str) -> str:
 def format_status(repo_root: Path, fmt: str = "text") -> str:
     heartbeat = load_json(repo_root / "logs" / "heartbeat.json")
     sc = latest_scorecard(repo_root / "logs" / "scorecards")
-    kill = load_json(repo_root / "control" / "kill_switch.json")
-    veto = load_json(repo_root / "control" / "manual_veto.json")
+    control_snapshot = read_control_state_snapshot(repo_root)
 
     mode = heartbeat.get("mode", "UNKNOWN")
     cycle = heartbeat.get("cycle", 0)
@@ -72,8 +77,8 @@ def format_status(repo_root: Path, fmt: str = "text") -> str:
             f"Mode: <b>{mode}</b> | Cycle: {cycle}",
             f"Regime P: <b>{regime_p:.3f}</b> | Confidence: {confidence:.3f}",
             f"Shadow eligible: {'Yes' if shadow_eligible else 'No'}",
-            f"Kill switch: {'🛑 ACTIVE' if kill.get('active') else '✅ Off'}",
-            f"Manual veto: {'🟠 ACTIVE' if veto.get('active') else '✅ Off'}",
+            f"Kill switch: {'🛑 ACTIVE' if control_snapshot['kill_switch'] else '✅ Off'}",
+            f"Manual veto: {'🟠 ACTIVE' if control_snapshot['manual_veto'] else '✅ Off'}",
             f"",
             f"Bridges:",
         ]
@@ -86,8 +91,8 @@ def format_status(repo_root: Path, fmt: str = "text") -> str:
             f"Mode: {mode} (cycle {cycle})",
             f"Regime P: {regime_p:.3f} | Confidence: {confidence:.3f}",
             f"Shadow eligible: {shadow_eligible}",
-            f"Kill switch: {kill.get('active', False)}",
-            f"Manual veto: {veto.get('active', False)}",
+            f"Kill switch: {control_snapshot['kill_switch']}",
+            f"Manual veto: {control_snapshot['manual_veto']}",
             f"Bridges: {json.dumps(bridge_summary)}",
             f"Heartbeat: {hb_ts} ({hb_status})",
         ]

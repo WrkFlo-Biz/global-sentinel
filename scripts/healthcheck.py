@@ -18,6 +18,11 @@ except ImportError:
     psutil = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", str(PROJECT_ROOT / "logs" / "heartbeat.json"))
 MAX_HEARTBEAT_AGE_SECONDS = 1800  # 30 minutes
 
@@ -66,14 +71,11 @@ def check_memory() -> dict:
 
 
 def check_controls() -> dict:
-    veto_path = PROJECT_ROOT / "control" / "manual_veto.json"
-    kill_path = PROJECT_ROOT / "control" / "kill_switch.json"
-    veto = json.loads(veto_path.read_text()) if veto_path.exists() else {}
-    kill = json.loads(kill_path.read_text()) if kill_path.exists() else {}
+    control_snapshot = read_control_state_snapshot(PROJECT_ROOT)
     alerts = []
-    if veto.get("manual_veto"):
+    if control_snapshot["manual_veto"]:
         alerts.append("MANUAL VETO ACTIVE")
-    if kill.get("kill_switch"):
+    if control_snapshot["kill_switch"]:
         alerts.append("KILL SWITCH ACTIVE")
     return {"status": "alert" if alerts else "ok", "alerts": alerts}
 
