@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useCallback, useRef } from "react";
 import CandlestickChart from "@/components/CandlestickChart";
 import AccountSwitcher from "@/components/AccountSwitcher";
@@ -280,9 +281,9 @@ export default function TradingDashboard() {
       {/* Header */}
       <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-4">
-          <a href="/" className="text-gray-500 hover:text-gray-300 text-xs transition">
+          <Link href="/" className="text-gray-500 hover:text-gray-300 text-xs transition">
             &larr; Sentinel
-          </a>
+          </Link>
           <h1 className="text-lg font-bold text-gray-200 tracking-tight">TRADING DASHBOARD</h1>
           <span className="flex items-center gap-1.5 text-[10px] text-gray-600">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
 
 interface Bar {
@@ -43,6 +43,62 @@ export default function CandlestickChart({ symbol, timeframe = "5Min", height = 
   const [error, setError] = useState("");
   const [lastPrice, setLastPrice] = useState<number | null>(null);
   const [priceChange, setPriceChange] = useState<number>(0);
+
+  const loadBars = useCallback(async (
+    candleSeries: ISeriesApi<"Candlestick">,
+    volumeSeries: ISeriesApi<"Histogram">,
+    chart: IChartApi
+  ) => {
+    setLoading(true);
+    setError("");
+    try {
+      const bars = await fetchBars(symbol, timeframe);
+      if (bars.length === 0) {
+        setError("No data");
+        setLoading(false);
+        return;
+      }
+
+      const candleData: CandlestickData[] = bars.map((b) => ({
+        time: (new Date(b.t).getTime() / 1000) as Time,
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+      }));
+
+      const volumeData = bars.map((b) => ({
+        time: (new Date(b.t).getTime() / 1000) as Time,
+        value: b.v,
+        color: b.c >= b.o ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)",
+      }));
+
+      candleSeries.setData(candleData);
+      volumeSeries.setData(volumeData);
+
+      if (entryPrice) {
+        candleSeries.createPriceLine({
+          price: entryPrice,
+          color: "#f59e0b",
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: "Entry",
+        });
+      }
+
+      const last = bars[bars.length - 1];
+      const first = bars[0];
+      setLastPrice(last.c);
+      setPriceChange(((last.c - first.o) / first.o) * 100);
+
+      chart.timeScale().fitContent();
+    } catch (e: any) {
+      setError(e.message || "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, [entryPrice, symbol, timeframe]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -111,64 +167,7 @@ export default function CandlestickChart({ symbol, timeframe = "5Min", height = 
       window.removeEventListener("resize", handleResize);
       chart.remove();
     };
-  }, [symbol, timeframe, height]);
-
-  async function loadBars(
-    candleSeries: ISeriesApi<"Candlestick">,
-    volumeSeries: ISeriesApi<"Histogram">,
-    chart: IChartApi
-  ) {
-    setLoading(true);
-    setError("");
-    try {
-      const bars = await fetchBars(symbol, timeframe);
-      if (bars.length === 0) {
-        setError("No data");
-        setLoading(false);
-        return;
-      }
-
-      const candleData: CandlestickData[] = bars.map((b) => ({
-        time: (new Date(b.t).getTime() / 1000) as Time,
-        open: b.o,
-        high: b.h,
-        low: b.l,
-        close: b.c,
-      }));
-
-      const volumeData = bars.map((b) => ({
-        time: (new Date(b.t).getTime() / 1000) as Time,
-        value: b.v,
-        color: b.c >= b.o ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)",
-      }));
-
-      candleSeries.setData(candleData);
-      volumeSeries.setData(volumeData);
-
-      // Entry price line
-      if (entryPrice) {
-        candleSeries.createPriceLine({
-          price: entryPrice,
-          color: "#f59e0b",
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: "Entry",
-        });
-      }
-
-      const last = bars[bars.length - 1];
-      const first = bars[0];
-      setLastPrice(last.c);
-      setPriceChange(((last.c - first.o) / first.o) * 100);
-
-      chart.timeScale().fitContent();
-    } catch (e: any) {
-      setError(e.message || "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [height, loadBars]);
 
   // Auto-refresh every 5s for near-real-time candle updates
   useEffect(() => {
@@ -178,7 +177,7 @@ export default function CandlestickChart({ symbol, timeframe = "5Min", height = 
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [symbol, timeframe]);
+  }, [loadBars]);
 
   return (
     <div className="relative">

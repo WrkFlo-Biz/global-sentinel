@@ -25,6 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
 ORCHESTRATOR_APPROVAL_COMMAND = (
@@ -301,12 +303,34 @@ def heartbeat():
     return load_json(REPO_ROOT / "logs" / "heartbeat.json")
 
 
+def _control_wrapper_entry(control_name: str, snapshot_value: bool) -> Dict[str, Any]:
+    payload = load_json(REPO_ROOT / "control" / f"{control_name}.json")
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        **payload,
+        control_name: snapshot_value,
+        "active": snapshot_value,
+    }
+
+
+def _controls_wrapper_payload() -> Dict[str, Dict[str, Any]]:
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
+    return {
+        "kill_switch": _control_wrapper_entry(
+            "kill_switch",
+            control_snapshot["kill_switch"],
+        ),
+        "manual_veto": _control_wrapper_entry(
+            "manual_veto",
+            control_snapshot["manual_veto"],
+        ),
+    }
+
+
 @app.get("/api/controls")
 def controls():
-    return {
-        "kill_switch": load_json(REPO_ROOT / "control" / "kill_switch.json"),
-        "manual_veto": load_json(REPO_ROOT / "control" / "manual_veto.json"),
-    }
+    return _controls_wrapper_payload()
 
 
 @app.get("/api/scorecard/latest")
@@ -740,10 +764,7 @@ async def websocket_endpoint(ws: WebSocket):
             "type": "init",
             "heartbeat": hb,
             "scorecard": cards[0] if cards else None,
-            "controls": {
-                "kill_switch": load_json(REPO_ROOT / "control" / "kill_switch.json"),
-                "manual_veto": load_json(REPO_ROOT / "control" / "manual_veto.json"),
-            },
+            "controls": _controls_wrapper_payload(),
             "execution_mode": get_execution_mode_data(),
         })
         # Keep alive — poll for changes every 10s
@@ -759,10 +780,7 @@ async def websocket_endpoint(ws: WebSocket):
                     "type": "update",
                     "heartbeat": hb,
                     "scorecard": cards[0] if cards else None,
-                    "controls": {
-                        "kill_switch": load_json(REPO_ROOT / "control" / "kill_switch.json"),
-                        "manual_veto": load_json(REPO_ROOT / "control" / "manual_veto.json"),
-                    },
+                    "controls": _controls_wrapper_payload(),
                     "execution_mode": get_execution_mode_data(),
                 })
     except WebSocketDisconnect:
@@ -889,8 +907,7 @@ def set_veto(req: VetoRequest):
 def control_status():
     """Full system status for bot consumption."""
     hb = load_json(REPO_ROOT / "logs" / "heartbeat.json")
-    ks = load_json(REPO_ROOT / "control" / "kill_switch.json")
-    veto = load_json(REPO_ROOT / "control" / "manual_veto.json")
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
     cards = load_scorecards(limit=1)
     sc = cards[0] if cards else {}
 
@@ -910,8 +927,8 @@ def control_status():
         "cycle": sc.get("cycle", hb.get("cycle", 0) if hb else 0),
         "regime_p": sc.get("regime_shift_probability", 0),
         "confidence": sc.get("confidence", 0),
-        "kill_switch": ks.get("kill_switch", False) if ks else False,
-        "manual_veto": veto.get("manual_veto", False) if veto else False,
+        "kill_switch": control_snapshot["kill_switch"],
+        "manual_veto": control_snapshot["manual_veto"],
         "shadow_eligible": sc.get("shadow_execution_eligible", False),
         "fallback_mode": sc.get("fallback_mode_status", False),
         "execution_mode": exec_mode.get("execution_mode", {}),

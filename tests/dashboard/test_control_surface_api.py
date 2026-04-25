@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import server as root_server
 from dashboard.api import server as dashboard_server
 
@@ -40,6 +46,11 @@ def _write_execution_mode_config(repo_root: Path) -> str:
     )
     config_path.write_text(content, encoding="utf-8")
     return content
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _assert_demoted_payload(payload, module, expected_kind: str, expected_target: str) -> None:
@@ -93,6 +104,105 @@ def test_get_execution_mode_remains_read_only(tmp_path, monkeypatch, module):
     }
     assert payload["bot_permissions"] == {"telegram": "read_only"}
     assert (tmp_path / "config" / "execution_mode.yaml").read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "module",
+    [dashboard_server, root_server],
+    ids=["dashboard", "root"],
+)
+def test_control_status_uses_shared_snapshot_booleans_and_preserves_execution_mode_reads(
+    tmp_path,
+    monkeypatch,
+    module,
+):
+    _write_execution_mode_config(tmp_path)
+    _write_json(
+        tmp_path / "logs" / "heartbeat.json",
+        {
+            "mode": "NORMAL",
+            "cycle": 5,
+            "timestamp_utc": "2026-04-25T11:40:00+00:00",
+        },
+    )
+    _write_json(
+        tmp_path / "logs" / "scorecards" / "scorecard_latest.json",
+        {
+            "mode": "ELEVATED",
+            "cycle": 7,
+            "regime_shift_probability": 0.42,
+            "confidence": 0.77,
+            "shadow_execution_eligible": True,
+            "fallback_mode_status": False,
+            "evidence": ["spread widening", "news shock"],
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "kill_switch.json",
+        {"kill_switch": False, "active": True},
+    )
+    _write_json(
+        tmp_path / "control" / "manual_veto.json",
+        {"active": True},
+    )
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    payload = module.control_status()
+
+    assert payload["mode"] == "ELEVATED"
+    assert payload["cycle"] == 7
+    assert payload["kill_switch"] is False
+    assert payload["manual_veto"] is True
+    assert payload["execution_mode"] == {
+        "day_trade": "auto",
+        "medium_long": "manual",
+    }
+    assert payload["evidence"] == ["spread widening", "news shock"]
+
+
+@pytest.mark.parametrize(
+    "module",
+    [dashboard_server, root_server],
+    ids=["dashboard", "root"],
+)
+def test_controls_wrapper_normalizes_booleans_and_preserves_metadata(
+    tmp_path,
+    monkeypatch,
+    module,
+):
+    _write_json(
+        tmp_path / "control" / "kill_switch.json",
+        {
+            "kill_switch": False,
+            "active": True,
+            "reason": "operator override",
+            "set_at": "2026-04-25T11:00:00Z",
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "manual_veto.json",
+        {
+            "active": True,
+            "reason": "manual review",
+            "set_at": "2026-04-25T11:05:00Z",
+        },
+    )
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    payload = module.controls()
+
+    assert payload["kill_switch"] == {
+        "kill_switch": False,
+        "active": False,
+        "reason": "operator override",
+        "set_at": "2026-04-25T11:00:00Z",
+    }
+    assert payload["manual_veto"] == {
+        "manual_veto": True,
+        "active": True,
+        "reason": "manual review",
+        "set_at": "2026-04-25T11:05:00Z",
+    }
 
 
 @pytest.mark.parametrize(
