@@ -185,19 +185,22 @@ That makes these GS patterns incompatible with the target model:
 
 ### Implementation-track summary
 
-Phase 5 now has two companion implementation docs that should be read with this
+Phase 5 now has three companion implementation docs that should be read with this
 status note:
 
 - `docs/openclaw-demotion-plan.md`
 - `docs/foundry-routing-adoption-plan.md`
+- `docs/gs-guarded-task-kinds-plan.md`
 
 Their combined sequence is:
 
 1. close the Foundry routing ingress gap by making the orchestrator serve the
    GS synchronous inference contract at `/v1/inference`
 2. finish moving active GS runtime callers onto the shared routing boundary
-3. register explicit GS task kind definitions and bind them to
-   `target=global-sentinel`
+3. register explicit GS task kind definitions and bind them to scoped targets
+   such as `global-sentinel/control/kill-switch/on`,
+   `global-sentinel/control/execution-mode/day_trade/manual`, and
+   `global-sentinel/trade-ticket/<ticket_id>`
 4. move OpenClaw runtime state and dispatch ownership out of
    `OpenClawStateDB` and `scripts/agent_factory.py`
 5. collapse Tier-2 local mutators and execution-adjacent approvals into
@@ -212,11 +215,16 @@ The routing blockers are also shared across both plans:
 
 The key approval-token dependency is the same in both plans: guarded
 replacement flows only work once GS actions can bind to an explicit task kind
-plus `target=global-sentinel`. Without that contract, OpenClaw demotion cannot
-finish and Foundry/orchestrator routing cannot absorb Tier-2 control or
-execution-capable GS paths safely. In practice, that means the routing plan
-has to establish the task and ingress contract before the demotion plan can
-retire the last GS-local approval and runtime-state authorities.
+plus a scoped target such as
+`global-sentinel/control/execution-mode/day_trade/manual`,
+`global-sentinel/control/manual-veto/on`, or
+`global-sentinel/trade-ticket/<ticket_id>`. `docs/gs-guarded-task-kinds-plan.md`
+defines the current GS target shapes. Without that narrower contract,
+OpenClaw demotion cannot finish and Foundry/orchestrator routing cannot absorb
+Tier-2 control or execution-capable GS paths safely. In practice, that means
+the routing plan has to establish the task and ingress contract before the
+demotion plan can retire the last GS-local approval and runtime-state
+authorities.
 
 ### Concrete GS-side migration map
 
@@ -236,8 +244,10 @@ retire the last GS-local approval and runtime-state authorities.
      - kill switch changes
      - manual veto changes
      - guarded trade execution or trade ticket preparation
-   - Whatever names are chosen, they must be bound to `target=global-sentinel`
-     so the token verifier's `kind` and `target` checks are meaningful.
+   - Whatever names are chosen, they must be bound to scoped targets such as
+     `global-sentinel/control/kill-switch/on` or
+     `global-sentinel/trade-ticket/<ticket_id>` so the token verifier's
+     `kind` and `target` checks are meaningful.
    - Today this is still a gap: no GS-specific guarded task kinds were found in
      the orchestrator source during this pass.
 
@@ -284,11 +294,14 @@ retire the last GS-local approval and runtime-state authorities.
 For a guarded GS action, the end state should look like this:
 
 1. operator or channel adapter mints a token:
-   `wrkflo-orchestrator approve --kind <gs-kind> --target global-sentinel --reason "..."`
+   `wrkflo-orchestrator approve --kind <gs-kind> --target <gs-scoped-target> --reason "..."`
+   where `<gs-scoped-target>` is an exact action scope such as
+   `global-sentinel/control/kill-switch/on` or
+   `global-sentinel/trade-ticket/<ticket_id>`
 2. the caller submits one guarded `POST /v1/tasks` with:
    - `Authorization: Bearer <token>`
    - `kind`
-   - `target: "global-sentinel"`
+   - `target: "<same scoped target>"`
    - `project: "global-sentinel"`
    - requester identity
    - idempotency key
