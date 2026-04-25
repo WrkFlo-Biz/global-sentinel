@@ -39,6 +39,12 @@ LEGACY_APPROVAL_ENDPOINT_MESSAGE = (
     "Legacy dashboard approval endpoint is disabled; prepare a scoped GS trade "
     "ticket and route approval through orchestrator tokens instead."
 )
+APPROVAL_REQUIRED_ERROR = "orchestrator_approval_required"
+CONTROL_SURFACE_APPROVAL_MESSAGE = (
+    "This control-surface mutator is demoted. Route Tier-2 control changes "
+    "through orchestrator approval tokens instead of writing local control "
+    "files."
+)
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
 LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
 LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
@@ -49,6 +55,30 @@ ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
 
 
 dashboard_live_state_manager: Optional["DashboardLiveStateManager"] = None
+
+
+def _approval_command(kind: str, target: str) -> str:
+    return f"wrkflo-orchestrator approve --kind {kind} --target {target}"
+
+
+def _approval_guidance_response(
+    *,
+    kind: str,
+    target: str,
+    requested_change: Dict[str, Any] | None = None,
+) -> JSONResponse:
+    content: Dict[str, Any] = {
+        "ok": False,
+        "status": "approval_required",
+        "error": APPROVAL_REQUIRED_ERROR,
+        "message": CONTROL_SURFACE_APPROVAL_MESSAGE,
+        "kind": kind,
+        "target": target,
+        "orchestrator_command": _approval_command(kind, target),
+    }
+    if requested_change is not None:
+        content["requested_change"] = requested_change
+    return JSONResponse(status_code=410, content=content)
 
 
 @asynccontextmanager
@@ -2955,7 +2985,6 @@ def get_execution_mode():
 async def set_execution_mode(request: Request):
     """Toggle execution mode for a strategy. Body: {"strategy": "day_trade"|"medium_long", "mode": "auto"|"manual"}"""
     try:
-        import yaml
         body = await request.json()
         strategy = body.get("strategy")
         mode = body.get("mode")
@@ -2965,12 +2994,11 @@ async def set_execution_mode(request: Request):
         if mode not in ("auto", "manual"):
             return JSONResponse(status_code=400, content={"error": "invalid mode"})
 
-        config_path = REPO_ROOT / "config" / "execution_mode.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        config["execution_mode"][strategy] = mode
-        config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
-
-        return {"status": "ok", "strategy": strategy, "mode": mode, "timestamp_utc": datetime.now(timezone.utc).isoformat()}
+        return _approval_guidance_response(
+            kind="gs.control.execution_mode.set",
+            target=f"global-sentinel/control/execution-mode/{strategy}/{mode}",
+            requested_change={"strategy": strategy, "mode": mode},
+        )
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -3988,30 +4016,20 @@ class ServiceActionRequest(BaseModel):
 @app.post("/api/control/kill-switch")
 def set_kill_switch(req: KillSwitchRequest):
     """Activate or deactivate the kill switch."""
-    ks_path = REPO_ROOT / "control" / "kill_switch.json"
-    data = {
-        "kill_switch": req.active,
-        "reason": req.reason or ("Activated via API" if req.active else None),
-        "set_by": "api",
-        "set_at": datetime.now(timezone.utc).isoformat() if req.active else None,
-        "notes": "Set to true to halt ALL monitoring and agent activity. Emergency use only.",
-    }
-    ks_path.write_text(json.dumps(data, indent=2))
-    return {"ok": True, "kill_switch": req.active, "reason": req.reason}
+    return _approval_guidance_response(
+        kind="gs.control.kill_switch.set",
+        target=f"global-sentinel/control/kill-switch/{'on' if req.active else 'off'}",
+        requested_change={"kill_switch": req.active, "reason": req.reason or ""},
+    )
 
 @app.post("/api/control/veto")
 def set_veto(req: VetoRequest):
     """Activate or deactivate manual veto."""
-    veto_path = REPO_ROOT / "control" / "manual_veto.json"
-    data = {
-        "manual_veto": req.active,
-        "reason": req.reason or ("Activated via API" if req.active else None),
-        "set_by": "api",
-        "set_at": datetime.now(timezone.utc).isoformat() if req.active else None,
-        "notes": "Set to true to halt all shadow draft generation. Requires human action to clear.",
-    }
-    veto_path.write_text(json.dumps(data, indent=2))
-    return {"ok": True, "manual_veto": req.active, "reason": req.reason}
+    return _approval_guidance_response(
+        kind="gs.control.manual_veto.set",
+        target=f"global-sentinel/control/manual-veto/{'on' if req.active else 'off'}",
+        requested_change={"manual_veto": req.active, "reason": req.reason or ""},
+    )
 
 @app.get("/api/control/status")
 def control_status():
@@ -4962,24 +4980,21 @@ def v6_watchlist():
 @app.post("/api/v6/kill-switch")
 def v6_kill_switch():
     """Emergency kill switch — activates kill_switch.json."""
-    ks_path = REPO_ROOT / "control" / "kill_switch.json"
-    ks_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "active": True,
-        "activated_at": _utc_now_iso(),
-        "reason": "Dashboard kill switch activated",
-    }
-    ks_path.write_text(json.dumps(payload, indent=2))
-    return {"status": "kill_switch_activated", "timestamp": _utc_now_iso()}
+    return _approval_guidance_response(
+        kind="gs.control.kill_switch.set",
+        target="global-sentinel/control/kill-switch/on",
+        requested_change={"kill_switch": True, "reason": "Dashboard kill switch activated"},
+    )
 
 
 @app.post("/api/v6/kill-switch/deactivate")
 def v6_kill_switch_deactivate():
     """Deactivate kill switch."""
-    ks_path = REPO_ROOT / "control" / "kill_switch.json"
-    payload = {"active": False, "deactivated_at": _utc_now_iso()}
-    ks_path.write_text(json.dumps(payload, indent=2))
-    return {"status": "kill_switch_deactivated", "timestamp": _utc_now_iso()}
+    return _approval_guidance_response(
+        kind="gs.control.kill_switch.set",
+        target="global-sentinel/control/kill-switch/off",
+        requested_change={"kill_switch": False, "reason": ""},
+    )
 
 
 @app.get("/api/v6/calendar")
