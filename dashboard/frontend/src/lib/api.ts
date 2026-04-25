@@ -259,6 +259,37 @@ export interface ExecutionModeData {
   bot_permissions: Record<string, any>;
 }
 
+export interface DemotedApprovalResponse {
+  status: "approval_required";
+  error?: string;
+  message?: string;
+  orchestrator_command?: string;
+  approval_required?: boolean;
+  legacy_approval_file_bridge_disabled?: boolean;
+}
+
+export type ExecutionModeMutationResponse =
+  | ExecutionModeData
+  | DemotedApprovalResponse
+  | Record<string, unknown>;
+
+export const EXECUTION_APPROVAL_GUIDANCE = {
+  title: "Orchestrator approval required",
+  message:
+    "Legacy pending-orders polling and local approve/reject actions are disabled. Use orchestrator approval for scoped GS trade tickets instead.",
+  detail:
+    "This panel no longer assumes /api/pending-orders or /api/telegram/approve is the source of truth.",
+  orchestratorCommand:
+    "wrkflo-orchestrator approve --kind gs.trade.execute_shadow --target global-sentinel/trade-ticket/<ticket_id>",
+} as const;
+
+export function isDemotedApprovalResponse(
+  value: unknown,
+): value is DemotedApprovalResponse {
+  if (!value || typeof value !== "object") return false;
+  return (value as { status?: unknown }).status === "approval_required";
+}
+
 export interface ExecutionRoutingSummary {
   event_count: number;
   processed_candidate_count: number;
@@ -341,19 +372,17 @@ export const api = {
   consciousness: () => fetchJSON<ConsciousnessData>("/api/consciousness"),
   politicianAlpha: () => fetchJSON<PoliticianAlphaData>("/api/politician-alpha"),
   executionMode: () => fetchJSON<ExecutionModeData>("/api/execution-mode"),
-  setExecutionMode: (strategy: string, mode: string) =>
-    fetch(`${API_BASE}/api/execution-mode`, {
+  setExecutionMode: async (
+    strategy: string,
+    mode: string,
+  ): Promise<ExecutionModeMutationResponse> => {
+    const response = await fetch(`${API_BASE}/api/execution-mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
       body: JSON.stringify({ strategy, mode }),
-    }).then(r => r.json()),
-  approveOrders: (strategy: string, action: string) =>
-    fetch(`${API_BASE}/api/telegram/approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
-      body: JSON.stringify({ strategy, action }),
-    }).then(r => r.json()),
-  pendingOrders: () => fetchJSON<any>("/api/pending-orders"),
+    });
+    return response.json();
+  },
   gssTimeline: (limit = 100) => fetchJSON<GSSTimelinePoint[]>(`/api/gss-timeline?limit=${limit}`),
   gssLatest: () => fetchJSON<GSSLatest>("/api/gss-latest"),
   dashboardLayout: () => fetchJSON<DashboardLayout>("/api/dashboard/layout"),

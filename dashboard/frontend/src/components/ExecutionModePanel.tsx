@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { api, type ExecutionModeData } from "@/lib/api";
+import {
+  api,
+  EXECUTION_APPROVAL_GUIDANCE,
+  isDemotedApprovalResponse,
+  type ExecutionModeData,
+} from "@/lib/api";
 
 interface Props {
   data: ExecutionModeData | null;
@@ -10,6 +15,11 @@ interface Props {
 
 export default function ExecutionModePanel({ data, onModeChange }: Props) {
   const [toggling, setToggling] = useState<string | null>(null);
+  const [demotedNotice, setDemotedNotice] = useState<{
+    strategy: string;
+    message: string;
+    command: string;
+  } | null>(null);
 
   if (!data) return <div className="text-gray-600 text-xs">Loading execution config...</div>;
 
@@ -23,30 +33,23 @@ export default function ExecutionModePanel({ data, onModeChange }: Props) {
     const newMode = currentMode === "auto" ? "manual" : "auto";
     setToggling(strategy);
     try {
-      await api.setExecutionMode(strategy, newMode);
+      const response = await api.setExecutionMode(strategy, newMode);
+      if (isDemotedApprovalResponse(response)) {
+        setDemotedNotice({
+          strategy,
+          message: response.message || EXECUTION_APPROVAL_GUIDANCE.message,
+          command:
+            response.orchestrator_command ||
+            EXECUTION_APPROVAL_GUIDANCE.orchestratorCommand,
+        });
+        return;
+      }
+      setDemotedNotice(null);
       onModeChange();
     } catch (e) {
       console.error("Failed to toggle mode:", e);
     } finally {
       setToggling(null);
-    }
-  };
-
-  const handleApprove = async (strategy: string) => {
-    try {
-      await api.approveOrders(strategy, "approve");
-      onModeChange();
-    } catch (e) {
-      console.error("Failed to approve:", e);
-    }
-  };
-
-  const handleReject = async (strategy: string) => {
-    try {
-      await api.approveOrders(strategy, "reject");
-      onModeChange();
-    } catch (e) {
-      console.error("Failed to reject:", e);
     }
   };
 
@@ -57,6 +60,7 @@ export default function ExecutionModePanel({ data, onModeChange }: Props) {
         const isAuto = mode === "auto";
         const cfg = data.strategies[key];
         const isToggling = toggling === key;
+        const activeNotice = demotedNotice?.strategy === key ? demotedNotice : null;
 
         return (
           <div key={key} className="bg-[#0d1117] rounded-lg p-2.5 border border-[#1e2530]">
@@ -96,19 +100,19 @@ export default function ExecutionModePanel({ data, onModeChange }: Props) {
               )}
             </div>
             {!isAuto && (
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={() => handleApprove(key)}
-                  className="px-3 py-1 text-xs bg-green-800 hover:bg-green-700 text-green-200 rounded border border-green-700 cursor-pointer"
-                >
-                  Approve Pending
-                </button>
-                <button
-                  onClick={() => handleReject(key)}
-                  className="px-3 py-1 text-xs bg-red-900 hover:bg-red-800 text-red-200 rounded border border-red-800 cursor-pointer"
-                >
-                  Reject Pending
-                </button>
+              <div className="mt-2 rounded-md border border-amber-800/70 bg-amber-950/30 p-2 text-[10px] text-amber-100">
+                <div className="font-semibold uppercase tracking-[0.08em] text-amber-300">
+                  {EXECUTION_APPROVAL_GUIDANCE.title}
+                </div>
+                <div className="mt-1 text-amber-100/90">
+                  {EXECUTION_APPROVAL_GUIDANCE.message}
+                </div>
+                <div className="mt-1 text-amber-200/80">
+                  {activeNotice?.message || EXECUTION_APPROVAL_GUIDANCE.detail}
+                </div>
+                <div className="mt-2 rounded border border-[#2a3340] bg-[#0a0f14] px-2 py-1 font-mono text-[9px] text-amber-200 break-all">
+                  {activeNotice?.command || EXECUTION_APPROVAL_GUIDANCE.orchestratorCommand}
+                </div>
               </div>
             )}
           </div>
