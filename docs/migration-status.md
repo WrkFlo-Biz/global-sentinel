@@ -135,13 +135,16 @@ Inputs for this pass:
   `scripts/agent_factory.py:1299-1319` can still enqueue
   `strategy_executor`, `crypto_executor`, and tuning work from the GS-owned
   loop.
-- **GS still keeps file-backed status reads and compatibility readers.**
-  The mutator surfaces are mostly demoted, but `server.py`,
-  `dashboard/api/server.py`, `src/risk/manual_veto_mcp.py`,
-  `src/monitoring/crisis_monitor.py`, `scripts/agent_factory.py`,
-  `src/execution/politician_alpha_executor.py`, `scripts/ops/market_query.py`,
-  and `scripts/ops/daily_thesis_generator.py` still read local control files
-  or GS-local state as live truth.
+- **GS now has a shared read boundary, but the last contract cleanup is still above it.**
+  Most first-party kill-switch and manual-veto readers now converge on
+  `src/core/control_state_snapshot.py`, and the root/dashboard
+  `GET /api/controls` plus websocket `controls` wrappers now normalize their
+  booleans through that helper. In the current GS tree, the active
+  dashboard/frontend consumer lane also repoints the main dashboard poll path
+  and project-facing config/prompt surfaces to `GET /api/control/status`.
+  The remaining drift is now the dual public contract: backend compatibility
+  wrappers are still published, and the frontend API layer still keeps
+  wrapper-shape fallback while that cleanup finishes.
 
 ### Current demotion read
 
@@ -149,8 +152,9 @@ OpenClaw is only partially demoted. The bot UX layer has stopped mutating GS
 state directly, and the trade-approval plus pending-order bridges are now on
 the orchestrator path or explicitly demoted. The remaining blockers are
 Telegram ingress, GS-owned runtime state, execution-adjacent OpenClaw seeding,
-and the fact that many read paths still treat local files as authoritative
-status.
+and the fact that GS still publishes compatibility wrapper contracts around
+control state even after most first-party boolean readers converged on the
+shared helper.
 
 Use `docs/openclaw-demotion-plan.md` for the file-level retirement order of
 `OpenClawStateDB` and adjacent runtime state, and
@@ -171,7 +175,7 @@ blocking a full GS-to-orchestrator cutover.
 | Position-manager approval handoff | `src/execution/position_manager.py:430-496`; `tests/execution/test_position_manager_manual_approval.py` | Proposed closes now carry `approval_required`, `ticket_id`, `ticket_hash`, `kind`, `target`, and `orchestrator_command` so each close can bind to a scoped GS approval token. | Handoff metadata is landed, but downstream execution still needs the same shared guarded submit/read path and orchestrator worker support. |
 | Legacy approval-file API and frontend bridge | `dashboard/api/server.py:3025-3041`; `server.py:684-700`; `dashboard/frontend/src/lib/api.ts:263-290`; `dashboard/frontend/src/components/ExecutionModePanel.tsx:42-70` | `POST /api/telegram/approve` now returns `410 legacy_approval_file_bridge_disabled`; `GET /api/pending-orders` now returns an `approval_required` demoted payload; the frontend now tells operators these routes are no longer source of truth and points to orchestrator approval instead. | Demoted. Remaining gap is a real ticket submit/read UX backed by the task client rather than guidance text alone. |
 | Execution-mode / kill-switch / manual-veto mutators | `dashboard/api/server.py:3004-3041,4031-4045,4995-5010`; `server.py:663-692,871-885`; `src/risk/manual_veto_mcp.py:127-163`; `scripts/ops/gs_control.py:62-196` | Dashboard/root API, MCP, and CLI mutators now return `approval_required` guidance and scoped orchestrator commands instead of writing local control files. | Mutation authority is demoted, but GS still has duplicated channel adapters and file-backed status reads. |
-| File-backed status readers | `server.py:307-308,892-914`; `dashboard/api/server.py:1851-1852,4052-4074`; `src/risk/manual_veto_mcp.py:84-90`; `src/monitoring/crisis_monitor.py:191-210`; `scripts/agent_factory.py:142-146` | These surfaces still read `execution_mode.yaml`, `kill_switch.json`, `manual_veto.json`, or adjacent GS-local state as live truth. | Read-side authority is still GS-local, so the system can remain split-brained until orchestrator-derived state replaces these readers. |
+| Shared control snapshot adoption and remaining wrapper drift | `src/core/control_state_snapshot.py:1-32`; helper adopters in `scripts/ops/market_query.py:28,73`, `scripts/ops/daily_thesis_generator.py:22,74`, `scripts/healthcheck.py:24,74`, `scripts/ops/sentinel_status.py:27,55`, `src/reports/openclaw_role_briefing.py:12,99`, `src/risk/manual_veto_mcp.py:22,89-96`, `src/monitoring/crisis_monitor.py:38,193`, `scripts/agent_factory.py:53,143`, `src/execution/politician_alpha_executor.py:27,553`, and `scripts/self_improvement_loop.py:38,201`; compatibility wrappers in `server.py:317-333,767-783,906-928` and `dashboard/api/server.py:1861-1877,3933,4069-4091`; current-tree consumer convergence in `dashboard/frontend/src/lib/api.ts:96-108,358-430`, `dashboard/frontend/src/app/page.tsx:150,175,193,220-223,294-299`, `dashboard/frontend/src/components/ControlPanel.tsx:3-33`, `config/claude_cowork_mcp.json:86-99`, and `config/cowork_briefing_prompt.md:16-22` | Most first-party kill-switch / manual-veto readers now converge on `src/core/control_state_snapshot.py`; `GET /api/control/status` is the normalized operator-facing boolean surface; `GET /api/controls` and websocket `controls` wrappers now preserve outward metadata while normalizing booleans through the shared helper; and the active consumer-convergence lane in the current GS tree repoints the dashboard poll path and project-facing integration surfaces to `/api/control/status`. | Read-side drift is now concentrated in the remaining dual-contract behavior. The backend still publishes compatibility wrappers on `/api/controls` and websocket `controls`, while the frontend API layer still preserves wrapper-shape fallback for `{active}`-style payloads. The public operator-facing contract is narrower than before, but it is not fully singular yet. |
 
 ### Important nuance
 
@@ -189,27 +193,62 @@ blocking a full GS-to-orchestrator cutover.
 - `server.py`, `dashboard/api/server.py`, and the dashboard frontend no longer
   treat `/api/telegram/approve` or `/api/pending-orders` as live approval
   bridges, but they still do not submit real guarded tasks either.
+- `server.py` and `dashboard/api/server.py` now normalize `GET /api/controls`
+  and websocket `controls` booleans through the shared helper, but that only
+  moved the drift boundary upward: the remaining inconsistency is now client
+  and integration contract drift rather than raw file-key precedence inside
+  first-party readers.
+- In the current GS tree, the active consumer-convergence lane already narrows
+  that drift: `dashboard/frontend/src/lib/api.ts` now fetches
+  `/api/control/status` and normalizes it into `ControlStatus`,
+  `dashboard/frontend/src/app/page.tsx` no longer binds websocket
+  `data.controls`, `dashboard/frontend/src/components/ControlPanel.tsx` reads
+  normalized booleans directly, and `config/claude_cowork_mcp.json` plus
+  `config/cowork_briefing_prompt.md` now repoint project-facing integrations to
+  `/api/control/status`.
 - `src/execution/position_manager.py` now emits richer handoff metadata, but it
   still does not itself submit the guarded task or read back orchestrator run
   state.
 
-### Readers that still assume local files are authoritative
+### Remaining Control-Read Contract Drift
 
-Even after the mutator paths move, several GS components still read local
-control files as source of truth. Representative readers found in this pass:
+The main control-read problem is no longer that most first-party code still
+opens `kill_switch.json` and `manual_veto.json` directly, and in the current
+tree it is no longer the main dashboard poll path or the project-facing
+config/prompt surfaces either. The higher-signal remaining drift is now the
+dual public contract published above the shared helper:
 
-- `server.py:307-308,892-914`
-- `dashboard/api/server.py:1851-1852,4052-4074`
-- `src/risk/manual_veto_mcp.py:84-90`
-- `src/monitoring/crisis_monitor.py:191-210`
-- `scripts/agent_factory.py:142-146`
-- `src/execution/politician_alpha_executor.py:95-96,279-292`
-- `scripts/ops/market_query.py:94-95`
-- `scripts/ops/daily_thesis_generator.py:73-89`
+- `server.py:317-333,767-783`
+- `dashboard/api/server.py:1861-1877,3933`
+- `dashboard/frontend/src/lib/api.ts:358-425`
 
-That means the migration is not just "replace writers"; GS also needs a new
-authoritative read path or a compatibility cache sourced from orchestrator
-verdicts.
+The current GS tree already narrows the old client drift:
+
+- `dashboard/frontend/src/lib/api.ts:419-430` now fetches
+  `/api/control/status`
+- `dashboard/frontend/src/app/page.tsx:171-176,190-194,220-223,294-299` now
+  stores `ControlStatus` and no longer consumes websocket `data.controls`
+- `dashboard/frontend/src/components/ControlPanel.tsx:14-33` now renders the
+  normalized booleans directly
+- `config/claude_cowork_mcp.json:86-99` and
+  `config/cowork_briefing_prompt.md:16-22` now point project-facing
+  integrations at `/api/control/status`
+
+What still remains is subtler but still important:
+
+- `GET /api/controls` and websocket `controls` frames are still published as
+  compatibility wrappers
+- `dashboard/frontend/src/lib/api.ts:363-417` still preserves wrapper-shaped
+  `{active}` fallback when normalizing control payloads
+- external consumers can therefore still observe or keep learning two public
+  control-read shapes unless the compatibility wrapper is explicitly demoted,
+  versioned, or retired
+
+That means the migration is no longer just "replace writers" or even "move
+first-party readers behind one helper." GS now also needs to finish collapsing
+the public control-read contract so REST, websocket, dashboard, and
+project-facing integrations stop carrying both normalized status and wrapper
+compatibility semantics before read authority moves behind orchestrator.
 
 ## 3. What Must Change To Adopt The Orchestrator Approval-Token Flow
 
