@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as jsonlib
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -12,31 +13,13 @@ import src.inference.foundry_client as foundry_client
 from src.execution.shadow_order_router import ShadowOrderRouter
 
 
-CALLBACK_OFFSET_PATH = Path("/tmp/gs_callback_offset.json")
 APPROVAL_UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 APPROVAL_ID = APPROVAL_UUID.hex[:12]
-
-
-class _RequestsResponse:
-    def __init__(self, status_code: int, payload: dict | None = None, text: str | None = None):
-        self.status_code = status_code
-        self._payload = payload or {}
-        self.text = text or jsonlib.dumps(self._payload)
-
-    def json(self) -> dict:
-        return self._payload
 
 
 @pytest.fixture(autouse=True)
 def _isolate_foundry_repo_env(monkeypatch) -> None:
     monkeypatch.setattr(foundry_client, "_load_repo_env", lambda: {})
-
-
-@pytest.fixture(autouse=True)
-def _cleanup_callback_offset() -> None:
-    CALLBACK_OFFSET_PATH.unlink(missing_ok=True)
-    yield
-    CALLBACK_OFFSET_PATH.unlink(missing_ok=True)
 
 
 def _httpx_response(url: str, payload: dict) -> httpx.Response:
@@ -120,75 +103,71 @@ def _request_trade_from_foundry(monkeypatch, trade_request: dict) -> tuple[found
 def _configure_trade_approval(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TRADE_APPROVAL_ENABLED", "true")
     monkeypatch.setenv("TRADE_APPROVAL_TIMEOUT", "5")
-    monkeypatch.setenv("TRADE_APPROVAL_AUTO_EXECUTE", "false")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-token")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "trade-chat")
-    monkeypatch.setenv("TELEGRAM_TRADING_THREAD_ID", "0")
     monkeypatch.setattr(trade_approval, "APPROVAL_LOG_PATH", tmp_path / "logs" / "trade_approvals.jsonl")
     monkeypatch.setattr(trade_approval, "PENDING_DIR", tmp_path / "pending")
     monkeypatch.setattr(trade_approval.uuid, "uuid4", lambda: APPROVAL_UUID)
 
 
-def _stub_telegram_api(monkeypatch, *, decision: str) -> tuple[list[dict], list[dict], list[dict]]:
-    post_calls: list[dict] = []
-    get_calls: list[dict] = []
-    answer_calls: list[dict] = []
+def _stub_guarded_submit(
+    monkeypatch,
+    *,
+    run_id: str,
+    status: str,
+) -> dict[str, object]:
+    captured: dict[str, object] = {}
 
-    def fake_post(url, json=None, timeout=None, **kwargs):
-        call = {
-            "url": url,
-            "json": dict(json or {}),
-            "timeout": timeout,
-        }
-        if url.endswith("/answerCallbackQuery"):
-            answer_calls.append(call)
-            return _RequestsResponse(200, {"ok": True})
+    def fake_submit_task(
+        payload: dict[str, object],
+        *,
+        bearer_token: str = "",
+        base_url: str = "",
+        timeout: float = 0.0,
+    ) -> dict[str, object]:
+        captured["payload"] = payload
+        captured["bearer_token"] = bearer_token
+        captured["base_url"] = base_url
+        captured["timeout"] = timeout
+        return {"run_id": run_id, "status": status}
 
-        post_calls.append(call)
-        if url.endswith("/sendMessage") and "reply_markup" in (json or {}):
-            return _RequestsResponse(200, {"result": {"message_id": 321}})
-        return _RequestsResponse(200, {"ok": True})
-
-    def fake_get(url, params=None, timeout=None, **kwargs):
-        get_calls.append(
-            {
-                "url": url,
-                "params": dict(params or {}),
-                "timeout": timeout,
-            }
-        )
-        callback_action = "approve" if decision == "approved" else "reject"
-        return _RequestsResponse(
-            200,
-            {
-                "result": [
-                    {
-                        "update_id": 77,
-                        "callback_query": {
-                            "id": "callback-1",
-                            "data": f"{callback_action}:{APPROVAL_ID}",
-                        },
-                    }
-                ]
-            },
-        )
-
-    monkeypatch.setattr(trade_approval.requests, "post", fake_post)
-    monkeypatch.setattr(trade_approval.requests, "get", fake_get)
-    return post_calls, get_calls, answer_calls
+    monkeypatch.setattr(trade_approval, "submit_task", fake_submit_task)
+    return captured
 
 
-def _approval_order_info(trade_request: dict) -> dict:
-    return {
+def _approval_order_info(trade_request: dict, *, guarded: bool) -> dict:
+    order = {
         "symbol": trade_request["symbol"],
         "side": trade_request["side"],
         "qty": trade_request["qty"],
         "limit_price": trade_request["limit_price"],
         "notional": trade_request["notional"],
         "signal_source": trade_request["signal_source"],
+        "strategy": trade_request["strategy"],
         "strategy_style": trade_request["strategy_style"],
+        "strategy_family": trade_request["strategy_family"],
         "asset_class": "equity",
+        "requesting_agent": "integration-test-agent",
+        "requester_kind": "scheduler",
+        "requester_id": "integration-test-agent",
+        "requester_channel": "pytest",
+        "source_surface": "integration_test",
+        "order_type": "limit",
+        "time_in_force": "day",
     }
+    if guarded:
+        symbol_slug = str(trade_request["symbol"]).lower()
+        order.update(
+            {
+                "ticket_id": f"integration-{symbol_slug}-ticket",
+                "approval_token": f"approval-token-{symbol_slug}",
+                "approval_jti": f"approval-jti-{symbol_slug}",
+                "approval_issued_by": "integration-human",
+                "approval_reason": f"approve {trade_request['symbol']} integration trade",
+                "approval_exp": int(
+                    (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp()
+                ),
+            }
+        )
+    return order
 
 
 def _build_router_inputs(trade_request: dict) -> tuple[dict, dict]:
@@ -269,27 +248,37 @@ def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monke
     trade_request = jsonlib.loads(response.output)
 
     _configure_trade_approval(tmp_path, monkeypatch)
-    post_calls, get_calls, answer_calls = _stub_telegram_api(monkeypatch, decision="approved")
+    captured_submit = _stub_guarded_submit(
+        monkeypatch,
+        run_id="run-approval-1",
+        status="queued",
+    )
 
-    approval = trade_approval.request_approval(_approval_order_info(trade_request))
+    approval = trade_approval.request_approval(
+        _approval_order_info(trade_request, guarded=True)
+    )
 
     assert foundry_call["url"] == "http://router.test/v1/inference"
     assert foundry_call["timeout"] == 30.0
     assert foundry_call["json"]["intent_type"] == "trade_request"
     assert response.route["provider"] == "foundry"
     assert response.trace_id == "trace-foundry-integration"
-
     assert approval == {
         "approved": True,
         "decision": "approved",
-        "reason": "User approved: 'inline_button_yes'",
+        "reason": "Orchestrator accepted guarded trade execution (run_id=run-approval-1)",
     }
-    assert post_calls[0]["json"]["message_thread_id"] == 0
-    assert "TRADE APPROVAL REQUIRED" in post_calls[0]["json"]["text"]
-    assert "reply_markup" in post_calls[0]["json"]
-    assert post_calls[-1]["json"]["text"].startswith("\u2705 Trade EXECUTED")
-    assert get_calls[0]["params"]["allowed_updates"] == "[\"callback_query\"]"
-    assert answer_calls[0]["json"] == {"callback_query_id": "callback-1"}
+    assert captured_submit["bearer_token"] == "approval-token-aapl"
+    assert captured_submit["base_url"] == ""
+    assert captured_submit["timeout"] == 5.0
+    payload = captured_submit["payload"]
+    assert payload["project"] == "global-sentinel"
+    assert payload["kind"] == "gs.trade.execute_shadow"
+    assert payload["target"] == "global-sentinel/trade-ticket/integration-aapl-ticket"
+    assert payload["ticket_id"] == "integration-aapl-ticket"
+    assert payload["symbol"] == "AAPL"
+    assert payload["approval_context"]["approval_jti"] == "approval-jti-aapl"
+    assert payload["approval_context"]["approval_issued_by"] == "integration-human"
 
     package, strategy_config = _build_router_inputs(trade_request)
     route = ShadowOrderRouter(repo_root=tmp_path, broker_name="mock").route_package(
@@ -300,8 +289,10 @@ def test_trade_request_approval_and_execution_logging_flow(tmp_path: Path, monke
 
     approval_rows = _read_jsonl(tmp_path / "logs" / "trade_approvals.jsonl")
     assert approval_rows[-1]["approval_id"] == APPROVAL_ID
+    assert approval_rows[-1]["event_type"] == "approval_decision"
     assert approval_rows[-1]["approved"] is True
     assert approval_rows[-1]["order"]["symbol"] == "AAPL"
+    assert approval_rows[-1]["metadata"]["run_id"] == "run-approval-1"
 
     assert route["submitted_open_or_ack_count"] == 1
     assert route["broker_rejected_count"] == 0
@@ -327,9 +318,15 @@ def test_rejected_trade_request_stops_before_execution_logging(tmp_path: Path, m
     trade_request = jsonlib.loads(response.output)
 
     _configure_trade_approval(tmp_path, monkeypatch)
-    post_calls, _, _ = _stub_telegram_api(monkeypatch, decision="rejected")
+    captured_submit = _stub_guarded_submit(
+        monkeypatch,
+        run_id="run-rejected-1",
+        status="rejected",
+    )
 
-    approval = trade_approval.request_approval(_approval_order_info(trade_request))
+    approval = trade_approval.request_approval(
+        _approval_order_info(trade_request, guarded=True)
+    )
 
     if approval["approved"]:
         package, strategy_config = _build_router_inputs(trade_request)
@@ -341,11 +338,15 @@ def test_rejected_trade_request_stops_before_execution_logging(tmp_path: Path, m
 
     approval_rows = _read_jsonl(tmp_path / "logs" / "trade_approvals.jsonl")
     assert approval["approved"] is False
-    assert approval["decision"] == "rejected"
-    assert "User rejected" in approval["reason"]
+    assert approval["decision"] == "error"
+    assert "guarded submit did not return an accepted run" in approval["reason"]
+    payload = captured_submit["payload"]
+    assert payload["target"] == "global-sentinel/trade-ticket/integration-msft-ticket"
     assert approval_rows[-1]["approved"] is False
+    assert approval_rows[-1]["decision"] == "error"
     assert approval_rows[-1]["order"]["symbol"] == "MSFT"
-    assert post_calls[-1]["json"]["text"].startswith("\u274c Trade SKIPPED")
+    assert approval_rows[-1]["metadata"]["response"]["status"] == "rejected"
+    assert approval_rows[-1]["metadata"]["target"] == payload["target"]
 
     assert not (tmp_path / "logs" / "execution" / "order_intents.jsonl").exists()
     assert not (tmp_path / "logs" / "execution" / "shadow_order_router.jsonl").exists()
