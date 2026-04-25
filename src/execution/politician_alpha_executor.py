@@ -24,6 +24,8 @@ from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -547,20 +549,19 @@ class PoliticianAlphaExecutor:
                 return pct
         return 0.0
 
+    def _control_flags(self) -> Dict[str, bool]:
+        return read_control_state_snapshot(self.repo_root)
+
     def _is_kill_switch_active(self) -> bool:
         try:
-            if self.kill_switch_path.exists():
-                data = json.loads(self.kill_switch_path.read_text(encoding="utf-8"))
-                return bool(data.get("kill_switch", False))
+            return self._control_flags()["kill_switch"]
         except Exception:
             pass
         return False
 
     def _is_manual_veto_active(self) -> bool:
         try:
-            if self.manual_veto_path.exists():
-                data = json.loads(self.manual_veto_path.read_text(encoding="utf-8"))
-                return bool(data.get("manual_veto", False))
+            return self._control_flags()["manual_veto"]
         except Exception:
             pass
         return False
