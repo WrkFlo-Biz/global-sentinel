@@ -6,6 +6,7 @@ import types
 from datetime import datetime, timezone
 from pathlib import Path
 
+import src.monitoring.crisis_monitor as crisis_monitor_module
 from src.monitoring.crisis_monitor import CrisisMonitor
 
 
@@ -252,3 +253,60 @@ def test_position_alert_marks_manual_approval_required(tmp_path: Path):
     assert "Auto-close is blocked" in call["body"]
     assert call["extra"]["event"] == "position_management_review_required"
     assert call["extra"]["manual_approval_required"] is True
+
+
+def test_run_cycle_uses_shared_control_snapshot_for_kill_switch(tmp_path: Path, monkeypatch) -> None:
+    class DummyAlerter:
+        def __init__(self) -> None:
+            self.kill_switch_alerts = 0
+
+        def send_kill_switch_alert(self) -> None:
+            self.kill_switch_alerts += 1
+
+    monitor = CrisisMonitor.__new__(CrisisMonitor)
+    monitor.repo_root = tmp_path
+    monitor.current_mode = "NORMAL"
+    monitor.cycle_count = 0
+    monitor.alerter = DummyAlerter()
+
+    logged_events: list[tuple[str, dict[str, object]]] = []
+    heartbeat_statuses: list[str] = []
+    monitor._log_event = lambda event, payload: logged_events.append((event, payload))
+    monitor._update_heartbeat = heartbeat_statuses.append
+    monitor._poll_bridges = lambda: (_ for _ in ()).throw(
+        AssertionError("kill switch should short-circuit before bridge polling")
+    )
+
+    monkeypatch.setattr(
+        crisis_monitor_module,
+        "read_control_state_snapshot",
+        lambda repo_root: {"manual_veto": False, "kill_switch": True},
+    )
+
+    monitor._run_cycle()
+
+    assert monitor.cycle_count == 1
+    assert logged_events == [("kill_switch_active", {"cycle": 1})]
+    assert heartbeat_statuses == ["kill_switch_active"]
+    assert monitor.alerter.kill_switch_alerts == 1
+
+
+def test_build_snapshot_uses_shared_control_snapshot_booleans() -> None:
+    monitor = CrisisMonitor.__new__(CrisisMonitor)
+
+    snapshot = monitor._build_snapshot(
+        {
+            "freshness": {"fred": True},
+            "fallback_mode": True,
+            "market_microstructure": {"spread": 0.01},
+        },
+        {"manual_veto": True, "kill_switch": False},
+    )
+
+    assert snapshot["market_microstructure"] == {"spread": 0.01}
+    assert snapshot["data_freshness"] == {"fred": True}
+    assert snapshot["fallback_mode"] is True
+    assert snapshot["controls"] == {
+        "manual_veto": True,
+        "kill_switch": False,
+    }

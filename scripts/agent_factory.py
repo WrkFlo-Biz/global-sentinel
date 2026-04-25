@@ -50,6 +50,7 @@ OPENCLAW_OPS_REPORTS = REPORTS_DIR / "openclaw_ops"
 OPENCLAW_RESEARCH_REPORTS = REPORTS_DIR / "openclaw_research"
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.core.control_state_snapshot import read_control_state_snapshot
 from src.core.openclaw_role_registry import load_openclaw_role_registry
 from src.core.openclaw_state_db import OpenClawStateDB, default_state_db_path
 from src.monitoring.telegram_topic_notifier import TelegramTopicNotifier
@@ -139,11 +140,10 @@ class AgentResult:
 # --- Control checks ---
 
 def control_flags() -> Dict[str, bool]:
-    veto = read_json(CONTROL_DIR / "manual_veto.json", {"manual_veto": False})
-    kill = read_json(CONTROL_DIR / "kill_switch.json", {"kill_switch": False})
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
     return {
-        "manual_veto": bool(veto.get("manual_veto", False)),
-        "kill_switch": bool(kill.get("kill_switch", False)),
+        "manual_veto": control_snapshot["manual_veto"],
+        "kill_switch": control_snapshot["kill_switch"],
         "strategy_executor_enabled": env_flag("OPENCLAW_ENABLE_STRATEGY_EXECUTOR", False),
     }
 

@@ -35,6 +35,8 @@ except ImportError:
     print("Missing dependency: pyyaml", file=sys.stderr)
     sys.exit(1)
 
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -188,10 +190,9 @@ class CrisisMonitor:
         print(f"[{cycle_start}] Cycle {self.cycle_count} starting (mode={self.current_mode})")
 
         # 1. Check kill switch and manual veto
-        kill_switch = load_json(self.control_dir / "kill_switch.json")
-        manual_veto = load_json(self.control_dir / "manual_veto.json")
+        control_snapshot = read_control_state_snapshot(self.repo_root)
 
-        if kill_switch.get("active", False):
+        if control_snapshot["kill_switch"]:
             self._log_event("kill_switch_active", {"cycle": self.cycle_count})
             self._update_heartbeat("kill_switch_active")
             if self.alerter:
@@ -207,7 +208,7 @@ class CrisisMonitor:
         bridge_results = self._stabilize_bridge_inputs_for_scorecard(bridge_results)
 
         # 3. Build composite snapshot
-        snapshot = self._build_snapshot(bridge_results, kill_switch, manual_veto)
+        snapshot = self._build_snapshot(bridge_results, control_snapshot)
 
         # 3.5. Feature freshness check (V4 operational hardening)
         freshness_result = self._normalize_feature_freshness_result(
@@ -267,8 +268,8 @@ class CrisisMonitor:
             "data_freshness_status": bridge_results.get("freshness", {}),
             "threshold_values_used": self.thresholds,
             "risk_gate_status": "active",
-            "manual_veto_status": manual_veto.get("active", False),
-            "kill_switch_status": kill_switch.get("active", False),
+            "manual_veto_status": control_snapshot["manual_veto"],
+            "kill_switch_status": control_snapshot["kill_switch"],
             "fallback_mode_status": bridge_results.get("fallback_mode", False),
             "shadow_execution_eligible": self._shadow_eligible(snapshot, time_window),
             "time_window": time_window,
@@ -1273,7 +1274,11 @@ class CrisisMonitor:
         return results
 
     # --- Snapshot assembly ---
-    def _build_snapshot(self, bridge_results: Dict[str, Any], kill_switch: Dict, manual_veto: Dict) -> Dict[str, Any]:
+    def _build_snapshot(
+        self,
+        bridge_results: Dict[str, Any],
+        control_snapshot: Dict[str, bool],
+    ) -> Dict[str, Any]:
         return {
             "timestamp_utc": iso_now(),
             "market_microstructure": bridge_results.get("market_microstructure", {}),
@@ -1294,8 +1299,8 @@ class CrisisMonitor:
             "data_freshness": bridge_results.get("freshness", {}),
             "fallback_mode": bridge_results.get("fallback_mode", False),
             "controls": {
-                "kill_switch": kill_switch.get("active", False),
-                "manual_veto": manual_veto.get("active", False),
+                "kill_switch": control_snapshot["kill_switch"],
+                "manual_veto": control_snapshot["manual_veto"],
             },
             "runtime_flags": {},
             "portfolio": {},  # populated when paper/live trading is active

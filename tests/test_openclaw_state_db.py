@@ -188,6 +188,29 @@ def test_state_db_migrates_legacy_trade_approval_rows_into_audit_log(tmp_path: P
     assert entry["metadata"] == {"source": "legacy-test"}
 
 
+def test_agent_factory_control_flags_use_shared_control_snapshot(tmp_path: Path, monkeypatch):
+    module = _load_agent_factory()
+    calls: list[Path] = []
+
+    def fake_snapshot(repo_root: Path) -> dict[str, bool]:
+        calls.append(repo_root)
+        return {
+            "manual_veto": True,
+            "kill_switch": False,
+        }
+
+    monkeypatch.setenv("OPENCLAW_ENABLE_STRATEGY_EXECUTOR", "1")
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(module, "read_control_state_snapshot", fake_snapshot)
+
+    assert module.control_flags() == {
+        "manual_veto": True,
+        "kill_switch": False,
+        "strategy_executor_enabled": True,
+    }
+    assert calls == [tmp_path]
+
+
 def test_agent_factory_records_task_history_and_worker_health(tmp_path: Path, monkeypatch):
     module = _load_agent_factory()
     repo_root = tmp_path
