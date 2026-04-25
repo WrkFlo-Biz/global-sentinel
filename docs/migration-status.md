@@ -26,7 +26,9 @@ Inputs for this pass:
   `docs/openclaw-demotion-plan.md`,
   `docs/permission-tiers.md`,
   `docs/architecture-delta-gs-view.md`,
-  `docs/foundry-routing-adoption-plan.md`
+  `docs/foundry-routing-adoption-plan.md`,
+  `docs/control-wrapper-retirement-plan.md`,
+  `docs/control-read-authority-plan.md`
 - orchestrator approval-token implementation and runtime docs under
   `/home/moses/projects/wrkflo-orchestrator`
 
@@ -56,14 +58,20 @@ Inputs for this pass:
   - the orchestrator still lacks a confirmed GS-specific kind registry and
     end-to-end worker routing/execution path for all guarded task payloads GS
     can now emit
-  - many GS readers still treat local files as the source of truth even after
-    the mutator demotions
-- Two deeper Phase 5 companion docs now exist and should be read with this
+  - the remaining control-read tail is now the dual public contract above the
+    shared helper: `/api/controls`, websocket `controls`, and frontend
+    wrapper-shape fallback are still live compatibility behavior
+- Four deeper Phase 5 companion docs now exist and should be read with this
   status note:
   - `docs/openclaw-demotion-plan.md` for the `OpenClawStateDB` retirement and
     runtime-state demotion sequence
   - `docs/foundry-routing-adoption-plan.md` for the Foundry/orchestrator
     routing adoption sequence and control-plane routing blockers
+  - `docs/control-wrapper-retirement-plan.md` for the explicit retirement or
+    versioning sequence around `/api/controls` and websocket `controls`
+    compatibility wrappers
+  - `docs/control-read-authority-plan.md` for the narrowed remaining
+    read-authority tail above `src/core/control_state_snapshot.py`
 - The target approval model is the orchestrator's current beta:
   front-loaded guarded submission with `Authorization: Bearer <token>` on the
   initial `POST /v1/tasks`. There is no current suspended-run `/approve`
@@ -160,7 +168,11 @@ Use `docs/openclaw-demotion-plan.md` for the file-level retirement order of
 `OpenClawStateDB` and adjacent runtime state, and
 `docs/foundry-routing-adoption-plan.md` for the control-plane ingress and
 Foundry/orchestrator routing prerequisites that have to land before the final
-demotion steps can stick.
+demotion steps can stick. Use `docs/control-wrapper-retirement-plan.md` for
+the explicit `/api/controls` plus websocket `controls` wrapper retirement or
+versioning sequence, and `docs/control-read-authority-plan.md` for the
+narrowed remaining read-authority tail above the shared helper. Those wrapper
+retirement steps are not complete in the current tree.
 
 ## 2. Approval And Control Flows With Remaining Migration Work
 
@@ -233,6 +245,13 @@ The current GS tree already narrows the old client drift:
 - `config/claude_cowork_mcp.json:86-99` and
   `config/cowork_briefing_prompt.md:16-22` now point project-facing
   integrations at `/api/control/status`
+
+The retirement/versioning sequence for the remaining compatibility tail is now
+captured in `docs/control-wrapper-retirement-plan.md`, and the narrower
+read-authority convergence work above the shared helper is captured in
+`docs/control-read-authority-plan.md`. Neither plan is complete in the current
+tree: `/api/controls`, websocket `controls`, and frontend wrapper fallback all
+still remain live compatibility behavior.
 
 What still remains is subtler but still important:
 
