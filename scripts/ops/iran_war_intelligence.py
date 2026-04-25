@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 sys.path.insert(0, "/opt/global-sentinel")
 
+from src.core.control_state_snapshot import read_control_state_snapshot
 from src.monitoring.notification_window import notifications_muted
 
 ENV_PATH = Path("/opt/global-sentinel/.env")
@@ -3287,22 +3288,9 @@ def run_cycle(cycle_num: int, is_morning_brief: bool = False,
     return cycle_result
 
 
-# ---------------------------------------------------------------------------
-# Kill switch check
-# ---------------------------------------------------------------------------
-
-KILL_SWITCH_PATH = REPO_ROOT / "control" / "kill_switch.json"
-
-
 def check_kill_switch() -> bool:
     """Return True if the kill switch is active."""
-    try:
-        if KILL_SWITCH_PATH.exists():
-            data = json.loads(KILL_SWITCH_PATH.read_text())
-            return bool(data.get("kill_switch", False))
-    except Exception:
-        pass
-    return False
+    return read_control_state_snapshot(REPO_ROOT).get("kill_switch", False)
 
 
 # ---------------------------------------------------------------------------
