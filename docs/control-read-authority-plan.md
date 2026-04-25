@@ -4,23 +4,25 @@
 
 This companion note refreshes the control-read migration lane after
 `src/core/control_state_snapshot.py` adoption spread beyond the first
-advisory callers, the dashboard/config consumer repoint landed, and the newer
-contract docs were refreshed.
+advisory callers, the dashboard/config consumer repoint landed, canonical
+websocket `control_status` emission landed, the frontend live-consumer
+convergence landed, and `12d5f23` centralized compatibility-wrapper metadata
+shaping in the shared helper module.
 
-The main remaining problem is no longer "the main dashboard poll path and
-project-facing config/prompt surfaces still point at `/api/controls`." In the
-current GS tree, those primary consumers already point at
-`/api/control/status`.
+The main remaining problem is no longer "the main dashboard poll path and live
+websocket path still lack a canonical control payload." In the current GS
+tree, those primary first-party consumers already point at the canonical
+boolean contract.
 
 The highest-signal remaining problem is narrower:
 
 - GS still publishes explicit compatibility wrappers through
   `GET /api/controls` and websocket `controls`
-- the frontend normalization bridge still accepts both the canonical boolean
-  shape and the legacy wrapper `{active}` shape while the live-update contract
-  finishes converging
-- a smaller tail of metadata adapters and isolated direct readers still matter
-  before backend authority swaps
+- the generic frontend normalization helper still tolerates compatibility
+  wrapper shapes, even though the live dashboard consumer no longer bridges
+  `data.controls`
+- `src/risk/manual_veto_mcp.py` remains a metadata sidecar above the boolean
+  helper contract
 
 This pass is docs-only. It does not change mutator authority and does not
 widen the V1 helper contract defined in `docs/control-snapshot-contract.md`.
@@ -33,15 +35,23 @@ widen the V1 helper contract defined in `docs/control-snapshot-contract.md`.
   - explicit `manual_veto` over legacy `active`
   - explicit `kill_switch` over legacy `active`
   - missing, invalid, and non-object payloads to `False`
-- `GET /api/control/status` is now the canonical normalized operator-facing
-  control-read contract.
-- `GET /api/controls` and websocket `controls` payloads are compatibility
-  wrappers during the migration, not the preferred contract for new callers.
+- `GET /api/control/status` is the canonical normalized operator-facing REST
+  contract.
+- Root websocket init/update frames in `server.py` and dashboard websocket
+  init frames in `dashboard/api/server.py` now also emit canonical
+  `control_status`.
+- `GET /api/controls` and websocket `controls` payloads are explicit
+  compatibility wrappers during the migration, not the preferred contract for
+  new callers.
+- Wrapper payload shaping is now centralized: `server.py:_controls_wrapper_payload()`
+  and `dashboard/api/server.py:_controls_wrapper_payload()` delegate to
+  `read_control_wrapper_snapshot(REPO_ROOT)` instead of doing their own raw
+  `load_json(...)` reads.
 - `execution_mode.yaml` remains outside the helper and is still read
   separately by status surfaces that need mode data.
-- In the current GS tree, the main dashboard poll path and the
-  project-facing config/prompt surfaces already point at
-  `/api/control/status`.
+- The main dashboard poll path, the main dashboard live consumer, and the
+  project-facing config/prompt surfaces already point at the canonical
+  control-status contract.
 
 ## Readers Already Converged On The Shared Helper
 
@@ -76,25 +86,30 @@ from `/api/controls` for their primary status path:
   `GET /api/control/status` through `fetchControlStatus()`
 - `dashboard/frontend/src/app/page.tsx` now uses `api.controlStatus()` for the
   main dashboard poll path
+- `dashboard/frontend/src/app/page.tsx` now merges live control updates via
+  `normalizeLiveControlStatusPayload(data)` rather than
+  `data.control_status ?? data.controls`
 - `dashboard/frontend/src/components/ControlPanel.tsx` now renders normalized
   booleans from `ControlStatus`
 - `config/claude_cowork_mcp.json` and
   `config/cowork_briefing_prompt.md` now advertise `/api/control/status`
 
+`src/risk/manual_veto_mcp.py:get_flags()` now keeps its boolean authority on
+`read_control_state_snapshot(...)` and sources `*_updated_at` plus
+`control_dir` through `read_control_metadata_snapshot(...)`, which keeps the
+remaining metadata tail isolated from the server wrapper path.
+
 That means the remaining work is now concentrated in explicit compatibility
-wrappers, the frontend's temporary dual-shape bridge, and a smaller
-metadata/direct-reader tail rather than in the main dashboard or config/prompt
-consumers.
+wrappers plus the metadata sidecar in `manual_veto_mcp`, not in the main
+dashboard or websocket live consumer path.
 
 ## Highest-Signal Remaining Tails
 
 | Priority | Tail | Current behavior | Why it still matters | Recommended next step |
 | --- | --- | --- | --- | --- |
-| P0 | `server.py` and `dashboard/api/server.py` `GET /api/controls` | `_controls_wrapper_payload()` reads normalized booleans from the shared helper, but still opens the raw control JSON files with `load_json(...)` and republishes wrapper fields such as `active` plus file-shaped metadata. | This keeps a second public control contract alive. Even though the booleans are normalized, clients can still learn wrapper semantics instead of the canonical `/api/control/status` contract. | Keep `/api/controls` explicitly compatibility-only, then either remove it or re-emit a tightly bounded compatibility payload with documented metadata rules and an end-of-life path. |
-| P0 | Root and dashboard websocket `controls` payloads | Root websocket init/update payloads and dashboard websocket init payloads still ship `controls: _controls_wrapper_payload()`. No backend websocket surface emits a canonical `control_status` field today. | Live consumers still receive the compatibility wrapper by default even though the REST poll path has converged on `/api/control/status`. | Emit a canonical websocket `control_status` payload or version the live message shape explicitly, then bound or retire websocket `controls`. |
-| P0 | Frontend temporary dual-shape normalization bridge in `dashboard/frontend/src/lib/api.ts` and `dashboard/frontend/src/app/page.tsx` | The frontend REST path now fetches `/api/control/status`, but `normalizeControlStatusPayload(...)` still accepts both top-level normalized booleans and nested wrapper records via legacy `{active}` fallback. The websocket merge path still reads `data.control_status ?? data.controls`. | The dashboard no longer teaches `/api/controls` as primary, but it still encodes compatibility semantics. That means the published live contract is not fully singular yet. | Once a canonical websocket payload exists or wrapper retirement is scheduled, remove wrapper fallback from the frontend normalization layer and delete the `?? data.controls` bridge. |
-| P1 | `src/risk/manual_veto_mcp.py:get_flags()` metadata sidecar | The booleans already come from the shared helper, but timestamp fields still come from raw reads of `manual_veto.json` and `kill_switch.json`, and the adapter still exposes `control_dir`. | This is the main remaining first-party read surface that still opens the raw control payloads for meaning rather than simple diagnostics. | Decide whether `set_at` and related metadata belong in a coordinated V2 helper contract or remain a local adapter concern, but keep that choice isolated instead of spreading more raw file reads. |
-| P2 | Isolated direct readers and file-presence diagnostics | `scripts/ops/iran_war_intelligence.py` still keeps a direct `kill_switch.json` path. `scripts/verify/system_integrity_check.sh` and `scripts/self_improvement_loop.py` still check control-file presence/readability as deployment diagnostics. | Lower blast radius, but they still preserve GS-local files as an operational truth source or implicit health contract around the helper. | Migrate the direct kill-switch read to the helper and keep file-existence checks explicitly framed as deployment diagnostics rather than state authority. |
+| P0 | `server.py` and `dashboard/api/server.py` explicit compatibility wrappers (`GET /api/controls` + websocket `controls`) | Both server modules now publish canonical `control_status` and still publish compatibility `controls`. `_controls_wrapper_payload()` is centralized through `read_control_wrapper_snapshot(...)`, so the remaining issue is the continued public compatibility contract, not duplicate raw `load_json(...)` reads. | Primary first-party consumers now have canonical REST and live paths, but the compatibility wrapper still remains public and teaches legacy per-control `{active}`-style semantics. | Keep `control_status` canonical, document `/api/controls` and websocket `controls` as temporary compatibility wrappers, and set the narrowing or retirement boundary explicitly. |
+| P1 | `dashboard/frontend/src/lib/api.ts` generic compatibility normalization | `fetchControlStatus()` already calls `/api/control/status`, and `dashboard/frontend/src/app/page.tsx` now consumes live updates only through `normalizeLiveControlStatusPayload(data)`, which reads `data.control_status`. The remaining compatibility logic is `selectControlStatusPayload(...)`, which still accepts `record.controls` and top-level wrapper objects on the generic normalization path. | This is no longer the main live-contract blocker, but it preserves client-side tolerance for compatibility shapes until the wrapper surfaces are retired. | After the wrapper retirement boundary is documented and covered, narrow or remove the generic wrapper fallback. |
+| P1 | `src/risk/manual_veto_mcp.py:get_flags()` metadata sidecar | Booleans come from `read_control_state_snapshot(...)`; `manual_veto_updated_at`, `kill_switch_updated_at`, and `control_dir` come from `read_control_metadata_snapshot(...)`. | This is the main remaining first-party adapter that still depends on file-derived control metadata beyond the boolean contract. | Decide whether metadata belongs in a deliberate V2 helper contract or remains an isolated sidecar, and avoid spreading that metadata dependency elsewhere. |
 
 ## Adoption Sequence
 
@@ -104,68 +119,76 @@ consumers.
    - Keep `execution_mode.yaml` separate until there is a deliberate contract
      change.
 
-2. Keep `/api/control/status` as the canonical published read contract.
-   - The main dashboard poll path, Telegram status reads, and project-facing
-     config/prompt integrations are already aligned here.
-   - Do not reintroduce `/api/controls` as the primary contract for new
-     consumers.
+2. Keep `control_status` canonical across REST and live surfaces.
+   - `GET /api/control/status` is the canonical normalized REST contract.
+   - Root and dashboard websocket surfaces already emit `control_status`; do
+     not add new first-party consumers to `controls`.
 
-3. Finish live contract convergence above the helper.
-   - Bound `/api/controls` as an explicit compatibility wrapper.
-   - Emit a canonical websocket `control_status` payload or version the live
-     message shape explicitly.
-   - Once that canonical live path exists, remove the frontend's
-     dual-shape fallback and `data.controls` bridge.
+3. Bound the compatibility wrappers explicitly.
+   - Treat `GET /api/controls` and websocket `controls` as temporary
+     compatibility rails only.
+   - Keep wrapper payload shaping centralized behind
+     `_controls_wrapper_payload()` -> `read_control_wrapper_snapshot(...)`.
+   - Do not widen wrapper semantics or add new clients that depend on them.
 
-4. Decide the metadata boundary deliberately.
-   - If callers need `set_at`, `control_dir`, or related metadata, define where
-     that data belongs.
-   - Do not let timestamp or metadata needs become a reason for new callers to
-     reopen the raw control files directly.
+4. Retire frontend compatibility fallback after wrapper retirement is real.
+   - The active live dashboard consumer is already canonical-only via
+     `normalizeLiveControlStatusPayload(data)`.
+   - Once explicit wrapper retirement is scheduled and covered, narrow
+     `normalizeControlStatusPayload(...)` so it no longer needs to tolerate
+     `record.controls` or wrapper-shaped payloads.
 
-5. Sweep the remaining low-signal tails.
-   - Keep config and prompt integrations on `/api/control/status`.
-   - Migrate isolated direct readers such as
-     `scripts/ops/iran_war_intelligence.py`.
-   - Keep file-presence checks only where they are truly deployment-health
-     diagnostics.
+5. Decide the metadata boundary deliberately.
+   - If callers need `*_updated_at`, `control_dir`, or related metadata,
+     define where that data belongs.
+   - Do not let metadata needs become a reason to keep expanding wrapper or
+     direct-file contracts.
 
 6. Swap backend authority behind the helper.
-   - After the public wrapper and live client contracts converge, change
-     `read_control_state_snapshot(...)` from repo-local files to
-     orchestrator-backed state.
+   - After wrapper publication and metadata sidecar boundaries converge,
+     change `read_control_state_snapshot(...)` and any deliberate companion
+     metadata helper from repo-local files to orchestrator-backed state.
    - Keep any temporary file fallback explicit and temporary inside the helper
      boundary only.
 
-## Live Contract Contradiction To Clear First
+## Current Compatibility Boundary To Clear Next
 
-The highest-signal contradiction is now the dual payload-shape contract above
-an otherwise converged boolean reader.
+The highest-signal contradiction is no longer the absence of a canonical live
+payload. The canonical live payload already exists and the first-party
+dashboard now consumes it. The remaining contradiction is parallel publication
+of canonical and compatibility control contracts.
 
-- `/api/control/status` is already the canonical normalized REST contract for
-  the main dashboard poll path, Telegram status reads, and project-facing
-  config/prompt integrations.
-- `GET /api/controls` and websocket `controls` still publish wrapper-shaped
-  compatibility payloads built around per-control objects.
-- `dashboard/frontend/src/lib/api.ts` still normalizes both:
-  - the canonical top-level boolean shape
-  - the legacy wrapper shape where booleans are inferred from `{active}`
-- `dashboard/frontend/src/app/page.tsx` still bridges live updates through
-  `data.control_status ?? data.controls`
+- `/api/control/status` is the canonical normalized REST contract for the main
+  dashboard poll path, Telegram status reads, and project-facing config/prompt
+  integrations.
+- Root websocket init/update frames and dashboard websocket init frames now
+  emit `control_status`.
+- `dashboard/frontend/src/app/page.tsx` consumes live control data via
+  `normalizeLiveControlStatusPayload(data)`, which only reads
+  `data.control_status`.
+- `GET /api/controls` and websocket `controls` still publish compatibility
+  wrapper payloads built through `_controls_wrapper_payload()` and
+  `read_control_wrapper_snapshot(...)`.
+- `dashboard/frontend/src/lib/api.ts` still keeps generic compatibility
+  normalization for wrapper-shaped payloads through
+  `selectControlStatusPayload(...)`.
+- `src/risk/manual_veto_mcp.py:get_flags()` is the remaining first-party
+  metadata sidecar above the boolean helper contract.
 
 Consequence:
 
-- There is now one canonical REST contract for primary consumers, but there is
-  not yet one singular live contract across REST and websocket.
-- If orchestrator-backed read authority lands before the wrapper path is
-  bounded, split-brain risk moves from "which file key wins" to "which live
-  payload shape the consumer still tolerates."
+- Primary first-party REST and live consumers now converge on canonical
+  `control_status`.
+- The remaining split-brain risk is concentrated in the explicit
+  compatibility wrappers and any clients that keep depending on them, plus the
+  sidecar metadata contract in `manual_veto_mcp`.
 
 Required resolution:
 
-- Keep `/api/control/status` canonical.
-- Keep `/api/controls` and websocket `controls` explicitly compatibility-only
-  and temporary.
-- Add a canonical websocket `control_status` path or version the live message
-  shape explicitly.
-- Remove frontend wrapper fallback once the canonical live path exists.
+- Keep `control_status` canonical across REST and websocket.
+- Bound or retire `/api/controls` and websocket `controls` as temporary
+  compatibility wrappers with documented metadata scope.
+- Narrow or remove the generic frontend wrapper fallback after the wrapper
+  retirement boundary is explicit and covered.
+- Decide whether `manual_veto_mcp` metadata belongs in a helper contract or
+  stays an isolated sidecar.
