@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.core.control_state_snapshot import read_control_state_snapshot
+
 try:
     from src.alpha.time_window_policy import TimeWindowPolicyEngine
 except Exception:
@@ -196,12 +198,7 @@ class SelfImprovementLoop:
 
     # --- Control / mode helpers ---
     def control_flags(self) -> Dict[str, bool]:
-        veto = read_json(self.control_dir / "manual_veto.json", {"manual_veto": False})
-        kill = read_json(self.control_dir / "kill_switch.json", {"kill_switch": False})
-        return {
-            "manual_veto": bool(veto.get("manual_veto", False)),
-            "kill_switch": bool(kill.get("kill_switch", False)),
-        }
+        return read_control_state_snapshot(self.repo_root)
 
     def current_mode(self) -> str:
         latest = self._latest_file(self.logs_scores, "*.json")
@@ -519,8 +516,24 @@ class SelfImprovementLoop:
             checks.append({"check": "live_trading_disabled",
                            "passed": not venues.get("policies", {}).get("live_trading_enabled", True)})
 
-        for ctrl in ["manual_veto.json", "kill_switch.json"]:
-            checks.append({"check": f"{ctrl}_readable", "passed": (self.control_dir / ctrl).exists()})
+        # Raw control files remain deployment diagnostics only here; boolean
+        # authority stays behind read_control_state_snapshot().
+        for control_name, filename in (
+            ("manual_veto", "manual_veto.json"),
+            ("kill_switch", "kill_switch.json"),
+        ):
+            checks.append(
+                {
+                    "check": f"{control_name}_file_present_diagnostic",
+                    "passed": (self.control_dir / filename).exists(),
+                    "kind": "deployment_diagnostic",
+                    "authority": "read_control_state_snapshot",
+                    "note": (
+                        f"{filename} presence only; boolean control state comes "
+                        "from the normalized control snapshot helper."
+                    ),
+                }
+            )
 
         return {"passed": all(c.get("passed", False) for c in checks),
                 "checks": checks, "timestamp": iso_now()}

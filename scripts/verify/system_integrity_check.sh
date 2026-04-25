@@ -39,11 +39,11 @@ else
     check "governance" "RED" "CLAUDE.md missing"
 fi
 
-# --- 2. Control Files ---
+# --- 2. Control File Deployment Diagnostics ---
 if [ -f "$REPO_ROOT/control/manual_veto.json" ] && [ -f "$REPO_ROOT/control/kill_switch.json" ]; then
-    check "safety_controls" "GREEN" "manual_veto.json + kill_switch.json present"
+    check "control_file_diagnostics" "GREEN" "manual_veto.json + kill_switch.json present for deployment diagnostics only; boolean state belongs to normalized control snapshot readers"
 else
-    check "safety_controls" "RED" "Missing safety control files"
+    check "control_file_diagnostics" "RED" "Missing control files required for deployment diagnostics; this does not assert live boolean control state"
 fi
 
 # --- 3. Config Files ---
