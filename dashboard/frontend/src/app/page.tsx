@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback, ReactNode } from "react";
 import {
-  api, connectWS,
-  type Heartbeat, type Scorecard, type TimelinePoint, type Controls,
+  api, connectWS, normalizeControlStatusPayload,
+  type Heartbeat, type Scorecard, type TimelinePoint, type ControlStatus,
   type GraduationReport, type PortfolioData, type TradeAnalysis,
   type ConsciousnessData, type ExecutionModeData, type PoliticianAlphaData,
   type DashboardLayout, type DashboardWidget, type ExecutionSummary,
@@ -147,7 +147,7 @@ export default function Dashboard() {
   const [heartbeat, setHeartbeat] = useState<Heartbeat | null>(null);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
-  const [controls, setControls] = useState<Controls | null>(null);
+  const [controlStatus, setControlStatus] = useState<ControlStatus | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [executionSummary, setExecutionSummary] = useState<ExecutionSummary | null>(null);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusResponse | null>(null);
@@ -172,7 +172,7 @@ export default function Dashboard() {
         api.heartbeat().catch(() => null),
         api.latestScorecard().catch(() => null),
         api.timeline(200).catch(() => []),
-        api.controls().catch(() => null),
+        api.controlStatus().catch(() => null),
         api.bridges().catch(() => null),
         api.orders(50).catch(() => []),
         api.executionSummary(100, 100, 24).catch(() => null),
@@ -190,7 +190,7 @@ export default function Dashboard() {
       if (hb) setHeartbeat(hb);
       if (sc && !("error" in sc)) setScorecard(sc);
       if (Array.isArray(tl)) setTimeline(tl);
-      if (ctrl) setControls(ctrl);
+      if (ctrl) setControlStatus(ctrl);
       if (bridgeState) setBridgeStatus(bridgeState);
       if (Array.isArray(ord)) setOrders(ord);
       if (execSummary) setExecutionSummary(execSummary);
@@ -220,7 +220,10 @@ export default function Dashboard() {
     const ws = connectWS((data) => {
       if (data.heartbeat) setHeartbeat(data.heartbeat);
       if (data.scorecard) setScorecard(data.scorecard);
-      if (data.controls) setControls(data.controls);
+      const liveControlStatus = normalizeControlStatusPayload(data);
+      if (liveControlStatus) {
+        setControlStatus((previous) => (previous ? { ...previous, ...liveControlStatus } : liveControlStatus));
+      }
       if (data.execution_mode) setExecutionMode(data.execution_mode);
       if (data.portfolio && !data.portfolio.error) {
         setPortfolio(data.portfolio);
@@ -292,11 +295,11 @@ export default function Dashboard() {
       case "system_controls":
         return (
           <>
-            {controls && (
+            {controlStatus && (
               <ControlPanel
-                controls={controls}
-                shadowEligible={scorecard?.shadow_execution_eligible || false}
-                fallback={scorecard?.fallback_mode_status || false}
+                controlStatus={controlStatus}
+                shadowEligible={controlStatus.shadow_eligible ?? scorecard?.shadow_execution_eligible ?? false}
+                fallback={controlStatus.fallback_mode ?? scorecard?.fallback_mode_status ?? false}
               />
             )}
             <div className="mt-3">

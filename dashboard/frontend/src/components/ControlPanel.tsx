@@ -1,41 +1,35 @@
 "use client";
 
-import type { Controls } from "@/lib/api";
+import type { ControlStatus } from "@/lib/api";
 
 export default function ControlPanel({
-  controls,
+  controlStatus,
   shadowEligible,
   fallback,
 }: {
-  controls: Controls;
+  controlStatus: ControlStatus;
   shadowEligible: boolean;
   fallback: boolean;
 }) {
-  // API returns {kill_switch: {kill_switch: bool}} shape — support both .active and .kill_switch
-  const ksActive = (controls.kill_switch as any)?.active ?? (controls.kill_switch as any)?.kill_switch ?? false;
-  const mvActive = (controls.manual_veto as any)?.active ?? (controls.manual_veto as any)?.manual_veto ?? false;
-
   const items = [
     {
       label: "Kill Switch",
-      active: ksActive,
+      active: controlStatus.kill_switch,
       danger: true,
-      detail: controls.kill_switch?.reason,
     },
     {
       label: "Manual Veto",
-      active: mvActive,
+      active: controlStatus.manual_veto,
       danger: true,
-      detail: controls.manual_veto?.reason,
     },
     {
       label: "Shadow Execution",
-      active: shadowEligible,
+      active: controlStatus.shadow_eligible ?? shadowEligible,
       danger: false,
     },
     {
       label: "Fallback Mode",
-      active: fallback,
+      active: controlStatus.fallback_mode ?? fallback,
       danger: true,
     },
   ];
@@ -56,9 +50,6 @@ export default function ControlPanel({
             <span className={`w-2 h-2 rounded-full ${isOk ? "bg-emerald-400" : "bg-red-400 pulse-live"}`} />
             <div>
               <div className={isOk ? "text-emerald-400" : "text-red-400"}>{item.label}</div>
-              {!isOk && item.detail && (
-                <div className="text-gray-500 text-[10px] mt-0.5 truncate max-w-[120px]">{item.detail}</div>
-              )}
             </div>
           </div>
         );

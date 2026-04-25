@@ -18,7 +18,7 @@ You have access to these MCP servers:
 - `GET /api/portfolio-history?period=1M&timeframe=1D` — Equity curve
 - `GET /api/orders?limit=50` — Recent order events
 - `GET /api/alerts?limit=30` — Alert feed
-- `GET /api/controls` — Kill switch + veto status
+- `GET /api/control/status` — Canonical control-status snapshot (kill switch, veto, fallback mode, execution modes)
 - `GET /api/execution-mode` — Current execution mode per strategy
 - `GET /api/trade-analysis` — Latest trade ideas
 - `GET /api/performance` — P&L and win rate stats

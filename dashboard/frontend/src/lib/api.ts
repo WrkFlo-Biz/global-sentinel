@@ -93,9 +93,18 @@ export interface TimelinePoint {
   fallback: boolean;
 }
 
-export interface Controls {
-  kill_switch: { active: boolean; reason?: string; activated_at?: string };
-  manual_veto: { active: boolean; reason?: string; activated_at?: string };
+export interface ControlStatus {
+  timestamp_utc?: string;
+  mode?: string;
+  cycle?: number;
+  regime_p?: number;
+  confidence?: number;
+  kill_switch: boolean;
+  manual_veto: boolean;
+  shadow_eligible?: boolean;
+  fallback_mode?: boolean;
+  execution_mode?: Record<string, string>;
+  evidence?: string[];
 }
 
 export interface GraduationCheck {
@@ -346,9 +355,96 @@ export interface ExecutionSummary {
   live_orders: ExecutionLiveOrdersSummary;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function selectControlStatusPayload(payload: unknown): Record<string, unknown> | null {
+  const record = asRecord(payload);
+  if (!record) return null;
+
+  const canonicalStatus = asRecord(record.control_status);
+  if (canonicalStatus) return canonicalStatus;
+
+  const compatibilityStatus = asRecord(record.controls);
+  if (compatibilityStatus) return compatibilityStatus;
+
+  if ("kill_switch" in record || "manual_veto" in record) {
+    return record;
+  }
+
+  return null;
+}
+
+function readControlFlag(
+  value: unknown,
+  explicitKey: "kill_switch" | "manual_veto",
+): boolean {
+  const record = asRecord(value);
+  if (!record) return false;
+  if (explicitKey in record) return Boolean(record[explicitKey]);
+  if ("active" in record) return Boolean(record.active);
+  return false;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  return Object.fromEntries(
+    Object.entries(record).filter(([, entryValue]) => typeof entryValue === "string"),
+  ) as Record<string, string>;
+}
+
+export function normalizeControlStatusPayload(payload: unknown): ControlStatus | null {
+  const record = selectControlStatusPayload(payload);
+  if (!record) return null;
+
+  const killSwitch = record.kill_switch;
+  const manualVeto = record.manual_veto;
+  if (typeof killSwitch === "boolean" || typeof manualVeto === "boolean") {
+    return {
+      timestamp_utc: typeof record.timestamp_utc === "string" ? record.timestamp_utc : undefined,
+      mode: typeof record.mode === "string" ? record.mode : undefined,
+      cycle: typeof record.cycle === "number" ? record.cycle : undefined,
+      regime_p: typeof record.regime_p === "number" ? record.regime_p : undefined,
+      confidence: typeof record.confidence === "number" ? record.confidence : undefined,
+      kill_switch: Boolean(killSwitch),
+      manual_veto: Boolean(manualVeto),
+      shadow_eligible: typeof record.shadow_eligible === "boolean" ? record.shadow_eligible : undefined,
+      fallback_mode: typeof record.fallback_mode === "boolean" ? record.fallback_mode : undefined,
+      execution_mode: readStringRecord(record.execution_mode),
+      evidence: readStringArray(record.evidence),
+    };
+  }
+
+  const killSwitchRecord = asRecord(killSwitch);
+  const manualVetoRecord = asRecord(manualVeto);
+  if (!killSwitchRecord && !manualVetoRecord) return null;
+
+  return {
+    kill_switch: readControlFlag(killSwitchRecord, "kill_switch"),
+    manual_veto: readControlFlag(manualVetoRecord, "manual_veto"),
+  };
+}
+
+async function fetchControlStatus(): Promise<ControlStatus> {
+  const payload = await fetchJSON<unknown>("/api/control/status");
+  const normalized = normalizeControlStatusPayload(payload);
+  if (!normalized) {
+    throw new Error("API error: invalid control status payload");
+  }
+  return normalized;
+}
+
 export const api = {
   heartbeat: () => fetchJSON<Heartbeat>("/api/heartbeat"),
-  controls: () => fetchJSON<Controls>("/api/controls"),
+  controlStatus: () => fetchControlStatus(),
   latestScorecard: () => fetchJSON<Scorecard>("/api/scorecard/latest"),
   timeline: (limit = 200) => fetchJSON<TimelinePoint[]>(`/api/scorecards/timeline?limit=${limit}`),
   bridges: () => fetchJSON<BridgeStatusResponse>("/api/bridges"),

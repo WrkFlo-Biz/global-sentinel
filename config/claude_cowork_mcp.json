@@ -90,7 +90,7 @@
       "portfolio_history": "/api/portfolio-history",
       "orders": "/api/orders",
       "alerts": "/api/alerts",
-      "controls": "/api/controls",
+      "controls": "/api/control/status",
       "execution_mode": "/api/execution-mode",
       "trade_analysis": "/api/trade-analysis",
       "performance": "/api/performance",
