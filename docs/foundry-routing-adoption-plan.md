@@ -24,11 +24,21 @@ Inputs used for this pass:
 
 - GS already has one intended Foundry boundary in
   `src/inference/foundry_client.py`.
+- GS also now has a shared task/run boundary in
+  `src/core/orchestrator_task_client.py` for:
+  - `POST /v1/tasks`
+  - `GET /v1/runs/{id}`
+  - `GET /v1/runs/{id}/history`
+  - additive guarded helpers that standardize `project`, `kind`, `target`,
+    requester identity, and approval-context fields
 - Active GS callers already using that boundary:
   - `scripts/ops/market_query.py`
   - `scripts/ops/daily_thesis_generator.py`
+  - `src/monitoring/telegram_command_handler.py`
   - deprecated compatibility shim: `src/monitoring/smart_inference_router.py`
-- `wrkflo-orchestrator` already exposes live read and task surfaces for:
+- `wrkflo-orchestrator` source already exposes the core inference, read, and
+  task surfaces for:
+  - `/v1/inference`
   - `/v1/foundry/roles`
   - `/v1/tasks`
   - `/v1/runs`
@@ -39,33 +49,45 @@ Inputs used for this pass:
 - The orchestrator codebase already contains the core Foundry pieces:
   - `foundry.py`: role map, request envelope, policy annotations
   - `foundry_client.py`: HTTP client to Azure Foundry
-  - `service.py`: approval-token verification and task/run API
-- The live and source orchestrator still do **not** expose the GS inference
-  contract yet:
-  - `src/wrkflo_orchestrator/service.py` has no `/v1/inference` route
-  - live `POST http://127.0.0.1:8100/v1/inference` currently returns `404`
-- GS still owns major local dispatch and control authorities:
+  - `service.py`: `/v1/inference`, approval-token verification, and task/run
+    API
+- Landed GS approval/control demotions already changed the boundary:
+  - `src/execution/trade_approval.py` removes the raw Telegram callback and
+    `/tmp/gs_pending_approvals/*` approval loop, and now fails closed when
+    guarded approval context is missing or stale
+  - current review on `2bf35c5` still shows retained integration coverage and
+    legacy `request_approval()` callers breaking unless that guarded context is
+    already present, so this trade-approval lane is only partially demoted
+  - `src/execution/position_manager.py` now emits orchestrator approval handoff
+    metadata on pending close proposals instead of carrying only
+    `pending_manual_approval`
+  - `dashboard/api/server.py` and `server.py` now demote the legacy
+    `pending-orders` API and the dashboard frontend bridge assumptions that
+    treated local pending-order files as terminal authority
+- GS still owns major local dispatch and control authorities outside the landed
+  demotions:
   - `scripts/agent_factory.py` local queue, worker loop, and `OpenClawStateDB`
   - `src/monitoring/telegram_command_handler.py` long-poll chat ingress plus a
-    direct Anthropic free-form chat path
+    GS-local free-form chat adapter that now routes through Foundry
   - `src/bridges/openclaw_research_bridge.py` Telegram relay and reply polling
-  - `dashboard/api/server.py`, `server.py`, `scripts/ops/gs_control.py`, and
-    `src/risk/manual_veto_mcp.py` as local Tier-2 mutators
-  - `src/execution/trade_approval.py` as a GS-owned Telegram approval loop
+  - `scripts/ops/gs_control.py` and `src/risk/manual_veto_mcp.py` as local
+    Tier-2 mutators that still need the same orchestrator demotion treatment
 
 ## Current GS Dispatch Entry Points
 
 | Entry point | Current dispatch pattern | Why it blocks the target model | Target orchestrator posture |
 | --- | --- | --- | --- |
-| `src/inference/foundry_client.py` | Builds a GS envelope and posts to `ORCHESTRATOR_URL`, with direct Azure fallback on request failure. | The client contract exists, but the orchestrator runtime does not yet serve `/v1/inference`. | Keep this as the single GS inference boundary, but back it with a real orchestrator inference endpoint. |
+| `src/inference/foundry_client.py` | Builds a GS envelope and posts to `ORCHESTRATOR_URL`, with direct Azure fallback on request failure. | The shared GS boundary and orchestrator `/v1/inference` route now exist, but not every runtime caller is fully migrated and the fallback path still preserves a provider escape hatch. | Keep this as the single GS inference boundary, verify `/v1/inference` in the deployed runtime, and retire fallback assumptions only after that path is stable. |
+| `src/core/orchestrator_task_client.py` | Shared GS boundary for `POST /v1/tasks`, `GET /v1/runs/{id}`, `GET /v1/runs/{id}/history`, plus guarded payload helpers for `project`, `kind`, `target`, requester identity, and approval context. | The boundary is landed, but execution/control callers still need to converge on it instead of hand-rolling guarded payload contracts. | Treat this as the only GS task/run client surface and move remaining guarded callers behind it. |
 | `scripts/ops/market_query.py` | Planner-style synchronous inference through `send_request(...)`, plus local reads of `control/manual_veto.json` and `control/kill_switch.json`. | The role mapping is good, but the operating-context read path still depends on GS-local control files. | Continue using the shared inference boundary; move control-state reads to an orchestrator-backed snapshot. |
 | `scripts/ops/daily_thesis_generator.py` | Summarizer-style synchronous inference through `send_request(...)`, plus local control-file reads. | Same gap as `market_query.py`. | Continue using the shared inference boundary; read orchestrator-backed control state. |
 | `src/monitoring/smart_inference_router.py` | Deprecated shim that classifies prompts and forwards into `foundry_client.send_request(...)`. | It preserves an old routing surface even though in-tree callers are gone. | Leave it as compatibility-only until external callers are migrated, then remove it. |
-| `src/monitoring/telegram_command_handler.py` and `src/monitoring/telegram_bot_manager.py` | `getUpdates` long polling, free-form direct Anthropic chat, and Tier-2 command stubs that only print an approval message. | GS still owns Telegram ingress and one direct model-provider bypass. | Reduce to a channel adapter that submits orchestrator tasks or orchestrator-backed inference requests. |
+| `src/monitoring/telegram_command_handler.py` and `src/monitoring/telegram_bot_manager.py` | `getUpdates` long polling, Foundry-routed free-form chat, and Tier-2 command stubs that only print approval guidance. | GS still owns Telegram ingress and request shaping outside the shared task client boundary. | Reduce to a channel adapter that submits orchestrator tasks or orchestrator-backed inference requests. |
 | `src/bridges/openclaw_research_bridge.py` | Sends `/gs_research` messages over Telegram and polls `getUpdates` for replies. | Research routing still goes through a Telegram relay instead of an orchestrator task/run contract. | Replace with a read-only advisory intent such as `research.market_brief` or a GS-specific research task kind. |
 | `scripts/agent_factory.py` | Owns a local priority queue, worker threads, seeding cadence, `OpenClawStateDB`, and execution-adjacent task kinds such as `strategy_executor` and `crypto_executor`. | It is still a GS-local orchestrator with its own runtime state and dispatch policy. | Demote to helper code behind orchestrator-owned tasks, or retire it after equivalent orchestrator tasks exist. |
-| `dashboard/api/server.py`, `server.py`, `scripts/ops/gs_control.py`, `src/risk/manual_veto_mcp.py` | Direct file writes for `execution_mode.yaml`, `kill_switch.json`, `manual_veto.json`, and legacy approval files. | Tier-2 state authority still terminates in GS-local files. | Convert to guarded `POST /v1/tasks` callers or read-only surfaces. |
-| `src/execution/trade_approval.py` | Telegram inline-button approval transport, callback polling, `/tmp/gs_pending_approvals`, and local audit mirroring. | The current beta approval model is front-loaded bearer-token submission, not suspended local waiting. | Require orchestrator-approved context on entry and remove GS-owned approval transport. |
+| `dashboard/api/server.py`, `server.py`, `scripts/ops/gs_control.py`, `src/risk/manual_veto_mcp.py` | The dashboard/server pending-orders bridge is demoted, but other control surfaces still include local file-oriented mutators and approval-guidance responses. | Pending-order files are no longer supposed to be terminal authority, yet some Tier-2 state changes still terminate inside GS-local surfaces. | Continue converting the remaining mutators into guarded `POST /v1/tasks` callers or read-only surfaces. |
+| `src/execution/trade_approval.py` | Retained `request_approval()` now validates guarded orchestrator context up front, submits one scoped `gs.trade.execute_shadow` task when that context is valid, and no longer runs the raw Telegram or local pending-file approval loop. | The transport demotion is real, but review on `2bf35c5` shows retained integration coverage and legacy callers still break unless guarded context is already present. | Keep the raw GS-owned approval transport removed, but treat this boundary as only partially demoted until the retained `request_approval()` compatibility contract is reconciled or its callers are migrated. |
+| `src/execution/position_manager.py` | Emits orchestrator approval handoff metadata on pending close proposals instead of only a GS-local manual-approval marker. | The handoff metadata is now present, but downstream execution paths still need to consume the same guarded contract consistently. | Keep extending execution-capable flows to carry orchestrator task/target/approval metadata end to end. |
 | `scripts/ops/conditional_order_engine.py`, `scripts/agent_factory.py:run_strategy_executor`, `src/execution/shadow_order_router.py`, `src/execution/multi_broker_router.py` | Direct entry into the execution pipeline with local flags and GS-owned approval checks. | Execution-capable flows can still start inside GS before an orchestrator verdict exists. | Accept only orchestrator-approved execution context or guarded task payloads. |
 
 ## Where Foundry / Orchestrator Routing Already Exists
@@ -102,18 +124,21 @@ Inputs used for this pass:
 - `src/wrkflo_orchestrator/tool_workers.py` already provides a governed task
   shell for read, safe-dev, and guarded worker kinds.
 
-## Missing Integration Points
+## Remaining Integration Points
 
-### 1. Inference ingress gap
+### 1. Inference ingress is landed in source; runtime adoption still needs verification
 
-GS's shared Foundry client points at `/v1/inference`, but the orchestrator
-service source and live runtime do not currently expose that route.
+GS's shared Foundry client points at `/v1/inference`, and the orchestrator
+source plus tests now expose that route. The remaining work is to treat that
+path as the stable runtime boundary and reduce assumptions that GS must fall
+back to provider-local handling.
 
 Consequence:
 
-- the intended GS boundary exists only on the client side today
+- the intended GS boundary exists end to end in source, but caller migration
+  and live runtime verification still matter
 - synchronous GS inference still depends on Azure fallback if the orchestrator
-  endpoint is unavailable or absent
+  endpoint is unavailable during rollout
 
 ### 2. No GS task kinds or intent registry
 
@@ -140,18 +165,28 @@ Consequence:
 - GS cannot yet move local dispatch behind `POST /v1/tasks`
 - approval tokens cannot yet bind to meaningful GS `kind` values
 
-### 3. No GS-side task client boundary
+### 3. GS-side task client boundary is landed, but adoption is incomplete
 
-GS has a shared inference client, but no equivalent shared task client for:
+GS now has a shared task client in `src/core/orchestrator_task_client.py` for:
 
 - `POST /v1/tasks`
 - `GET /v1/runs/{id}`
 - `GET /v1/runs/{id}/history`
+- guarded helper payloads carrying:
+  - `project`
+  - `kind`
+  - `target`
+  - requester identity
+  - `approval_jti`
+  - `approval_reason`
+  - `approval_exp`
 
 Consequence:
 
-- task submission logic is scattered across local Telegram, CLI, API, and
-  execution paths instead of entering through one GS-owned boundary
+- the shared boundary exists, but not every control/execution caller is using
+  it yet
+- guarded payload construction can still drift if modules keep hand-rolling the
+  same fields instead of using the helper surface
 
 ### 4. Local runtime/state authority still lives in GS
 
@@ -169,29 +204,49 @@ Consequence:
 - orchestrator cannot become the durable source of truth while this loop
   remains authoritative
 
-### 5. Tier-2 mutation still terminates in local files
+### 5. Tier-2 mutation demotion is partial, not complete
 
-The following files still act as terminal authorities:
+Already demoted in the current GS mainline:
+
+- `src/execution/trade_approval.py` no longer owns Telegram approval transport
+  or local pending-approval files as authority
+- review on `2bf35c5` still shows retained integration coverage plus legacy
+  `request_approval()` callers breaking unless guarded context is already
+  present, so the compatibility contract is not fully reconciled yet
+- `dashboard/api/server.py` and `server.py` demote the `pending-orders` API and
+  dashboard frontend bridge from terminal authority
+- `src/execution/position_manager.py` now carries orchestrator approval handoff
+  metadata instead of only a GS-local approval marker
+
+Still requiring demotion or replacement:
 
 - `config/execution_mode.yaml`
 - `control/kill_switch.json`
 - `control/manual_veto.json`
 - `control/pending_approval_{strategy}.json`
-- `control/pending_orders_{strategy}.json`
-- `/tmp/gs_pending_approvals/*`
+- retained `trade_approval.request_approval()` callers that still assume a
+  late-bound approval result instead of pre-supplied guarded context
+- local execution/control mutator surfaces that still write or read those files
 
 Consequence:
 
-- approval audit and action authority are split between the orchestrator and GS
-- readers still treat local files as canonical state
+- approval and control authority are less fragmented than before, but some
+  mutation paths are still split between the orchestrator and GS-local files
+- trade approval no longer terminates in raw Telegram or local pending files,
+  but the retained compatibility contract is still open for callers and tests
+  that have not yet moved to guarded-context submission
+- remaining readers and writers still need an orchestrator-backed read model or
+  compatibility snapshot
 
 ## Recommended Adoption Sequence
 
-### Step 1. Close the synchronous inference contract gap first
+### Step 1. Stabilize the synchronous inference boundary that is already landed
 
 Goal:
 
-- make the existing GS Foundry boundary real before touching broader dispatch
+- treat the existing GS Foundry boundary plus orchestrator `/v1/inference`
+  source route as the stable synchronous entrypoint before touching broader
+  dispatch
 
 Orchestrator touch points:
 
@@ -203,7 +258,7 @@ Orchestrator touch points:
 
 Work:
 
-- add `POST /v1/inference` to `service.py`
+- keep `POST /v1/inference` healthy in source and deployment
 - route the request through `FoundryRequestEnvelope` and `FoundryClient.invoke(...)`
 - return the GS-facing `FoundryResponseEnvelope`
 - preserve `/v1/foundry/roles` as the role-discovery surface
@@ -230,8 +285,8 @@ GS touch points:
 
 Work:
 
-- replace the direct Anthropic free-form chat in
-  `telegram_command_handler.py` with `send_request(...)`
+- keep the existing `telegram_command_handler.py` free-form chat path on
+  `send_request(...)` and avoid reintroducing provider-direct calls
 - map that path to `planner`
 - keep `market_query.py` on `planner`
 - keep `daily_thesis_generator.py` on `summarizer`
@@ -279,6 +334,12 @@ Exit criteria:
 - one read-only GS advisory task and one guarded GS control task can be
   created through `/v1/tasks`
 - task history can be filtered meaningfully for `repo=global-sentinel`
+
+Progress already landed in GS:
+
+- `src/core/orchestrator_task_client.py` provides the shared GS task/run
+  boundary and guarded payload helpers that should be used once these kinds
+  exist on the orchestrator side
 
 ### Step 4. Move GS advisory dispatch off the local OpenClaw loop
 
@@ -356,6 +417,14 @@ Exit criteria:
   not by a direct GS-local file write
 - `trade_approval.py` no longer owns Telegram approval transport
 
+Progress already landed in GS:
+
+- `trade_approval.py` removes the raw Telegram/local pending-file approval loop
+  and now enforces guarded orchestrator context, but retained
+  `request_approval()` compatibility follow-up is still open
+- the `pending-orders` API/frontend bridge is already demoted in
+  `dashboard/api/server.py` and `server.py`
+
 ### Step 6. Gate execution-capable paths on orchestrator verdicts
 
 Goal:
@@ -389,6 +458,11 @@ Exit criteria:
 - `strategy_executor`, conditional order routing, and manual execution paths
   cannot proceed without an orchestrator verdict
 - GS is consuming orchestrator-backed control state rather than raw local files
+
+Progress already landed in GS:
+
+- `position_manager.py` now emits orchestrator approval handoff metadata for
+  pending close proposals
 
 ### Step 7. Remove compatibility layers after the control plane is real
 
@@ -437,6 +511,9 @@ touching live control or execution-capable flows.
   before `/v1/inference` is live and verified.
 - Do **not** delete local control-file readers until an orchestrator-backed read
   model or compatibility snapshot exists.
+- Do **not** describe `trade_approval.py` as fully migrated until retained
+  `request_approval()` callers and integration coverage are reconciled with the
+  guarded-context contract.
 - Do **not** plan around a suspended-run `/approve` endpoint; the current beta
   approval model is front-loaded bearer-token submission on the initial
   `POST /v1/tasks`.
