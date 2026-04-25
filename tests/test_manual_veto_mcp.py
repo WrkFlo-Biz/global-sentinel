@@ -12,16 +12,6 @@ def _bind_control_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     control_dir = tmp_path / "control"
     monkeypatch.setattr(manual_veto_mcp, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(manual_veto_mcp, "CONTROL_DIR", control_dir)
-    monkeypatch.setattr(
-        manual_veto_mcp,
-        "MANUAL_VETO_PATH",
-        control_dir / "manual_veto.json",
-    )
-    monkeypatch.setattr(
-        manual_veto_mcp,
-        "KILL_SWITCH_PATH",
-        control_dir / "kill_switch.json",
-    )
 
 
 def _tool_call(name: str, arguments: dict[str, object] | None = None) -> dict[str, object]:
