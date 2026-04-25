@@ -70,6 +70,124 @@ def test_submit_task_posts_json_with_bearer_token(monkeypatch: pytest.MonkeyPatc
     assert response == {"run_id": "run-123", "status": "queued"}
 
 
+def test_build_guarded_task_payload_includes_project_requester_and_approval_context() -> None:
+    payload = orchestrator_task_client.build_guarded_task_payload(
+        kind="gs.control.kill_switch.set",
+        target="global-sentinel/control/kill-switch/on",
+        requester_id="telegram:user-42",
+        requester_name="Moses",
+        requester_channel="telegram:ops",
+        approval_jti="jti-123",
+        approval_reason="kill switch requested",
+        approval_exp=1_745_564_800,
+        payload={"requested_state": "on"},
+    )
+
+    assert payload == {
+        "project": "global-sentinel",
+        "kind": "gs.control.kill_switch.set",
+        "target": "global-sentinel/control/kill-switch/on",
+        "requested_state": "on",
+        "requester_id": "telegram:user-42",
+        "requester_name": "Moses",
+        "requester_channel": "telegram:ops",
+        "requester": {
+            "requester_id": "telegram:user-42",
+            "requester_name": "Moses",
+            "requester_channel": "telegram:ops",
+        },
+        "approval_jti": "jti-123",
+        "approval_reason": "kill switch requested",
+        "approval_exp": 1_745_564_800,
+        "approval_context": {
+            "approval_jti": "jti-123",
+            "approval_reason": "kill switch requested",
+            "approval_exp": 1_745_564_800,
+        },
+    }
+
+
+def test_submit_guarded_task_posts_standardized_guarded_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request(method: str, url: str, **kwargs: object) -> httpx.Response:
+        captured["method"] = method
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return _response(method, url, status_code=202, payload={"run_id": "run-guarded"})
+
+    monkeypatch.setattr(orchestrator_task_client.httpx, "request", fake_request)
+
+    response = orchestrator_task_client.submit_guarded_task(
+        kind="gs.control.kill_switch.set",
+        target="global-sentinel/control/kill-switch/off",
+        requester_id="operator-7",
+        requester_name="Ops Desk",
+        approval_jti="jti-guarded",
+        approval_reason="disable trading",
+        approval_exp="1745564800",
+        payload={"requested_state": "off"},
+        bearer_token="token-123",
+        base_url="http://router.test",
+        timeout=9.5,
+    )
+
+    assert response == {"run_id": "run-guarded"}
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://router.test/v1/tasks"
+    assert captured["kwargs"] == {
+        "headers": {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer token-123",
+        },
+        "timeout": 9.5,
+        "json": {
+            "project": "global-sentinel",
+            "kind": "gs.control.kill_switch.set",
+            "target": "global-sentinel/control/kill-switch/off",
+            "requested_state": "off",
+            "requester_id": "operator-7",
+            "requester_name": "Ops Desk",
+            "requester": {
+                "requester_id": "operator-7",
+                "requester_name": "Ops Desk",
+            },
+            "approval_jti": "jti-guarded",
+            "approval_reason": "disable trading",
+            "approval_exp": "1745564800",
+            "approval_context": {
+                "approval_jti": "jti-guarded",
+                "approval_reason": "disable trading",
+                "approval_exp": "1745564800",
+            },
+        },
+    }
+
+
+def test_build_guarded_task_payload_requires_non_empty_kind_target_and_project() -> None:
+    with pytest.raises(ValueError, match="kind must be non-empty"):
+        orchestrator_task_client.build_guarded_task_payload(
+            kind="",
+            target="global-sentinel/control/kill-switch/on",
+        )
+
+    with pytest.raises(ValueError, match="target must be non-empty"):
+        orchestrator_task_client.build_guarded_task_payload(
+            kind="gs.control.kill_switch.set",
+            target="",
+        )
+
+    with pytest.raises(ValueError, match="project must be non-empty"):
+        orchestrator_task_client.build_guarded_task_payload(
+            kind="gs.control.kill_switch.set",
+            target="global-sentinel/control/kill-switch/on",
+            project="",
+        )
+
+
 def test_get_run_uses_run_endpoint_without_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

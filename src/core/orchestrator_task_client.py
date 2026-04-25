@@ -12,6 +12,7 @@ import httpx
 DEFAULT_ORCHESTRATOR_API_BASE = "http://localhost:8100"
 DEFAULT_ORCHESTRATOR_INFERENCE_URL = "http://localhost:8100/v1/inference"
 DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_PROJECT = "global-sentinel"
 
 
 class OrchestratorTaskClientError(RuntimeError):
@@ -31,6 +32,84 @@ def submit_task(
         "POST",
         "/v1/tasks",
         payload=dict(payload),
+        bearer_token=bearer_token,
+        base_url=base_url,
+        timeout=timeout,
+    )
+
+
+def build_guarded_task_payload(
+    *,
+    kind: str,
+    target: str,
+    project: str = DEFAULT_PROJECT,
+    requester_id: str = "",
+    requester_name: str = "",
+    requester_channel: str = "",
+    approval_jti: str = "",
+    approval_reason: str = "",
+    approval_exp: Any = None,
+    payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a consistent GS guarded task payload for orchestrator submissions."""
+
+    task_payload = dict(payload or {})
+    task_payload["project"] = _require_text(project, "project")
+    task_payload["kind"] = _require_text(kind, "kind")
+    task_payload["target"] = _require_text(target, "target")
+
+    requester = _guarded_requester_fields(
+        requester_id=requester_id,
+        requester_name=requester_name,
+        requester_channel=requester_channel,
+    )
+    if requester:
+        task_payload.update(requester)
+        task_payload["requester"] = dict(requester)
+
+    approval_context = _guarded_approval_fields(
+        approval_jti=approval_jti,
+        approval_reason=approval_reason,
+        approval_exp=approval_exp,
+    )
+    if approval_context:
+        task_payload.update(approval_context)
+        task_payload["approval_context"] = dict(approval_context)
+
+    return task_payload
+
+
+def submit_guarded_task(
+    *,
+    kind: str,
+    target: str,
+    project: str = DEFAULT_PROJECT,
+    requester_id: str = "",
+    requester_name: str = "",
+    requester_channel: str = "",
+    approval_jti: str = "",
+    approval_reason: str = "",
+    approval_exp: Any = None,
+    payload: Mapping[str, Any] | None = None,
+    bearer_token: str = "",
+    base_url: str = "",
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Submit one GS guarded task using the shared payload contract."""
+
+    return submit_task(
+        build_guarded_task_payload(
+            kind=kind,
+            target=target,
+            project=project,
+            requester_id=requester_id,
+            requester_name=requester_name,
+            requester_channel=requester_channel,
+            approval_jti=approval_jti,
+            approval_reason=approval_reason,
+            approval_exp=approval_exp,
+            payload=payload,
+        ),
         bearer_token=bearer_token,
         base_url=base_url,
         timeout=timeout,
@@ -122,6 +201,44 @@ def _headers(*, bearer_token: str, has_json_body: bool) -> dict[str, str]:
     return headers
 
 
+def _guarded_requester_fields(
+    *,
+    requester_id: str,
+    requester_name: str,
+    requester_channel: str,
+) -> dict[str, str]:
+    requester: dict[str, str] = {}
+    normalized_id = _optional_text(requester_id)
+    normalized_name = _optional_text(requester_name)
+    normalized_channel = _optional_text(requester_channel)
+    if normalized_id is not None:
+        requester["requester_id"] = normalized_id
+    if normalized_name is not None:
+        requester["requester_name"] = normalized_name
+    if normalized_channel is not None:
+        requester["requester_channel"] = normalized_channel
+    return requester
+
+
+def _guarded_approval_fields(
+    *,
+    approval_jti: str,
+    approval_reason: str,
+    approval_exp: Any,
+) -> dict[str, Any]:
+    approval: dict[str, Any] = {}
+    normalized_jti = _optional_text(approval_jti)
+    normalized_reason = _optional_text(approval_reason)
+    normalized_exp = _optional_exp(approval_exp)
+    if normalized_jti is not None:
+        approval["approval_jti"] = normalized_jti
+    if normalized_reason is not None:
+        approval["approval_reason"] = normalized_reason
+    if normalized_exp is not None:
+        approval["approval_exp"] = normalized_exp
+    return approval
+
+
 def _api_base_url(override: str = "") -> str:
     if override:
         return override.rstrip("/")
@@ -174,6 +291,31 @@ def _config_value(name: str, default: str = "") -> str:
     if repo_value:
         return repo_value
     return default
+
+
+def _require_text(value: Any, field_name: str) -> str:
+    text = _optional_text(value)
+    if text is None:
+        raise ValueError(f"{field_name} must be non-empty")
+    return text
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_exp(value: Any) -> int | str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = _optional_text(value)
+    return text
 
 
 def _load_repo_env() -> dict[str, str]:
