@@ -88,7 +88,7 @@ def test_portfolio_aggregates_multi_account_schema(monkeypatch):
             ],
         )
 
-    monkeypatch.setattr(server, "_get_alpaca_accounts", lambda: accounts)
+    monkeypatch.setattr(server, "_get_portfolio_accounts", lambda: accounts)
     monkeypatch.setattr(server, "_fetch_alpaca_account", fake_fetch)
 
     payload = server.portfolio(account="all")
@@ -218,7 +218,7 @@ def test_portfolio_partial_failure_keeps_error_account_consistent(monkeypatch):
             ],
         )
 
-    monkeypatch.setattr(server, "_get_alpaca_accounts", lambda: accounts)
+    monkeypatch.setattr(server, "_get_portfolio_accounts", lambda: accounts)
     monkeypatch.setattr(server, "_fetch_alpaca_account", fake_fetch)
 
     payload = server.portfolio(account="all")

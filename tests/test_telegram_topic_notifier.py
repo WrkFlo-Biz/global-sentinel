@@ -79,6 +79,27 @@ def test_send_message_can_disable_notification(monkeypatch):
     assert captured["payload"]["disable_notification"] is True
 
 
+def test_send_message_explicit_args_ignore_env_disable_notification(monkeypatch):
+    captured = {}
+
+    def _fake_urlopen(request, timeout=10):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse(json.dumps({"ok": True}).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setenv("TELEGRAM_ROLE_UPDATES_DISABLE_NOTIFICATION", "true")
+    notifier = TelegramTopicNotifier(
+        bot_token="token",
+        chat_id="123",
+        reply_to_message_id="789",
+    )
+
+    result = notifier.send_message("explicit routing", require_topic_target=True)
+
+    assert result.ok is True
+    assert captured["payload"]["disable_notification"] is False
+
+
 def test_send_message_returns_missing_config_when_token_absent():
     notifier = TelegramTopicNotifier(bot_token="", chat_id="")
     result = notifier.send_message("hello")

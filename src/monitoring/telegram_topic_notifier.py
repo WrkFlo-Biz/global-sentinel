@@ -21,6 +21,14 @@ class TelegramSendResult:
     payload: Dict[str, Any]
 
 
+def _env_or_default(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
 class TelegramTopicNotifier:
     """Send Telegram updates, optionally to a specific topic thread."""
 
@@ -42,17 +50,36 @@ class TelegramTopicNotifier:
         disable_notification: Optional[bool] = None,
         topic: Optional[str] = None,
     ):
-        self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = chat_id or os.getenv("TELEGRAM_ROLE_UPDATES_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")
+        explicit_transport = any(
+            value is not None
+            for value in (bot_token, chat_id, message_thread_id, reply_to_message_id)
+        )
+        self.bot_token = bot_token if bot_token is not None else os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = (
+            chat_id
+            if chat_id is not None
+            else _env_or_default("TELEGRAM_ROLE_UPDATES_CHAT_ID", "TELEGRAM_CHAT_ID")
+        )
+        explicit_topic_target = message_thread_id is not None or reply_to_message_id is not None
         # Resolve topic name to thread ID
         if topic and topic in self.TOPIC_ENV_MAP:
             self.message_thread_id = os.getenv(self.TOPIC_ENV_MAP[topic], "")
+            self.reply_to_message_id = (
+                reply_to_message_id
+                if reply_to_message_id is not None
+                else os.getenv("TELEGRAM_ROLE_UPDATES_REPLY_TO_MESSAGE_ID", "")
+            )
+        elif explicit_topic_target:
+            self.message_thread_id = message_thread_id or ""
+            self.reply_to_message_id = reply_to_message_id or ""
         else:
-            self.message_thread_id = message_thread_id or os.getenv("TELEGRAM_ROLE_UPDATES_THREAD_ID", "")
-        self.reply_to_message_id = reply_to_message_id or os.getenv("TELEGRAM_ROLE_UPDATES_REPLY_TO_MESSAGE_ID", "")
+            self.message_thread_id = os.getenv("TELEGRAM_ROLE_UPDATES_THREAD_ID", "")
+            self.reply_to_message_id = os.getenv("TELEGRAM_ROLE_UPDATES_REPLY_TO_MESSAGE_ID", "")
         env_disable = os.getenv("TELEGRAM_ROLE_UPDATES_DISABLE_NOTIFICATION", "")
         if disable_notification is not None:
             self.disable_notification = bool(disable_notification)
+        elif explicit_transport:
+            self.disable_notification = False
         else:
             self.disable_notification = str(env_disable).strip().lower() in {"1", "true", "yes", "on"}
 

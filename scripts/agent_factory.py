@@ -46,13 +46,8 @@ REPORTS_DIR = REPO_ROOT / "reports"
 CONTROL_DIR = REPO_ROOT / "control"
 STAGING_DIR = REPO_ROOT / "config" / "staging"
 
-for p in [LOG_DIR, REPORTS_DIR, CONTROL_DIR, STAGING_DIR]:
-    p.mkdir(parents=True, exist_ok=True)
-
 OPENCLAW_OPS_REPORTS = REPORTS_DIR / "openclaw_ops"
 OPENCLAW_RESEARCH_REPORTS = REPORTS_DIR / "openclaw_research"
-OPENCLAW_OPS_REPORTS.mkdir(parents=True, exist_ok=True)
-OPENCLAW_RESEARCH_REPORTS.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.core.openclaw_role_registry import load_openclaw_role_registry
@@ -91,6 +86,11 @@ def env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def ensure_runtime_dirs() -> None:
+    for path in [LOG_DIR, REPORTS_DIR, CONTROL_DIR, STAGING_DIR, OPENCLAW_OPS_REPORTS, OPENCLAW_RESEARCH_REPORTS]:
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def latest_file(folder: Path, pattern: str = "*.json") -> Optional[Path]:
@@ -1010,6 +1010,7 @@ AGENT_RUNNERS: Dict[str, Callable[[Task], AgentResult]] = {
 
 class OpenClawBot:
     def __init__(self, bot_name: str, cfg: Dict[str, Any]):
+        ensure_runtime_dirs()
         self.bot_name = bot_name
         self.cfg = cfg
         self.running = True
