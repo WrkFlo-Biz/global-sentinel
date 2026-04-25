@@ -20,6 +20,7 @@ Safety:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -49,6 +50,14 @@ except ImportError:
         from monitoring.telegram_notifier import TelegramNotifier
     except ImportError:
         TelegramNotifier = None  # type: ignore
+
+
+GUARDED_CLOSE_PROJECT = "global-sentinel"
+GUARDED_CLOSE_KIND = "gs.trade.execute_shadow"
+GUARDED_CLOSE_REQUESTER = "position_manager"
+GUARDED_CLOSE_REQUESTER_KIND = "scheduler"
+GUARDED_CLOSE_REQUESTER_ID = "position_manager"
+GUARDED_CLOSE_REQUESTER_CHANNEL = "position_manager"
 
 
 def iso_now() -> str:
@@ -143,6 +152,7 @@ class PositionManager:
             "actions_taken": 0,
             "actions_executed": 0,
             "proposed_close_count": 0,
+            "approval_required": False,
             "manual_approval_required": True,
             "profits_taken": 0,
             "stops_hit": 0,
@@ -167,6 +177,10 @@ class PositionManager:
         if not positions:
             return result
 
+        # Load order history before any guarded handoff so close proposals can
+        # carry strategy/account provenance into the orchestrator boundary.
+        order_history = self._load_order_history()
+
         # Portfolio-level drawdown protection (25% margin-call auto-liquidation)
         portfolio_drawdown = self._check_portfolio_drawdown(positions)
         result["portfolio_drawdown_pct"] = portfolio_drawdown.get("drawdown_pct", 0)
@@ -176,9 +190,11 @@ class PositionManager:
             for pos in positions:
                 symbol = pos.get("symbol", "")
                 try:
+                    entry = order_history.get(symbol, {})
                     detail = {
                         "symbol": symbol,
                         "reason": "emergency_portfolio_drawdown_25pct",
+                        "strategy": entry.get("strategy") or "portfolio_protection",
                         "unrealized_pl": safe_float(pos.get("unrealized_pl"), 0),
                         "unrealized_plpc": safe_float(pos.get("unrealized_plpc"), 0),
                         "qty": abs(safe_float(pos.get("qty"), 0)),
@@ -186,6 +202,15 @@ class PositionManager:
                         "auto_close_blocked": not self.auto_close_enabled,
                         "close_result": None,
                     }
+                    if not self.auto_close_enabled:
+                        detail.update(
+                            self._build_guarded_close_handoff(
+                                position=pos,
+                                close_reason="emergency_portfolio_drawdown_25pct",
+                                strategy_name=str(entry.get("strategy") or "portfolio_protection"),
+                                order_history_entry=entry,
+                            )
+                        )
                     result["close_details"].append(detail)
                     result["proposed_close_count"] += 1
                     if self.auto_close_enabled:
@@ -224,14 +249,14 @@ class PositionManager:
                 "positions_affected": len(positions),
                 "auto_close_blocked": not self.auto_close_enabled,
             })
+            result["manual_approval_required"] = result["proposed_close_count"] > 0
+            result["approval_required"] = result["manual_approval_required"]
             return result
-
-        # Load order history for entry context
-        order_history = self._load_order_history()
 
         for pos in positions:
             symbol = pos.get("symbol", "")
             try:
+                entry = order_history.get(symbol, {})
                 action = self._evaluate_position(pos, order_history)
                 if action:
                     strategy_name = action.get("strategy", "day_trade")
@@ -250,6 +275,15 @@ class PositionManager:
                         "status": "pending_manual_approval" if not self.auto_close_enabled else "executed",
                         "auto_close_blocked": not self.auto_close_enabled,
                     }
+                    if not self.auto_close_enabled:
+                        detail.update(
+                            self._build_guarded_close_handoff(
+                                position=pos,
+                                close_reason=action["reason"],
+                                strategy_name=str(strategy_name),
+                                order_history_entry=entry,
+                            )
+                        )
                     if self.auto_close_enabled:
                         close_result = self._close_position(
                             symbol=symbol,
@@ -305,6 +339,7 @@ class PositionManager:
             result["manual_approval_required"] = True
         else:
             result["manual_approval_required"] = False
+        result["approval_required"] = result["manual_approval_required"]
         return result
 
     def _rate_limited_request(self, method: str, url: str, **kwargs) -> requests.Response:
@@ -391,6 +426,112 @@ class PositionManager:
             return yaml.safe_load(guardrails_path.read_text(encoding="utf-8")) or {}
         except Exception:
             return {}
+
+    def _approval_command(self, kind: str, target: str) -> str:
+        return f'wrkflo-orchestrator approve --kind {kind} --target {target} --reason "<reason>"'
+
+    def _build_guarded_close_handoff(
+        self,
+        *,
+        position: Dict[str, Any],
+        close_reason: str,
+        strategy_name: str,
+        order_history_entry: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        requested_at = iso_now()
+        symbol = str(position.get("symbol") or "").strip().upper()
+        qty = abs(safe_float(position.get("qty"), 0))
+        position_side = self._position_side(position)
+        close_side = self._close_side(position)
+        asset_class = str(position.get("asset_class") or "equity").strip().lower() or "equity"
+        account = self._close_account_label(strategy_name, order_history_entry or {})
+
+        ticket_basis = {
+            "account": account,
+            "asset_class": asset_class,
+            "close_reason": close_reason,
+            "position_side": position_side,
+            "qty": qty,
+            "side": close_side,
+            "source_surface": GUARDED_CLOSE_REQUESTER_CHANNEL,
+            "strategy": strategy_name,
+            "symbol": symbol,
+        }
+        ticket_hash = hashlib.sha256(
+            json.dumps(ticket_basis, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        ticket_id = f"pm-{self._ticket_slug(symbol)}-{ticket_hash[:16]}"
+        target = f"{GUARDED_CLOSE_PROJECT}/trade-ticket/{ticket_id}"
+        request_reason = f"position_manager close proposal for {symbol}: {close_reason}"
+        handoff = {
+            "project": GUARDED_CLOSE_PROJECT,
+            "kind": GUARDED_CLOSE_KIND,
+            "target": target,
+            "requester": GUARDED_CLOSE_REQUESTER,
+            "requester_kind": GUARDED_CLOSE_REQUESTER_KIND,
+            "requester_id": GUARDED_CLOSE_REQUESTER_ID,
+            "requester_channel": GUARDED_CLOSE_REQUESTER_CHANNEL,
+            "reason": request_reason,
+            "requested_at": requested_at,
+            "ticket_id": ticket_id,
+            "ticket_hash": ticket_hash,
+            "strategy": strategy_name,
+            "account": account,
+            "symbol": symbol,
+            "side": close_side,
+            "qty": qty,
+            "asset_class": asset_class,
+            "order_type": "market",
+            "time_in_force": "day",
+            "source_surface": GUARDED_CLOSE_REQUESTER_CHANNEL,
+            "close_reason": close_reason,
+            "position_side": position_side,
+        }
+        return {
+            "approval_required": True,
+            "project": GUARDED_CLOSE_PROJECT,
+            "kind": GUARDED_CLOSE_KIND,
+            "target": target,
+            "ticket_id": ticket_id,
+            "orchestrator_command": self._approval_command(GUARDED_CLOSE_KIND, target),
+            "orchestrator_handoff": handoff,
+        }
+
+    def _position_side(self, position: Dict[str, Any]) -> str:
+        side = str(position.get("side") or "").strip().lower()
+        if side in {"long", "short"}:
+            return side
+        return "short" if safe_float(position.get("qty"), 0) < 0 else "long"
+
+    def _close_side(self, position: Dict[str, Any]) -> str:
+        return "buy" if self._position_side(position) == "short" else "sell"
+
+    def _close_account_label(self, strategy_name: str, order_history_entry: Dict[str, Any]) -> str:
+        account = str(
+            order_history_entry.get("account")
+            or order_history_entry.get("account_name")
+            or ""
+        ).strip()
+        if account:
+            return account
+
+        holding_period = str(order_history_entry.get("holding_period") or "").strip().lower()
+        if strategy_name == "medium_long" or holding_period in {
+            "swing",
+            "medium",
+            "long",
+            "macro",
+            "weekly",
+            "monthly",
+            "multi_day",
+            "overnight",
+        }:
+            return "medium_long"
+        return "day_trade"
+
+    def _ticket_slug(self, symbol: str) -> str:
+        slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in symbol).strip("-")
+        return slug or "position"
 
     def _get_strategy_params(
         self,
@@ -615,6 +756,7 @@ class PositionManager:
                                     "strategy_style": cand.get("strategy_style"),
                                     "strategy_family": cand.get("strategy_family"),
                                     "underlying_strategy": cand.get("underlying_strategy"),
+                                    "account": cand.get("account") or cand.get("account_name"),
                                     "direction": cand.get("direction"),
                                     "confidence_score": cand.get("confidence_score"),
                                     "template_key": cand.get("template_key"),
