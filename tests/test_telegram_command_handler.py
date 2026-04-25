@@ -31,6 +31,110 @@ def test_dispatch_command_accepts_gs_prefix_with_bot_suffix(tmp_path: Path, monk
     assert sent == [("-1003898688720", "SYSTEM STATUS")]
 
 
+def test_status_uses_control_status_booleans_and_execution_mode(tmp_path: Path, monkeypatch) -> None:
+    handler = TelegramCommandHandler(
+        bot_token="",
+        allowed_chat_ids={"-1003898688720"},
+        strategy="day_trade",
+        repo_root=tmp_path,
+    )
+    calls: list[str] = []
+
+    def fake_get(path: str) -> dict[str, object]:
+        calls.append(path)
+        if path == "/api/heartbeat":
+            return {"mode": "NORMAL", "cycle": 17, "status": "healthy"}
+        if path == "/api/scorecard/latest":
+            return {
+                "regime_shift_probability": 0.25,
+                "confidence": 0.8,
+                "gss_signal": {"signal": "GREEN"},
+            }
+        if path == "/api/control/status":
+            return {
+                "kill_switch": True,
+                "manual_veto": False,
+                "execution_mode": {"day_trade": "manual", "medium_long": "auto"},
+            }
+        if path == "/api/execution-mode":
+            return {"execution_mode": {"day_trade": "fallback", "medium_long": "fallback"}}
+        if path == "/api/portfolio":
+            return {"positions": [{"symbol": "SPY"}], "equity": 123456.78}
+        raise AssertionError(f"unexpected path: {path}")
+
+    def fail_post(*_args, **_kwargs):
+        raise AssertionError("status must remain read-only")
+
+    monkeypatch.setattr(handler, "_dashboard_get", fake_get)
+    monkeypatch.setattr(handler, "_dashboard_post", fail_post)
+
+    status_text = handler._cmd_status("", "-1003898688720")
+
+    assert calls == [
+        "/api/heartbeat",
+        "/api/scorecard/latest",
+        "/api/control/status",
+        "/api/execution-mode",
+        "/api/portfolio",
+    ]
+    assert "/api/controls" not in calls
+    assert "Mode: NORMAL" in status_text
+    assert "Cycle: 17" in status_text
+    assert "Status: healthy" in status_text
+    assert "Regime P: 0.250" in status_text
+    assert "Confidence: 0.800" in status_text
+    assert "GSS Signal: GREEN" in status_text
+    assert "Kill Switch: ACTIVE" in status_text
+    assert "Manual Veto: OFF" in status_text
+    assert "Day Trade: manual" in status_text
+    assert "Medium/Long: auto" in status_text
+    assert "Positions: 1" in status_text
+    assert "Equity: $123,456.78" in status_text
+
+
+def test_status_falls_back_to_execution_mode_when_control_status_lacks_it(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    handler = TelegramCommandHandler(
+        bot_token="",
+        allowed_chat_ids={"-1003898688720"},
+        strategy="day_trade",
+        repo_root=tmp_path,
+    )
+    calls: list[str] = []
+
+    def fake_get(path: str) -> dict[str, object]:
+        calls.append(path)
+        if path == "/api/heartbeat":
+            return {"mode": "NORMAL", "cycle": 17, "status": "healthy"}
+        if path == "/api/scorecard/latest":
+            return {"regime_shift_probability": 0.25, "confidence": 0.8}
+        if path == "/api/control/status":
+            return {"kill_switch": False, "manual_veto": True}
+        if path == "/api/execution-mode":
+            return {"execution_mode": {"day_trade": "manual", "medium_long": "auto"}}
+        if path == "/api/portfolio":
+            return {"positions": [], "equity": 50000.0}
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(handler, "_dashboard_get", fake_get)
+
+    status_text = handler._cmd_status("", "-1003898688720")
+
+    assert calls == [
+        "/api/heartbeat",
+        "/api/scorecard/latest",
+        "/api/control/status",
+        "/api/execution-mode",
+        "/api/portfolio",
+    ]
+    assert "Kill Switch: OFF" in status_text
+    assert "Manual Veto: ACTIVE" in status_text
+    assert "Day Trade: manual" in status_text
+    assert "Medium/Long: auto" in status_text
+
+
 def test_non_command_chat_routes_through_foundry_client_boundary(tmp_path: Path, monkeypatch) -> None:
     handler = TelegramCommandHandler(
         bot_token="",

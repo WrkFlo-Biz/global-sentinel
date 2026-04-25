@@ -441,11 +441,11 @@ class TelegramCommandHandler:
         """Return current system status."""
         heartbeat = self._dashboard_get("/api/heartbeat")
         scorecard = self._dashboard_get("/api/scorecard/latest")
-        controls = self._dashboard_get("/api/controls")
+        control_status = self._dashboard_get("/api/control/status")
         exec_mode = self._dashboard_get("/api/execution-mode")
         portfolio = self._dashboard_get("/api/portfolio")
 
-        if not heartbeat and not scorecard:
+        if not heartbeat and not scorecard and not control_status and not exec_mode:
             return "System temporarily unavailable"
 
         lines = ["SYSTEM STATUS"]
@@ -455,6 +455,9 @@ class TelegramCommandHandler:
             lines.append(f"Mode: {heartbeat.get('mode', '?')}")
             lines.append(f"Cycle: {heartbeat.get('cycle', '?')}")
             lines.append(f"Status: {heartbeat.get('status', '?')}")
+        elif control_status and not control_status.get("error"):
+            lines.append(f"Mode: {control_status.get('mode', '?')}")
+            lines.append(f"Cycle: {control_status.get('cycle', '?')}")
 
         if scorecard and not scorecard.get("error"):
             lines.append(f"Regime P: {scorecard.get('regime_shift_probability', 0):.3f}")
@@ -462,15 +465,28 @@ class TelegramCommandHandler:
             gss = scorecard.get("gss_signal")
             if gss and isinstance(gss, dict):
                 lines.append(f"GSS Signal: {gss.get('signal', 'N/A')}")
+        elif control_status and not control_status.get("error"):
+            lines.append(f"Regime P: {control_status.get('regime_p', 0):.3f}")
+            lines.append(f"Confidence: {control_status.get('confidence', 0):.3f}")
 
-        if controls:
-            ks = controls.get("kill_switch", {})
-            mv = controls.get("manual_veto", {})
-            lines.append(f"Kill Switch: {'ACTIVE' if ks.get('active') or ks.get('kill_switch') else 'OFF'}")
-            lines.append(f"Manual Veto: {'ACTIVE' if mv.get('active') or mv.get('manual_veto') else 'OFF'}")
+        if control_status and not control_status.get("error"):
+            lines.append(
+                f"Kill Switch: {'ACTIVE' if control_status.get('kill_switch') else 'OFF'}"
+            )
+            lines.append(
+                f"Manual Veto: {'ACTIVE' if control_status.get('manual_veto') else 'OFF'}"
+            )
 
-        if exec_mode and not exec_mode.get("error"):
-            em = exec_mode.get("execution_mode", {})
+        em: Dict[str, Any] = {}
+        if control_status and not control_status.get("error"):
+            control_exec_mode = control_status.get("execution_mode")
+            if isinstance(control_exec_mode, dict):
+                em = control_exec_mode
+        if not em and exec_mode and not exec_mode.get("error"):
+            fallback_exec_mode = exec_mode.get("execution_mode", {})
+            if isinstance(fallback_exec_mode, dict):
+                em = fallback_exec_mode
+        if em or (exec_mode and not exec_mode.get("error")):
             lines.append(f"Day Trade: {em.get('day_trade', '?')}")
             lines.append(f"Medium/Long: {em.get('medium_long', '?')}")
 
