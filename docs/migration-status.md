@@ -14,6 +14,11 @@ Inputs for this pass:
 
 - `/tmp/claude-sync-to-orchestrator.md`
 - current GS tree under `/home/moses/projects/global-sentinel`
+- landed GS approval/control demotion commits on `origin/main`:
+  - `a0937aa` `feat: add guarded gs task client helpers`
+  - `dcf00b1` `fix: add orchestrator approval handoff to position manager`
+  - `2bf35c5` `fix: route trade approval through orchestrator mediation`
+  - `072ad10` `fix: demote frontend approval bridge ux`
 - existing GS docs:
   `docs/openclaw-demotion.md`,
   `docs/openclaw-demotion-plan.md`,
@@ -27,14 +32,25 @@ Inputs for this pass:
 
 - The handoff's Phase 0-4 work is done and is not the blocker for this lane.
 - GS migration is partially complete, not finished.
-- The biggest completed demotion step is that Tier-2 Telegram bot commands are
-  now stubs instead of direct mutators.
+- A meaningful tranche of the GS approval demotion work is now landed on
+  `origin/main`:
+  - GS now has a shared task-client boundary in
+    `src/core/orchestrator_task_client.py` for `/v1/tasks` and `/v1/runs/*`
+  - `src/execution/trade_approval.py` is now an orchestrator-mediated,
+    fail-closed guarded execution boundary instead of a Telegram callback loop
+  - `src/execution/position_manager.py` now emits per-ticket orchestrator
+    approval handoff metadata for guarded close proposals
+  - `POST /api/telegram/approve`, `GET /api/pending-orders`, and the dashboard
+    frontend approval bridge assumptions are demoted
 - The biggest remaining blockers are:
   - GS still owns Telegram chat ingress and research relay
-  - GS still exposes Tier-2 local-file mutators through API, CLI, and MCP
   - OpenClaw runtime state still lives in `src/core/openclaw_state_db.py`
   - execution-adjacent OpenClaw seeding still exists inside
     `scripts/agent_factory.py`
+  - the orchestrator still lacks a confirmed GS-specific kind registry and
+    worker routing path for the guarded task payloads GS can now emit
+  - many GS readers still treat local files as the source of truth even after
+    the mutator demotions
 - Two deeper Phase 5 companion docs now exist and should be read with this
   status note:
   - `docs/openclaw-demotion-plan.md` for the `OpenClawStateDB` retirement and
@@ -54,6 +70,33 @@ Inputs for this pass:
   mutates GS state for `/gs_mode`, `/gs_kill`, `/gs_veto`, `/gs_approve`,
   `/gs_reject`, or `/gs_refresh`; those commands only return
   `ORCHESTRATOR_APPROVAL_MESSAGE`.
+- `src/core/orchestrator_task_client.py:1-220` now exists as a shared GS-side
+  client boundary for orchestrator task endpoints. It provides
+  `submit_task()`, `get_run()`, `get_run_history()`, and guarded payload
+  helpers so execution/control surfaces do not need to hand-roll
+  `project`/`target`/approval metadata.
+- `src/execution/trade_approval.py:1-214,466-664` is no longer a Telegram or
+  local-pending-file approval loop. It now validates orchestrator-stamped
+  guarded context (`approval_jti`, `approval_reason`, `approval_exp`,
+  ticket/target consistency), submits one scoped `gs.trade.execute_shadow`
+  task through the shared task client, and keeps only a local JSONL audit
+  mirror plus compatibility stubs for the legacy file bridge.
+- `src/execution/position_manager.py:430-496` now emits explicit orchestrator
+  approval handoff metadata for guarded close proposals:
+  `approval_required`, `ticket_id`, `ticket_hash`, `kind`, `target`, and
+  `orchestrator_command`. It no longer only sets a bare
+  `pending_manual_approval`-style flag.
+- `dashboard/api/server.py:3025-3041`; `server.py:684-700`;
+  `dashboard/frontend/src/lib/api.ts:263-290`; and
+  `dashboard/frontend/src/components/ExecutionModePanel.tsx:42-70` now demote
+  the old approval-file bridge. `POST /api/telegram/approve` returns
+  `410 legacy_approval_file_bridge_disabled`, `GET /api/pending-orders`
+  returns an `approval_required` payload, and the frontend explicitly states
+  those routes are no longer the source of truth.
+- Dashboard/root API control mutators, the localhost `gs_control.py` surface,
+  and `src/risk/manual_veto_mcp.py` are also in demoted-state guidance mode:
+  they return scoped orchestrator approval commands instead of writing control
+  files directly.
 - The target GS-orchestrator boundary is already stated correctly in
   `docs/architecture-delta-gs-view.md`: GS computes risk/policy facts, while
   the orchestrator owns approval transport and routed execution.
@@ -80,16 +123,22 @@ Inputs for this pass:
   `scripts/agent_factory.py:1299-1319` can still enqueue
   `strategy_executor`, `crypto_executor`, and tuning work from the GS-owned
   loop.
-- **Tier-2 state authority is still GS-local.**
-  API, CLI, and MCP paths still write `execution_mode.yaml`,
-  `kill_switch.json`, `manual_veto.json`, and legacy approval files directly.
+- **GS still keeps file-backed status reads and compatibility readers.**
+  The mutator surfaces are mostly demoted, but `server.py`,
+  `dashboard/api/server.py`, `src/risk/manual_veto_mcp.py`,
+  `src/monitoring/crisis_monitor.py`, `scripts/agent_factory.py`,
+  `src/execution/politician_alpha_executor.py`, `scripts/ops/market_query.py`,
+  and `scripts/ops/daily_thesis_generator.py` still read local control files
+  or GS-local state as live truth.
 
 ### Current demotion read
 
 OpenClaw is only partially demoted. The bot UX layer has stopped mutating GS
-state directly, but the actual control-plane authority has not moved out of GS
-yet. Telegram transport, Tier-2 control mutation, and OpenClaw runtime state
-still terminate inside this repo.
+state directly, and the trade-approval plus pending-order bridges are now on
+the orchestrator path or explicitly demoted. The remaining blockers are
+Telegram ingress, GS-owned runtime state, execution-adjacent OpenClaw seeding,
+and the fact that many read paths still treat local files as authoritative
+status.
 
 Use `docs/openclaw-demotion-plan.md` for the file-level retirement order of
 `OpenClawStateDB` and adjacent runtime state, and
@@ -97,37 +146,45 @@ Use `docs/openclaw-demotion-plan.md` for the file-level retirement order of
 Foundry/orchestrator routing prerequisites that have to land before the final
 demotion steps can stick.
 
-## 2. Approval And Control Flows Still Using Raw Telegram Or Local Files
+## 2. Approval And Control Flows With Remaining Migration Work
 
 Tier-2 Telegram bot commands are **not** in this table because they are already
-stubs. The remaining problem surfaces are the still-live transport and state
-authorities behind those stubs.
+stubs. This table now separates what is already demoted from what is still
+blocking a full GS-to-orchestrator cutover.
 
-| Flow | Current code | Legacy pattern still present | Current status |
+| Flow | Current code | Current behavior | Remaining issue |
 | --- | --- | --- | --- |
-| Direct trade approval transport | `src/execution/trade_approval.py:28-34,245-385,413-623` | Sends Telegram inline-button approvals, polls `getUpdates` callback queries, writes `/tmp/gs_pending_approvals/*.pending`, `/tmp/gs_pending_approvals/*.decision`, and `/tmp/gs_callback_offset.json`, then mirrors audit into `logs/trade_approvals.jsonl` and `OpenClawStateDB`. | This is the only raw Telegram approval transport left in active code. It is fail-closed now, but it is still a GS-owned Telegram plus local-file approval loop. No non-test in-tree caller was found in this pass, so it is currently a retained legacy module rather than a clearly wired runtime path. |
-| Legacy approval-file API | `dashboard/api/server.py:2970-3004`; `server.py:629-660` | `POST /api/telegram/approve` writes `control/pending_approval_{strategy}.json`; `GET /api/pending-orders` reads `control/pending_orders_{strategy}.json`. | This is still a live local-file approval surface even though the current Telegram command handler no longer calls it. No in-tree consumer of `pending_approval_{strategy}.json` was found in this pass, so the surface appears stale but still reachable. |
-| Execution-mode mutator | `dashboard/api/server.py:2946-2967`; `server.py:605-626` | Direct rewrite of `config/execution_mode.yaml`. | Tier-2 control mutation still terminates in a GS-local file instead of an orchestrator verdict. |
-| Kill/veto mutators | `dashboard/api/server.py:3993-4019,4968-4987`; `server.py:833-859`; `src/risk/manual_veto_mcp.py:112-142,209-221` | Direct rewrites of `control/kill_switch.json` and `control/manual_veto.json` via API, v6 API, or MCP tool calls. | These are local-file control lanes outside orchestrator approval. |
-| Localhost control CLI | `scripts/ops/gs_control.py:147-169` | Direct POSTs to `/api/control/kill-switch`, `/api/control/veto`, and `/api/execution-mode`. | This keeps a mutable OpenClaw/SSH/Termius-to-GS control path alive even after bot-command demotion. |
+| Shared GS task client boundary | `src/core/orchestrator_task_client.py:1-220`; `tests/core/test_orchestrator_task_client.py` | Exists and now provides `submit_task()`, `get_run()`, `get_run_history()`, `build_guarded_task_payload()`, and `submit_guarded_task()` for GS callers. | Landed, but runtime adoption is still partial and the orchestrator still needs GS-specific kind registration plus worker execution for end-to-end success. |
+| Trade approval execution boundary | `src/execution/trade_approval.py:1-214,466-664` | Validates orchestrator approval context (`approval_jti`, `approval_reason`, `approval_exp`, scoped `target`, `ticket_id`, `ticket_hash`), submits one guarded `gs.trade.execute_shadow` task, writes a JSONL audit mirror, and leaves `resolve_pending_approval()` / `get_pending_approvals()` as dead compatibility stubs. | Demoted off raw Telegram transport and local pending-file authority. Remaining gap is orchestrator-side GS kind routing and wider runtime adoption. |
+| Position-manager approval handoff | `src/execution/position_manager.py:430-496`; `tests/execution/test_position_manager_manual_approval.py` | Proposed closes now carry `approval_required`, `ticket_id`, `ticket_hash`, `kind`, `target`, and `orchestrator_command` so each close can bind to a scoped GS approval token. | Handoff metadata is landed, but downstream execution still needs the same shared guarded submit/read path and orchestrator worker support. |
+| Legacy approval-file API and frontend bridge | `dashboard/api/server.py:3025-3041`; `server.py:684-700`; `dashboard/frontend/src/lib/api.ts:263-290`; `dashboard/frontend/src/components/ExecutionModePanel.tsx:42-70` | `POST /api/telegram/approve` now returns `410 legacy_approval_file_bridge_disabled`; `GET /api/pending-orders` now returns an `approval_required` demoted payload; the frontend now tells operators these routes are no longer source of truth and points to orchestrator approval instead. | Demoted. Remaining gap is a real ticket submit/read UX backed by the task client rather than guidance text alone. |
+| Execution-mode / kill-switch / manual-veto mutators | `dashboard/api/server.py:3004-3041,4031-4045,4995-5010`; `server.py:663-692,871-885`; `src/risk/manual_veto_mcp.py:127-163`; `scripts/ops/gs_control.py:62-196` | Dashboard/root API, MCP, and CLI mutators now return `approval_required` guidance and scoped orchestrator commands instead of writing local control files. | Mutation authority is demoted, but GS still has duplicated channel adapters and file-backed status reads. |
+| File-backed status readers | `server.py:307-308,892-914`; `dashboard/api/server.py:1851-1852,4052-4074`; `src/risk/manual_veto_mcp.py:84-90`; `src/monitoring/crisis_monitor.py:191-210`; `scripts/agent_factory.py:142-146` | These surfaces still read `execution_mode.yaml`, `kill_switch.json`, `manual_veto.json`, or adjacent GS-local state as live truth. | Read-side authority is still GS-local, so the system can remain split-brained until orchestrator-derived state replaces these readers. |
 
 ### Important nuance
 
-- `src/execution/trade_approval.py` is no longer fail-open on missing Telegram
-  config, send failures, or timeouts; those cases block the trade. The
-  remaining problem is **legacy authority and transport**, not the old
-  fail-open behavior.
+- `src/execution/trade_approval.py` no longer owns Telegram callback polling
+  or `OpenClawStateDB` as approval authority. It is now a fail-closed guarded
+  submit boundary with compatibility stubs left behind for the dead file
+  bridge.
 - `src/monitoring/telegram_command_handler.py` no longer calls
   `/api/telegram/approve` or the control mutator endpoints. The bot UX is ahead
   of the state authority behind it.
-- `server.py` and `dashboard/api/server.py` both carry the same mutator
-  surfaces, which increases drift risk during migration.
+- `server.py`, `dashboard/api/server.py`, and the dashboard frontend no longer
+  treat `/api/telegram/approve` or `/api/pending-orders` as live approval
+  bridges, but they still do not submit real guarded tasks either.
+- `src/execution/position_manager.py` now emits richer handoff metadata, but it
+  still does not itself submit the guarded task or read back orchestrator run
+  state.
 
 ### Readers that still assume local files are authoritative
 
-Even after the write paths move, several GS components still read these local
+Even after the mutator paths move, several GS components still read local
 control files as source of truth. Representative readers found in this pass:
 
+- `server.py:307-308,892-914`
+- `dashboard/api/server.py:1851-1852,4052-4074`
+- `src/risk/manual_veto_mcp.py:84-90`
 - `src/monitoring/crisis_monitor.py:191-210`
 - `scripts/agent_factory.py:142-146`
 - `src/execution/politician_alpha_executor.py:95-96,279-292`
@@ -210,7 +267,8 @@ The routing blockers are also shared across both plans:
 
 - live `/v1/inference` is still missing
 - no GS-specific task kind registry was found in orchestrator
-- GS still lacks a shared task client boundary for `/v1/tasks` and `/v1/runs/*`
+- GS now has a shared task client boundary for `/v1/tasks` and `/v1/runs/*`,
+  but it is only partially adopted by runtime callers
 - local control files and `OpenClawStateDB` are still treated as authoritative
 
 The key approval-token dependency is the same in both plans: guarded
@@ -229,14 +287,21 @@ authorities.
 ### Concrete GS-side migration map
 
 1. **Replace legacy approval transport with guarded task submission.**
-   - `src/execution/trade_approval.py` should stop sending Telegram messages,
-     polling `getUpdates`, and writing `/tmp/gs_pending_approvals`.
-   - The execution boundary should instead require an
-     orchestrator-approved context on entry:
-     `kind`, `target`, `run_id`, `approval_jti`, `issued_by`, `reason`,
-     `exp` (or an equivalent orchestrator verdict object).
-   - If that context is missing, expired, replayed, revoked, or mismatched,
-     GS must fail closed before any broker submission.
+   - `src/execution/trade_approval.py` has already moved onto this model. It
+     no longer sends Telegram messages or polls `getUpdates`; it requires an
+     orchestrator-approved context on entry and submits one scoped
+     `gs.trade.execute_shadow` task through
+     `src/core/orchestrator_task_client.py`.
+   - The current fail-closed boundary now validates:
+     `kind`, `target`, `ticket_id`, `ticket_hash`, `approval_jti`,
+     `approval_issued_by`, `approval_reason`, and `approval_exp`
+     (or an equivalent orchestrator verdict object).
+   - `src/execution/position_manager.py` now emits the per-ticket handoff
+     metadata (`ticket_id`, `ticket_hash`, `kind`, `target`,
+     `orchestrator_command`) needed to get proposed closes onto the same path.
+   - Remaining gap: not every execution-capable GS caller uses the shared task
+     client yet, and the orchestrator still needs GS kind registration plus a
+     worker path that can execute these payloads end to end.
 
 2. **Define real guarded task kinds for GS Tier-2 actions.**
    - At minimum GS needs orchestrator task kinds for:
@@ -252,25 +317,28 @@ authorities.
      the orchestrator source during this pass.
 
 3. **Retire GS-local approval files as the source of truth.**
-   - Remove or demote:
-     - `control/pending_approval_{strategy}.json`
-     - `control/pending_orders_{strategy}.json`
-     - direct write authority over `execution_mode.yaml`
-     - direct write authority over `kill_switch.json`
-     - direct write authority over `manual_veto.json`
+   - `POST /api/telegram/approve` and `GET /api/pending-orders` are already
+     demoted. The backend no longer writes `pending_approval_*` or reads
+     `pending_orders_*`, and the dashboard frontend no longer presents those
+     routes as a live bridge.
+   - Dashboard/root API control mutators, MCP mutators, and `gs_control.py`
+     are also demoted to approval guidance instead of direct writes.
    - Short term, GS can keep a compatibility cache if existing readers still
-     need file-backed inputs.
+     need file-backed inputs, but the remaining readers should be treated as
+     migration debt rather than proof that the demoted write path should come
+     back.
    - Long term, GS readers should consume orchestrator-derived state or a
      GS-local snapshot built from orchestrator verdicts.
 
 4. **Collapse API, CLI, and MCP Tier-2 surfaces into one path.**
    - `dashboard/api/server.py`, `server.py`, `scripts/ops/gs_control.py`, and
-     `src/risk/manual_veto_mcp.py` should stop acting as terminal mutators.
-   - Each should become one of:
+     `src/risk/manual_veto_mcp.py` have already stopped acting as terminal
+     mutators for the demoted lanes.
+   - Remaining work is to decide which of those surfaces become:
      - read-only
      - removed
-     - a thin orchestrator proxy that requires a bearer token and only records
-       the returned `run_id`
+     - a real orchestrator submit/read client that records the returned
+       `run_id`
 
 5. **Move OpenClaw runtime state out of `OpenClawStateDB`.**
    - `scripts/agent_factory.py` should stop owning worker/task state in
@@ -320,29 +388,48 @@ cd /home/moses/projects/global-sentinel
 
 sed -n '1,260p' docs/migration-status.md
 
+rg -n "submit_task|build_guarded_task_payload|submit_guarded_task" \
+  src/core/orchestrator_task_client.py
+
+rg -n "request_approval|approval_jti|approval_exp|resolve_pending_approval|get_pending_approvals" \
+  src/execution/trade_approval.py
+
+rg -n "approval_required|ticket_id|ticket_hash|target|orchestrator_command" \
+  src/execution/position_manager.py
+
+rg -n "/api/telegram/approve|pending-orders|legacy_approval_file_bridge_disabled|approval_required|orchestrator_command" \
+  dashboard/api/server.py server.py dashboard/frontend/src/lib/api.ts dashboard/frontend/src/components/ExecutionModePanel.tsx
+
 rg -n "ORCHESTRATOR_APPROVAL_MESSAGE|Anthropic\\(|getUpdates|OpenClawStateDB|execution_enabled|requires_human_approval" \
   src/monitoring/telegram_command_handler.py \
   src/bridges/openclaw_research_bridge.py \
-  src/execution/trade_approval.py \
   scripts/agent_factory.py \
   src/core/openclaw_state_db.py
 
-rg -n "/api/execution-mode|/api/telegram/approve|/api/control/kill-switch|/api/control/veto|/api/v6/kill-switch" \
-  dashboard/api/server.py server.py scripts/ops/gs_control.py
-
-rg -n "pending_approval_|pending_orders_|gs_pending_approvals|gs_callback_offset|set_manual_veto|set_kill_switch|clear_all_flags" \
+rg -n "pending_approval_|pending_orders_|kill_switch.json|manual_veto.json|set_manual_veto|set_kill_switch|clear_all_flags" \
   src scripts dashboard/api/server.py server.py
 ```
 
 ## Residual Risks
 
-- The orchestrator approval-token contract exists, but no GS-specific guarded
-  task kinds were found in the orchestrator source during this pass. That is
-  the main implementation gap after the docs work.
-- `server.py` and `dashboard/api/server.py` duplicate the same Tier-2 mutator
-  surfaces, so migration drift is possible unless both are removed or unified.
-- `trade_approval.py` appears retained rather than wired from active runtime
-  code today, which lowers immediate runtime risk but raises future regression
-  risk if another path re-imports it before the migration is finished.
+- GS now has the client/helper half of the guarded task path, but the
+  orchestrator still needs confirmed GS-specific guarded kind registration and
+  worker execution support. That is the main implementation gap after the docs
+  work.
+- `trade_approval.py` and `position_manager.py` now speak the right guarded
+  approval vocabulary, but not every execution-capable GS path is using that
+  boundary yet.
+- `server.py`, `dashboard/api/server.py`, and the dashboard frontend now return
+  demoted guidance rather than mutating approval state, but they still lack a
+  first-class orchestrator submit/read UX.
+- `server.py` and `dashboard/api/server.py` still duplicate the same demoted
+  control surfaces and file-backed status reads, so migration drift is
+  possible unless both are removed or unified.
+- `trade_approval.py` appears retained rather than clearly wired from active
+  runtime code today, which lowers immediate runtime risk but raises future
+  regression risk if another path re-imports it before the migration is
+  finished.
 - Many GS readers still assume local control files are authoritative; replacing
   writers without replacing readers will leave the system split-brained.
+- OpenClaw runtime state and execution-adjacent seeding still terminate inside
+  GS, so approval demotion alone does not complete the overall migration.
