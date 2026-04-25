@@ -53,11 +53,9 @@ Inputs used for this pass:
     API
 - Landed GS approval/control demotions already changed the boundary:
   - `src/execution/trade_approval.py` removes the raw Telegram callback and
-    `/tmp/gs_pending_approvals/*` approval loop, and now fails closed when
-    guarded approval context is missing or stale
-  - current review on `2bf35c5` still shows retained integration coverage and
-    legacy `request_approval()` callers breaking unless that guarded context is
-    already present, so this trade-approval lane is only partially demoted
+    `/tmp/gs_pending_approvals/*` approval loop, now fails closed when guarded
+    approval context is missing or stale, and `89310b8` requires the approved
+    `ticket_hash` so guarded approval binds to the reviewed payload
   - `src/execution/position_manager.py` now emits orchestrator approval handoff
     metadata on pending close proposals instead of carrying only
     `pending_manual_approval`
@@ -86,7 +84,7 @@ Inputs used for this pass:
 | `src/bridges/openclaw_research_bridge.py` | Sends `/gs_research` messages over Telegram and polls `getUpdates` for replies. | Research routing still goes through a Telegram relay instead of an orchestrator task/run contract. | Replace with a read-only advisory intent such as `research.market_brief` or a GS-specific research task kind. |
 | `scripts/agent_factory.py` | Owns a local priority queue, worker threads, seeding cadence, `OpenClawStateDB`, and execution-adjacent task kinds such as `strategy_executor` and `crypto_executor`. | It is still a GS-local orchestrator with its own runtime state and dispatch policy. | Demote to helper code behind orchestrator-owned tasks, or retire it after equivalent orchestrator tasks exist. |
 | `dashboard/api/server.py`, `server.py`, `scripts/ops/gs_control.py`, `src/risk/manual_veto_mcp.py` | The dashboard/server pending-orders bridge is demoted, but other control surfaces still include local file-oriented mutators and approval-guidance responses. | Pending-order files are no longer supposed to be terminal authority, yet some Tier-2 state changes still terminate inside GS-local surfaces. | Continue converting the remaining mutators into guarded `POST /v1/tasks` callers or read-only surfaces. |
-| `src/execution/trade_approval.py` | Retained `request_approval()` now validates guarded orchestrator context up front, submits one scoped `gs.trade.execute_shadow` task when that context is valid, and no longer runs the raw Telegram or local pending-file approval loop. | The transport demotion is real, but review on `2bf35c5` shows retained integration coverage and legacy callers still break unless guarded context is already present. | Keep the raw GS-owned approval transport removed, but treat this boundary as only partially demoted until the retained `request_approval()` compatibility contract is reconciled or its callers are migrated. |
+| `src/execution/trade_approval.py` | Retained `request_approval()` now validates guarded orchestrator context up front, requires the approved `ticket_hash`, submits one scoped `gs.trade.execute_shadow` task when that context is valid, and no longer runs the raw Telegram or local pending-file approval loop. | The old `2bf35c5` integration breakage is cleared on `origin/main` by `89310b8`, but this still covers only one guarded execution entry point; other execution-capable flows still need to consume the same orchestrator task and approval contract consistently. | Keep the raw GS-owned approval transport removed, use this as the guarded trade-submission boundary, and extend the same contract across the remaining execution/control callers. |
 | `src/execution/position_manager.py` | Emits orchestrator approval handoff metadata on pending close proposals instead of only a GS-local manual-approval marker. | The handoff metadata is now present, but downstream execution paths still need to consume the same guarded contract consistently. | Keep extending execution-capable flows to carry orchestrator task/target/approval metadata end to end. |
 | `scripts/ops/conditional_order_engine.py`, `scripts/agent_factory.py:run_strategy_executor`, `src/execution/shadow_order_router.py`, `src/execution/multi_broker_router.py` | Direct entry into the execution pipeline with local flags and GS-owned approval checks. | Execution-capable flows can still start inside GS before an orchestrator verdict exists. | Accept only orchestrator-approved execution context or guarded task payloads. |
 
@@ -209,10 +207,8 @@ Consequence:
 Already demoted in the current GS mainline:
 
 - `src/execution/trade_approval.py` no longer owns Telegram approval transport
-  or local pending-approval files as authority
-- review on `2bf35c5` still shows retained integration coverage plus legacy
-  `request_approval()` callers breaking unless guarded context is already
-  present, so the compatibility contract is not fully reconciled yet
+  or local pending-approval files as authority, and `89310b8` now requires the
+  approved `ticket_hash` so guarded submissions bind to the reviewed payload
 - `dashboard/api/server.py` and `server.py` demote the `pending-orders` API and
   dashboard frontend bridge from terminal authority
 - `src/execution/position_manager.py` now carries orchestrator approval handoff
@@ -224,8 +220,9 @@ Still requiring demotion or replacement:
 - `control/kill_switch.json`
 - `control/manual_veto.json`
 - `control/pending_approval_{strategy}.json`
-- retained `trade_approval.request_approval()` callers that still assume a
-  late-bound approval result instead of pre-supplied guarded context
+- remaining execution-capable callers that still originate from GS-local flags
+  or file-backed control state instead of one shared guarded task-client
+  boundary
 - local execution/control mutator surfaces that still write or read those files
 
 Consequence:
@@ -233,8 +230,9 @@ Consequence:
 - approval and control authority are less fragmented than before, but some
   mutation paths are still split between the orchestrator and GS-local files
 - trade approval no longer terminates in raw Telegram or local pending files,
-  but the retained compatibility contract is still open for callers and tests
-  that have not yet moved to guarded-context submission
+  and the specific guarded payload-binding blocker from `2bf35c5` is cleared on
+  `origin/main` by `89310b8`, but that does not mean every execution/control
+  path is already migrated to the same orchestrator contract
 - remaining readers and writers still need an orchestrator-backed read model or
   compatibility snapshot
 
@@ -420,8 +418,8 @@ Exit criteria:
 Progress already landed in GS:
 
 - `trade_approval.py` removes the raw Telegram/local pending-file approval loop
-  and now enforces guarded orchestrator context, but retained
-  `request_approval()` compatibility follow-up is still open
+  and now enforces guarded orchestrator context, including the payload-bound
+  `ticket_hash` validation added in `89310b8`
 - the `pending-orders` API/frontend bridge is already demoted in
   `dashboard/api/server.py` and `server.py`
 
@@ -511,9 +509,10 @@ touching live control or execution-capable flows.
   before `/v1/inference` is live and verified.
 - Do **not** delete local control-file readers until an orchestrator-backed read
   model or compatibility snapshot exists.
-- Do **not** describe `trade_approval.py` as fully migrated until retained
-  `request_approval()` callers and integration coverage are reconciled with the
-  guarded-context contract.
+- Do **not** treat `89310b8` as proof that the wider execution lane is fully
+  migrated; it clears the `trade_approval.py` guarded payload-binding blocker,
+  but other execution-capable callers still need to carry the same
+  orchestrator task and approval contract end to end.
 - Do **not** plan around a suspended-run `/approve` endpoint; the current beta
   approval model is front-loaded bearer-token submission on the initial
   `POST /v1/tasks`.
