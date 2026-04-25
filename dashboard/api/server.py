@@ -45,6 +45,10 @@ CONTROL_SURFACE_APPROVAL_MESSAGE = (
     "through orchestrator approval tokens instead of writing local control "
     "files."
 )
+PENDING_ORDERS_DEMOTED_MESSAGE = (
+    "Pending orders are no longer served from GS-local pending-order files. "
+    "Route approval state through orchestrator-mediated guarded execution."
+)
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
 LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
 LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
@@ -79,6 +83,21 @@ def _approval_guidance_response(
     if requested_change is not None:
         content["requested_change"] = requested_change
     return JSONResponse(status_code=410, content=content)
+
+
+def _pending_orders_demoted_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content={
+            "day_trade": None,
+            "medium_long": None,
+            "approval_required": True,
+            "legacy_approval_file_bridge_disabled": True,
+            "status": "approval_required",
+            "message": PENDING_ORDERS_DEMOTED_MESSAGE,
+            "orchestrator_command": ORCHESTRATOR_APPROVAL_COMMAND,
+        },
+    )
 
 
 @asynccontextmanager
@@ -3018,13 +3037,8 @@ async def telegram_approve(request: Request):
 
 @app.get("/api/pending-orders")
 def pending_orders():
-    """Get pending manual-mode orders waiting for approval."""
-    pending = {}
-    for strategy in ("day_trade", "medium_long"):
-        pending_path = REPO_ROOT / "control" / f"pending_orders_{strategy}.json"
-        if pending_path.exists():
-            pending[strategy] = load_json(pending_path)
-    return pending
+    """Legacy pending-order file bridge is demoted in favor of orchestrator state."""
+    return _pending_orders_demoted_response()
 
 
 # ---------------------------------------------------------------------------

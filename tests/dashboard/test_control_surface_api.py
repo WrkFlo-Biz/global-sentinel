@@ -232,3 +232,36 @@ def test_dashboard_v6_kill_switch_mirrors_are_demoted_without_control_writes(
     )
     assert payload["requested_change"] == expected_change
     assert not (tmp_path / "control" / "kill_switch.json").exists()
+
+
+@pytest.mark.parametrize(
+    "module",
+    [dashboard_server, root_server],
+    ids=["dashboard", "root"],
+)
+def test_pending_orders_endpoint_no_longer_reads_local_pending_order_files(
+    tmp_path, monkeypatch, module
+):
+    control_dir = tmp_path / "control"
+    control_dir.mkdir(parents=True, exist_ok=True)
+    (control_dir / "pending_orders_day_trade.json").write_text(
+        json.dumps({"symbol": "NVDA", "qty": 10}),
+        encoding="utf-8",
+    )
+    (control_dir / "pending_orders_medium_long.json").write_text(
+        json.dumps({"symbol": "MSFT", "qty": 5}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    response = module.pending_orders()
+    payload = _decode_json_response(response)
+
+    assert response.status_code == 200
+    assert payload["day_trade"] is None
+    assert payload["medium_long"] is None
+    assert payload["approval_required"] is True
+    assert payload["legacy_approval_file_bridge_disabled"] is True
+    assert payload["status"] == "approval_required"
+    assert "orchestrator" in payload["message"].lower()
+    assert payload["orchestrator_command"] == module.ORCHESTRATOR_APPROVAL_COMMAND
