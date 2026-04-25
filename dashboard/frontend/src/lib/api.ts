@@ -377,6 +377,12 @@ function selectControlStatusPayload(payload: unknown): Record<string, unknown> |
   return null;
 }
 
+function selectLiveControlStatusPayload(payload: unknown): Record<string, unknown> | null {
+  const record = asRecord(payload);
+  if (!record) return null;
+  return asRecord(record.control_status);
+}
+
 function readControlFlag(
   value: unknown,
   explicitKey: "kill_switch" | "manual_veto",
@@ -404,7 +410,16 @@ function readStringRecord(value: unknown): Record<string, string> | undefined {
 export function normalizeControlStatusPayload(payload: unknown): ControlStatus | null {
   const record = selectControlStatusPayload(payload);
   if (!record) return null;
+  return normalizeControlStatusRecord(record);
+}
 
+export function normalizeLiveControlStatusPayload(payload: unknown): ControlStatus | null {
+  const record = selectLiveControlStatusPayload(payload);
+  if (!record) return null;
+  return normalizeControlStatusRecord(record);
+}
+
+function normalizeControlStatusRecord(record: Record<string, unknown>): ControlStatus | null {
   const killSwitch = record.kill_switch;
   const manualVeto = record.manual_veto;
   if (typeof killSwitch === "boolean" || typeof manualVeto === "boolean") {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, ReactNode } from "react";
 import {
-  api, connectWS, normalizeControlStatusPayload,
+  api, connectWS, normalizeLiveControlStatusPayload,
   type Heartbeat, type Scorecard, type TimelinePoint, type ControlStatus,
   type GraduationReport, type PortfolioData, type TradeAnalysis,
   type ConsciousnessData, type ExecutionModeData, type PoliticianAlphaData,
@@ -220,7 +220,7 @@ export default function Dashboard() {
     const ws = connectWS((data) => {
       if (data.heartbeat) setHeartbeat(data.heartbeat);
       if (data.scorecard) setScorecard(data.scorecard);
-      const liveControlStatus = normalizeControlStatusPayload(data);
+      const liveControlStatus = normalizeLiveControlStatusPayload(data);
       if (liveControlStatus) {
         setControlStatus((previous) => (previous ? { ...previous, ...liveControlStatus } : liveControlStatus));
       }
