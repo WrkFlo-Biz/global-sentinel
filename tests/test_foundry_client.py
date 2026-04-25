@@ -84,7 +84,8 @@ def test_send_request_posts_expected_envelope(monkeypatch):
     assert payload["trace_context"]["package_id"] == "pkg-1"
     assert payload["trace_context"]["intent_id"] == "intent-1"
     assert payload["trace_context"]["trace_id"]
-    assert payload["request_options"] == {"temperature": 0.3, "max_tokens": 1500}
+    assert payload["options"] == {"temperature": 0.3, "max_tokens": 1500}
+    assert "request_options" not in payload
 
     assert response.output == "ok"
     assert response.trace_id == "trace-123"
@@ -358,7 +359,7 @@ def test_send_request_parses_openai_style_response(monkeypatch):
         ("unexpected", "interactive", 30.0, 2000),
     ],
 )
-def test_send_request_normalizes_latency_into_timeouts_and_request_options(
+def test_send_request_normalizes_latency_into_timeouts_and_options_payload(
     monkeypatch,
     latency_class,
     expected_latency_class,
@@ -387,7 +388,8 @@ def test_send_request_normalizes_latency_into_timeouts_and_request_options(
     payload = captured["json"]
     assert captured["timeout"] == expected_timeout
     assert payload["latency_class"] == expected_latency_class
-    assert payload["request_options"] == {"temperature": 0.3, "max_tokens": expected_max_tokens}
+    assert payload["options"] == {"temperature": 0.3, "max_tokens": expected_max_tokens}
+    assert "request_options" not in payload
 
 
 def test_send_request_propagates_orchestrator_http_status_error_without_fallback(monkeypatch):

@@ -114,7 +114,7 @@ def _build_request_envelope(
         "latency_class": latency_class,
         "trace_context": dict(trace_context),
         "messages": [dict(message) for message in messages],
-        "request_options": _request_options(latency_class),
+        "options": _options_payload(latency_class),
     }
 
 
@@ -147,7 +147,7 @@ def _send_azure_fallback(
         url,
         json={
             "messages": [dict(message) for message in messages],
-            **_request_options(latency_class),
+            **_options_payload(latency_class),
         },
         headers={
             "Content-Type": "application/json",
@@ -317,7 +317,7 @@ def _normalize_annotations(value: Any) -> dict[str, Any]:
     return {"raw": value}
 
 
-def _request_options(latency_class: str) -> dict[str, Any]:
+def _options_payload(latency_class: str) -> dict[str, Any]:
     normalized = _normalize_latency_class(latency_class)
     return {
         "temperature": DEFAULT_TEMPERATURE,
