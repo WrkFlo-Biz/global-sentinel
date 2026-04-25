@@ -19,6 +19,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.core.control_state_snapshot import read_control_state_snapshot
+from src.core.orchestrator_control_guidance import (
+    orchestrator_approval_command as build_orchestrator_approval_command,
+)
+
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", Path(__file__).resolve().parents[2]))
 CONTROL_DIR = REPO_ROOT / "control"
 CONTROL_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,11 +86,12 @@ def _read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_flags() -> Dict[str, Any]:
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
     veto = _read_json(MANUAL_VETO_PATH, {"manual_veto": False, "set_at": None})
     kill = _read_json(KILL_SWITCH_PATH, {"kill_switch": False, "set_at": None})
     return {
-        "manual_veto": bool(veto.get("manual_veto", False)),
-        "kill_switch": bool(kill.get("kill_switch", False)),
+        "manual_veto": control_snapshot["manual_veto"],
+        "kill_switch": control_snapshot["kill_switch"],
         "manual_veto_updated_at": veto.get("set_at"),
         "kill_switch_updated_at": kill.get("set_at"),
         "control_dir": str(CONTROL_DIR),
@@ -93,9 +99,10 @@ def get_flags() -> Dict[str, Any]:
 
 
 def _approval_command(kind: str, target: str) -> str:
-    return (
-        f"wrkflo-orchestrator approve --kind {kind} --target {target} "
-        '--reason "<reason>"'
+    return build_orchestrator_approval_command(
+        kind,
+        target,
+        include_reason_placeholder=True,
     )
 
 

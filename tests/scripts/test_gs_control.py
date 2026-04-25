@@ -54,6 +54,7 @@ def test_mutating_commands_return_scoped_approval_guidance(argv, expected_kind, 
     assert "orchestrator approval" in output.lower()
     assert f"--kind {expected_kind}" in output
     assert f"--target {expected_target}" in output
+    assert '--reason "<reason>"' not in output
 
 
 def test_status_remains_read_only(monkeypatch, capsys):

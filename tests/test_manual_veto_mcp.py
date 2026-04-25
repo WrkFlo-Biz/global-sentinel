@@ -64,6 +64,32 @@ def test_get_control_flags_remains_read_only(tmp_path: Path, monkeypatch: pytest
     assert payload["control_dir"] == str(control_dir)
 
 
+def test_get_control_flags_uses_shared_snapshot_for_legacy_active_payloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_control_paths(tmp_path, monkeypatch)
+    control_dir = tmp_path / "control"
+    control_dir.mkdir(parents=True, exist_ok=True)
+    (control_dir / "manual_veto.json").write_text(
+        json.dumps({"active": True, "set_at": "2026-04-25T00:10:00Z"}),
+        encoding="utf-8",
+    )
+    (control_dir / "kill_switch.json").write_text(
+        json.dumps({"active": False, "set_at": "2026-04-25T00:15:00Z"}),
+        encoding="utf-8",
+    )
+
+    response = _tool_call("get_control_flags")
+    payload = response["result"]["structuredContent"]
+
+    assert payload["manual_veto"] is True
+    assert payload["kill_switch"] is False
+    assert payload["manual_veto_updated_at"] == "2026-04-25T00:10:00Z"
+    assert payload["kill_switch_updated_at"] == "2026-04-25T00:15:00Z"
+    assert payload["control_dir"] == str(control_dir)
+
+
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "expected_kind", "expected_target"),
     [
@@ -103,6 +129,7 @@ def test_mutating_tools_return_demoted_guidance_without_control_writes(
     assert payload["commands"] == [
         manual_veto_mcp._approval_command(expected_kind, expected_target)
     ]
+    assert '--reason "<reason>"' in payload["commands"][0]
     assert "orchestrator approval" in payload["message"]
     assert expected_target in content_text
 
@@ -138,6 +165,7 @@ def test_clear_all_flags_returns_two_scoped_commands_without_control_writes(
             "global-sentinel/control/kill-switch/off",
         ),
     ]
+    assert all('--reason "<reason>"' in command for command in payload["commands"])
     assert "global-sentinel/control/manual-veto/off" in content_text
     assert "global-sentinel/control/kill-switch/off" in content_text
 

@@ -26,6 +26,11 @@ import sys
 import urllib.request
 import urllib.error
 
+from src.core.orchestrator_control_guidance import (
+    orchestrator_approval_command as build_orchestrator_approval_command,
+    orchestrator_approval_guidance as build_orchestrator_approval_guidance,
+)
+
 API_BASE = "http://localhost:8501"
 
 
@@ -54,14 +59,11 @@ def api_post(path, data):
 
 
 def orchestrator_approval_command(kind: str, target: str) -> str:
-    return f"wrkflo-orchestrator approve --kind {kind} --target {target}"
+    return build_orchestrator_approval_command(kind, target)
 
 
 def orchestrator_approval_guidance(kind: str, target: str) -> str:
-    return (
-        "This command now requires orchestrator approval. Use: "
-        f"{orchestrator_approval_command(kind, target)}"
-    )
+    return build_orchestrator_approval_guidance(kind, target)
 
 
 def fmt_status(d):
