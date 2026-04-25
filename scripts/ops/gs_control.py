@@ -53,6 +53,17 @@ def api_post(path, data):
         return {"error": str(e)}
 
 
+def orchestrator_approval_command(kind: str, target: str) -> str:
+    return f"wrkflo-orchestrator approve --kind {kind} --target {target}"
+
+
+def orchestrator_approval_guidance(kind: str, target: str) -> str:
+    return (
+        "This command now requires orchestrator approval. Use: "
+        f"{orchestrator_approval_command(kind, target)}"
+    )
+
+
 def fmt_status(d):
     if "error" in d:
         return f"ERROR: {d['error']}"
@@ -145,28 +156,46 @@ def main():
         print(fmt_gss(api_get("/api/control/gss-signal")))
 
     elif cmd == "kill":
-        reason = args.reason or " ".join(args.args) or "Activated via bot"
-        result = api_post("/api/control/kill-switch", {"active": True, "reason": reason})
-        print(f"Kill switch ACTIVATED: {result}")
+        print(
+            orchestrator_approval_guidance(
+                "gs.control.kill_switch.set",
+                "global-sentinel/control/kill-switch/on",
+            )
+        )
 
     elif cmd == "unkill":
-        result = api_post("/api/control/kill-switch", {"active": False, "reason": ""})
-        print(f"Kill switch DEACTIVATED: {result}")
+        print(
+            orchestrator_approval_guidance(
+                "gs.control.kill_switch.set",
+                "global-sentinel/control/kill-switch/off",
+            )
+        )
 
     elif cmd == "veto":
-        reason = args.reason or " ".join(args.args) or "Activated via bot"
-        result = api_post("/api/control/veto", {"active": True, "reason": reason})
-        print(f"Manual veto ACTIVATED: {result}")
+        print(
+            orchestrator_approval_guidance(
+                "gs.control.manual_veto.set",
+                "global-sentinel/control/manual-veto/on",
+            )
+        )
 
     elif cmd == "unveto":
-        result = api_post("/api/control/veto", {"active": False, "reason": ""})
-        print(f"Manual veto DEACTIVATED: {result}")
+        print(
+            orchestrator_approval_guidance(
+                "gs.control.manual_veto.set",
+                "global-sentinel/control/manual-veto/off",
+            )
+        )
 
     elif cmd == "mode":
         mode_val = args.args[0] if args.args else "auto"
         strategy = args.strategy or "day_trade"
-        result = api_post("/api/execution-mode", {"strategy": strategy, "mode": mode_val})
-        print(f"Execution mode set: {strategy}={mode_val}: {result}")
+        print(
+            orchestrator_approval_guidance(
+                "gs.control.execution_mode.set",
+                f"global-sentinel/control/execution-mode/{strategy}/{mode_val}",
+            )
+        )
 
     elif cmd == "alerts":
         data = api_get(f"/api/alerts?limit={args.limit}")
