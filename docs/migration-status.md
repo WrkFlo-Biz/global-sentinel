@@ -16,8 +16,10 @@ Inputs for this pass:
 - current GS tree under `/home/moses/projects/global-sentinel`
 - existing GS docs:
   `docs/openclaw-demotion.md`,
+  `docs/openclaw-demotion-plan.md`,
   `docs/permission-tiers.md`,
-  `docs/architecture-delta-gs-view.md`
+  `docs/architecture-delta-gs-view.md`,
+  `docs/foundry-routing-adoption-plan.md`
 - orchestrator approval-token implementation and runtime docs under
   `/home/moses/projects/wrkflo-orchestrator`
 
@@ -33,6 +35,12 @@ Inputs for this pass:
   - OpenClaw runtime state still lives in `src/core/openclaw_state_db.py`
   - execution-adjacent OpenClaw seeding still exists inside
     `scripts/agent_factory.py`
+- Two deeper Phase 5 companion docs now exist and should be read with this
+  status note:
+  - `docs/openclaw-demotion-plan.md` for the `OpenClawStateDB` retirement and
+    runtime-state demotion sequence
+  - `docs/foundry-routing-adoption-plan.md` for the Foundry/orchestrator
+    routing adoption sequence and control-plane routing blockers
 - The target approval model is the orchestrator's current beta:
   front-loaded guarded submission with `Authorization: Bearer <token>` on the
   initial `POST /v1/tasks`. There is no current suspended-run `/approve`
@@ -82,6 +90,12 @@ OpenClaw is only partially demoted. The bot UX layer has stopped mutating GS
 state directly, but the actual control-plane authority has not moved out of GS
 yet. Telegram transport, Tier-2 control mutation, and OpenClaw runtime state
 still terminate inside this repo.
+
+Use `docs/openclaw-demotion-plan.md` for the file-level retirement order of
+`OpenClawStateDB` and adjacent runtime state, and
+`docs/foundry-routing-adoption-plan.md` for the control-plane ingress and
+Foundry/orchestrator routing prerequisites that have to land before the final
+demotion steps can stick.
 
 ## 2. Approval And Control Flows Still Using Raw Telegram Or Local Files
 
@@ -168,6 +182,41 @@ That makes these GS patterns incompatible with the target model:
   authority
 - any GS flow that waits for a later `/approve` mutation instead of requiring
   approval context at submission time
+
+### Implementation-track summary
+
+Phase 5 now has two companion implementation docs that should be read with this
+status note:
+
+- `docs/openclaw-demotion-plan.md`
+- `docs/foundry-routing-adoption-plan.md`
+
+Their combined sequence is:
+
+1. close the Foundry routing ingress gap by making the orchestrator serve the
+   GS synchronous inference contract at `/v1/inference`
+2. finish moving active GS runtime callers onto the shared routing boundary
+3. register explicit GS task kind definitions and bind them to
+   `target=global-sentinel`
+4. move OpenClaw runtime state and dispatch ownership out of
+   `OpenClawStateDB` and `scripts/agent_factory.py`
+5. collapse Tier-2 local mutators and execution-adjacent approvals into
+   guarded orchestrator submission
+
+The routing blockers are also shared across both plans:
+
+- live `/v1/inference` is still missing
+- no GS-specific task kind registry was found in orchestrator
+- GS still lacks a shared task client boundary for `/v1/tasks` and `/v1/runs/*`
+- local control files and `OpenClawStateDB` are still treated as authoritative
+
+The key approval-token dependency is the same in both plans: guarded
+replacement flows only work once GS actions can bind to an explicit task kind
+plus `target=global-sentinel`. Without that contract, OpenClaw demotion cannot
+finish and Foundry/orchestrator routing cannot absorb Tier-2 control or
+execution-capable GS paths safely. In practice, that means the routing plan
+has to establish the task and ingress contract before the demotion plan can
+retire the last GS-local approval and runtime-state authorities.
 
 ### Concrete GS-side migration map
 
