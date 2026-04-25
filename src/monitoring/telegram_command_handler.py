@@ -41,9 +41,30 @@ class TelegramCommandHandler:
 
     RATE_LIMIT_SECONDS = 2.0
     POLL_TIMEOUT = 30  # long-poll timeout in seconds
-    ORCHESTRATOR_APPROVAL_MESSAGE = (
+    ORCHESTRATOR_MODE_APPROVAL_MESSAGE = (
         "⚠️ This command requires orchestrator approval. Use: "
-        "wrkflo-orchestrator approve --kind <kind> --target global-sentinel"
+        "wrkflo-orchestrator approve --kind gs.control.execution_mode.set "
+        "--target global-sentinel/control/execution-mode/day_trade/manual"
+    )
+    ORCHESTRATOR_KILL_APPROVAL_MESSAGE = (
+        "⚠️ This command requires orchestrator approval. Use: "
+        "wrkflo-orchestrator approve --kind gs.control.kill_switch.set "
+        "--target global-sentinel/control/kill-switch/on"
+    )
+    ORCHESTRATOR_VETO_APPROVAL_MESSAGE = (
+        "⚠️ This command requires orchestrator approval. Use: "
+        "wrkflo-orchestrator approve --kind gs.control.manual_veto.set "
+        "--target global-sentinel/control/manual-veto/on"
+    )
+    ORCHESTRATOR_TRADE_APPROVAL_MESSAGE = (
+        "⚠️ This command requires orchestrator approval. Prepare a GS trade "
+        "ticket first, then use: wrkflo-orchestrator approve --kind "
+        "gs.trade.execute_shadow --target global-sentinel/trade-ticket/<ticket_id>"
+    )
+    ORCHESTRATOR_REFRESH_APPROVAL_MESSAGE = (
+        "⚠️ This command is no longer a bare GS project approval. Follow "
+        "docs/gs-guarded-task-kinds-plan.md and use a scoped orchestrator "
+        "`--kind` plus exact `--target` for the control surface you need."
     )
 
     def __init__(
@@ -428,23 +449,23 @@ class TelegramCommandHandler:
 
     def _cmd_mode(self, args: str, chat_id: str) -> str:
         """Toggle execution mode. Usage: /mode auto day_trade"""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_MODE_APPROVAL_MESSAGE
 
     def _cmd_kill(self, args: str, chat_id: str) -> str:
         """Activate/deactivate kill switch. Usage: /kill on [reason] or /kill off"""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_KILL_APPROVAL_MESSAGE
 
     def _cmd_veto(self, args: str, chat_id: str) -> str:
         """Activate/deactivate manual veto. Usage: /veto on [reason] or /veto off"""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_VETO_APPROVAL_MESSAGE
 
     def _cmd_approve(self, args: str, chat_id: str) -> str:
         """Approve pending orders for this bot's strategy."""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_TRADE_APPROVAL_MESSAGE
 
     def _cmd_reject(self, args: str, chat_id: str) -> str:
         """Reject pending orders for this bot's strategy."""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_TRADE_APPROVAL_MESSAGE
 
     def _cmd_gss(self, args: str, chat_id: str) -> str:
         """Return latest GSS signal analysis."""
@@ -577,7 +598,7 @@ class TelegramCommandHandler:
 
     def _cmd_refresh(self, args: str, chat_id: str) -> str:
         """Force a data refresh by triggering a single crisis monitor cycle."""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_REFRESH_APPROVAL_MESSAGE
 
     def _cmd_help(self, args: str, chat_id: str) -> str:
         """List available commands."""
@@ -601,7 +622,10 @@ class TelegramCommandHandler:
             "  /gs_help - This message",
             "",
             "Tier-2 commands moved to orchestrator approval:",
-            "  wrkflo-orchestrator approve --kind <kind> --target global-sentinel",
+            "  gs.control.execution_mode.set -> global-sentinel/control/execution-mode/day_trade/manual",
+            "  gs.control.kill_switch.set -> global-sentinel/control/kill-switch/on",
+            "  gs.control.manual_veto.set -> global-sentinel/control/manual-veto/on",
+            "  gs.trade.execute_shadow -> global-sentinel/trade-ticket/<ticket_id>",
         ]
         return "\n".join(lines)
 
@@ -611,11 +635,11 @@ class TelegramCommandHandler:
 
     def _execute_kill_switch(self, active: bool, reason: str) -> str:
         """Write kill switch state to control file."""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_KILL_APPROVAL_MESSAGE
 
     def _execute_veto(self, active: bool, reason: str) -> str:
         """Write manual veto state to control file."""
-        return self.ORCHESTRATOR_APPROVAL_MESSAGE
+        return self.ORCHESTRATOR_VETO_APPROVAL_MESSAGE
 
     # ------------------------------------------------------------------
     # Audit logging

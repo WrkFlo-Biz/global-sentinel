@@ -31,10 +31,13 @@ from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
-ORCHESTRATOR_APPROVAL_COMMAND = "wrkflo-orchestrator approve --kind <kind> --target global-sentinel"
+ORCHESTRATOR_APPROVAL_COMMAND = (
+    "wrkflo-orchestrator approve --kind gs.trade.execute_shadow "
+    "--target global-sentinel/trade-ticket/<ticket_id>"
+)
 LEGACY_APPROVAL_ENDPOINT_MESSAGE = (
-    "Legacy dashboard approval endpoint is disabled; route Tier-2 approvals "
-    "through orchestrator approval tokens instead."
+    "Legacy dashboard approval endpoint is disabled; prepare a scoped GS trade "
+    "ticket and route approval through orchestrator tokens instead."
 )
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
 LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
