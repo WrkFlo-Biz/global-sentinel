@@ -29,9 +29,14 @@ from src.core.openclaw_state_db import OpenClawStateDB
 
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 APPROVAL_LOG_PATH = REPO_ROOT / "logs" / "trade_approvals.jsonl"
+# Legacy path kept only for stale cleanup/backwards-compatible test patching.
 PENDING_DIR = Path("/tmp/gs_pending_approvals")
 APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v2"
 STATE_DB_FILENAME = "state.db"
+LEGACY_APPROVAL_BRIDGE_DISABLED_REASON = (
+    "Local pending-approval files are disabled; route Tier-2 mediation through "
+    "orchestrator approval tokens instead."
+)
 
 logger = logging.getLogger("global_sentinel.trade_approval")
 
@@ -235,7 +240,7 @@ def _format_approval_message(order_info: Dict[str, Any], timeout: int, auto_exec
         lines.append(f"Strategy: {strategy}")
     lines.extend([
         "",
-        f"Tap a button or reply YES/NO",
+        "Use the inline approval buttons below",
         f"{auto_str} in {timeout}s if no response",
     ])
 
@@ -285,25 +290,16 @@ def _poll_callback_query(
     """
     Poll for callback_query matching our approval_id.
 
-    Uses a file-based approach: writes a pending file, then checks for a
-    decision file written by the callback handler or by text message handler.
-
-    Also directly polls getUpdates but ONLY processes callback_query updates
-    (not message updates), avoiding conflict with the command handler.
+    Only processes Telegram callback_query updates. The legacy local-file bridge
+    used by text replies is intentionally disabled so Tier-2 mediation does not
+    bypass the orchestrator approval-token flow.
     """
-    PENDING_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Write pending approval marker
-    pending_file = PENDING_DIR / f"{approval_id}.pending"
-    pending_file.write_text(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "approval_id": approval_id}))
-
-    decision_file = PENDING_DIR / f"{approval_id}.decision"
-
     deadline = time.time() + timeout_sec
     poll_interval = 2
     # Use a dedicated offset for callback queries only
     cb_offset_file = Path("/tmp/gs_callback_offset.json")
     cb_offset = 0
+    saw_poll_conflict = False
     if cb_offset_file.exists():
         try:
             cb_offset = json.loads(cb_offset_file.read_text()).get("offset", 0)
@@ -311,24 +307,7 @@ def _poll_callback_query(
             pass
 
     while time.time() < deadline:
-        # Check if the existing command handler wrote a decision
-        if decision_file.exists():
-            try:
-                decision_data = json.loads(decision_file.read_text())
-                normalized = _normalize_decision(decision_data.get("decision"))
-                raw_text = str(decision_data.get("raw", ""))
-                _cleanup_pending(approval_id)
-                if normalized:
-                    return normalized, raw_text
-                logger.warning("Invalid decision file for approval %s: %r", approval_id, decision_data)
-                return "error", raw_text or "invalid_decision_file"
-            except Exception as e:
-                logger.warning("Failed to parse decision file for approval %s: %s", approval_id, e)
-                _cleanup_pending(approval_id)
-                return "error", "invalid_decision_file"
-
-        # Poll for callback queries (does NOT conflict with getUpdates for messages
-        # because we only process callback_query, not message)
+        # Poll for callback queries only.
         try:
             remaining = int(deadline - time.time())
             url = f"https://api.telegram.org/bot{token}/getUpdates"
@@ -374,8 +353,13 @@ def _poll_callback_query(
                         _cleanup_pending(approval_id)
                         return "rejected", "inline_button_no"
             elif resp.status_code == 409:
-                # Conflict with existing polling - fall back to file-based only
-                logger.debug("getUpdates 409 for callbacks, using file-based polling only")
+                if not saw_poll_conflict:
+                    saw_poll_conflict = True
+                    logger.warning(
+                        "Telegram callback polling conflict for approval %s; %s",
+                        approval_id,
+                        LEGACY_APPROVAL_BRIDGE_DISABLED_REASON,
+                    )
         except Exception as e:
             logger.debug(f"Callback poll error: {e}")
 
@@ -589,37 +573,23 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
 
 def resolve_pending_approval(approval_id: str, decision: str):
     """
-    Called by the TelegramCommandHandler when a user replies YES/NO
-    to a pending approval in the Trading topic.
+    Legacy local-file approval bridge.
 
-    This writes a decision file that the polling loop picks up.
+    Text replies should no longer resolve trade approvals by writing local
+    decision files; Tier-2 mediation belongs on the orchestrator token flow.
     """
-    PENDING_DIR.mkdir(parents=True, exist_ok=True)
-    pending_file = PENDING_DIR / f"{approval_id}.pending"
-    if not pending_file.exists():
-        return False
-
-    normalized = _normalize_decision(decision)
-    if normalized is None:
-        logger.warning("Rejecting invalid approval resolution for %s: %r", approval_id, decision)
-        return False
-
-    decision_file = PENDING_DIR / f"{approval_id}.decision"
-    decision_file.write_text(json.dumps({
-        "decision": normalized,
-        "raw": f"text_reply_{normalized}",
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }))
-    return True
+    logger.warning(
+        "Rejecting legacy local-file approval resolution for %s (%r); %s",
+        approval_id,
+        decision,
+        LEGACY_APPROVAL_BRIDGE_DISABLED_REASON,
+    )
+    return False
 
 
 def get_pending_approvals() -> list:
-    """List all pending approval IDs (for the command handler to check)."""
-    PENDING_DIR.mkdir(parents=True, exist_ok=True)
-    pending = []
-    for f in PENDING_DIR.glob("*.pending"):
-        pending.append(f.stem)
-    return pending
+    """Legacy local-file pending approvals are disabled."""
+    return []
 
 
 def _safe_order_summary(order_info: Dict[str, Any]) -> dict:

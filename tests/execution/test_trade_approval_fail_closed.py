@@ -301,30 +301,46 @@ def test_request_approval_logs_explicit_rejection(tmp_path: Path, monkeypatch, c
     _assert_terminal_audit(tmp_path, result, "User rejected", None)
 
 
-def test_poll_callback_query_blocks_invalid_decision_file(tmp_path: Path, monkeypatch) -> None:
+def test_format_approval_message_requires_inline_buttons_only() -> None:
+    text = trade_approval._format_approval_message(_order(), timeout=60, auto_exec=False)
+
+    assert "Use the inline approval buttons below" in text
+    assert "reply YES/NO" not in text
+
+
+def test_poll_callback_query_ignores_legacy_decision_file(tmp_path: Path, monkeypatch) -> None:
     _set_paths(tmp_path, monkeypatch)
     trade_approval.PENDING_DIR.mkdir(parents=True, exist_ok=True)
     decision_file = trade_approval.PENDING_DIR / "abc123.decision"
-    decision_file.write_text(json.dumps({"raw": "missing_decision"}))
+    decision_file.write_text(json.dumps({"decision": "approved", "raw": "legacy_file"}))
 
-    decision, raw = trade_approval._poll_callback_query("abc123", "token", 1)
+    decision, raw = trade_approval._poll_callback_query("abc123", "token", 0)
 
-    assert decision == "error"
-    assert raw == "missing_decision"
-    assert not decision_file.exists()
+    assert decision == "timeout"
+    assert raw is None
 
 
-def test_resolve_pending_approval_normalizes_and_rejects_invalid_values(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_pending_approval_rejects_legacy_local_file_bridge(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
     _set_paths(tmp_path, monkeypatch)
     trade_approval.PENDING_DIR.mkdir(parents=True, exist_ok=True)
 
     pending_ok = trade_approval.PENDING_DIR / "good.pending"
     pending_ok.write_text("{}")
-    assert trade_approval.resolve_pending_approval("good", "approve") is True
-    written = json.loads((trade_approval.PENDING_DIR / "good.decision").read_text())
-    assert written["decision"] == "approved"
 
-    pending_bad = trade_approval.PENDING_DIR / "bad.pending"
-    pending_bad.write_text("{}")
-    assert trade_approval.resolve_pending_approval("bad", "maybe") is False
-    assert not (trade_approval.PENDING_DIR / "bad.decision").exists()
+    with caplog.at_level(logging.WARNING, logger="global_sentinel.trade_approval"):
+        assert trade_approval.resolve_pending_approval("good", "approve") is False
+
+    assert "orchestrator approval tokens instead" in caplog.text
+    assert not (trade_approval.PENDING_DIR / "good.decision").exists()
+
+
+def test_get_pending_approvals_returns_empty_when_legacy_files_exist(tmp_path: Path, monkeypatch) -> None:
+    _set_paths(tmp_path, monkeypatch)
+    trade_approval.PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    (trade_approval.PENDING_DIR / "old.pending").write_text("{}")
+
+    assert trade_approval.get_pending_approvals() == []
