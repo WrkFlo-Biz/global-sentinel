@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Interactive Brokers Bridge for Global Sentinel
-Connects to IB Gateway via ib_async on localhost:4001.
+Connects to IB Gateway via ib_async on the configured host/port.
 Provides: get_account, get_positions, place_order, cancel_order, get_quote.
 Similar interface to tastytrade_mcp_bridge.py.
 
@@ -16,14 +18,13 @@ import logging
 import os
 import sys
 import datetime
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from ib_async import IB, Stock, Option, MarketOrder, LimitOrder, StopOrder, Contract
     HAS_IB = True
 except ImportError:
     HAS_IB = False
-    print("ib_async not installed. Run: pip install ib_async", file=sys.stderr)
 
 logger = logging.getLogger("gs.ibkr_bridge")
 
@@ -32,9 +33,14 @@ logger = logging.getLogger("gs.ibkr_bridge")
 # ---------------------------------------------------------------------------
 
 _ib: Optional[IB] = None
-IB_HOST = os.getenv("IB_GATEWAY_HOST", "127.0.0.1")
-IB_PORT = int(os.getenv("IB_GATEWAY_PORT", "4001"))
-IB_CLIENT_ID = int(os.getenv("IB_CLIENT_ID", "1"))
+
+
+def get_connection_settings() -> dict[str, Any]:
+    return {
+        "host": os.getenv("IB_GATEWAY_HOST", "127.0.0.1"),
+        "port": int(os.getenv("IB_GATEWAY_PORT", "4001")),
+        "client_id": int(os.getenv("IB_CLIENT_ID", "1")),
+    }
 
 
 def iso_now():
@@ -46,13 +52,28 @@ async def _get_ib() -> IB:
     global _ib
     if _ib is not None and _ib.isConnected():
         return _ib
+    if not HAS_IB:
+        raise RuntimeError("ib_async not installed. Run: pip install ib_async")
+    settings = get_connection_settings()
     _ib = IB()
     try:
-        await _ib.connectAsync(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID, timeout=15)
-        logger.info("Connected to IB Gateway at %s:%s (clientId=%s)", IB_HOST, IB_PORT, IB_CLIENT_ID)
+        await _ib.connectAsync(
+            settings["host"],
+            settings["port"],
+            clientId=settings["client_id"],
+            timeout=15,
+        )
+        logger.info(
+            "Connected to IB Gateway at %s:%s (clientId=%s)",
+            settings["host"],
+            settings["port"],
+            settings["client_id"],
+        )
     except Exception as e:
         _ib = None
-        raise ConnectionError(f"Cannot connect to IB Gateway at {IB_HOST}:{IB_PORT}: {e}")
+        raise ConnectionError(
+            f"Cannot connect to IB Gateway at {settings['host']}:{settings['port']}: {e}"
+        )
     return _ib
 
 

@@ -20,11 +20,20 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 # --- Telegram topic routing ---
-sys.path.insert(0, "/opt/global-sentinel") if "/opt/global-sentinel" not in sys.path else None
+REPO_ROOT_HINT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT_HINT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_HINT))
 try:
     from src.monitoring.telegram_router import send as _send_topic
 except Exception:
     _send_topic = None
+try:
+    from src.execution import ibkr_bridge
+except Exception as exc:
+    ibkr_bridge = None
+    IBKR_BRIDGE_IMPORT_ERROR = str(exc)
+else:
+    IBKR_BRIDGE_IMPORT_ERROR = ""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -261,7 +270,7 @@ class BrokerReadinessChecker:
             }
 
     def _check_ibkr(self) -> Dict:
-        """Check if IBKR client portal gateway is running."""
+        """Check IBKR via local Client Portal or a configured remote ib_async gateway."""
         # Check systemd service
         try:
             result = subprocess.run(
@@ -271,6 +280,10 @@ class BrokerReadinessChecker:
             service_active = result.stdout.strip() == "active"
         except Exception:
             service_active = False
+
+        settings = self._ibkr_connection_settings()
+        if not self._ibkr_uses_local_client_portal(settings["host"]):
+            return self._check_ibkr_remote_gateway(settings, service_active)
 
         # Check port 5000
         port_ok = False
@@ -305,11 +318,87 @@ class BrokerReadinessChecker:
         return {
             "name": "IBKR Gateway",
             "status": status,
+            "health_path": "client_portal",
             "service_active": service_active,
             "port_5000_ok": port_ok,
             "authenticated": authenticated,
             "equity": 0,
             "buying_power": 0,
+            "issues": issues,
+        }
+
+    def _ibkr_connection_settings(self) -> Dict[str, Any]:
+        fallback = {
+            "host": os.environ.get("IB_GATEWAY_HOST", "127.0.0.1"),
+            "port": int(os.environ.get("IB_GATEWAY_PORT", "4001")),
+            "client_id": int(os.environ.get("IB_CLIENT_ID", "1")),
+        }
+
+        if ibkr_bridge is None or not hasattr(ibkr_bridge, "get_connection_settings"):
+            return fallback
+
+        try:
+            settings = ibkr_bridge.get_connection_settings()
+        except Exception:
+            return fallback
+
+        return {
+            "host": str(settings.get("host", fallback["host"])),
+            "port": int(settings.get("port", fallback["port"])),
+            "client_id": int(settings.get("client_id", fallback["client_id"])),
+        }
+
+    @staticmethod
+    def _ibkr_uses_local_client_portal(host: str) -> bool:
+        return host in {"127.0.0.1", "localhost", "::1"}
+
+    def _check_ibkr_remote_gateway(self, settings: Dict[str, Any], service_active: bool) -> Dict:
+        base_result = {
+            "name": "IBKR Gateway",
+            "health_path": "ib_async_tws",
+            "service_active": service_active,
+            "gateway_host": settings["host"],
+            "gateway_port": settings["port"],
+            "client_id": settings["client_id"],
+            "equity": 0,
+            "buying_power": 0,
+            "issues": [],
+        }
+
+        if ibkr_bridge is None or not hasattr(ibkr_bridge, "get_broker_status"):
+            return {
+                **base_result,
+                "status": "disconnected",
+                "authenticated": False,
+                "error": f"ibkr_bridge unavailable: {IBKR_BRIDGE_IMPORT_ERROR or 'unknown import error'}",
+                "issues": ["IBKR_BRIDGE_UNAVAILABLE"],
+            }
+
+        bridge_status = ibkr_bridge.get_broker_status()
+        if not bridge_status.get("connected"):
+            error = str(bridge_status.get("error", "remote ib_async gateway unavailable"))
+            issue = "IB_ASYNC_UNAVAILABLE" if "ib_async not installed" in error.lower() else "TWS_CONNECT_FAILED"
+            return {
+                **base_result,
+                "status": "disconnected",
+                "authenticated": False,
+                "error": error,
+                "issues": [issue],
+            }
+
+        equity = round(float(bridge_status.get("net_liquidation", 0) or 0), 2)
+        buying_power = round(float(bridge_status.get("buying_power", 0) or 0), 2)
+        issues = []
+        if equity < 100:
+            issues.append("LOW_BALANCE")
+
+        return {
+            **base_result,
+            "status": "connected",
+            "authenticated": True,
+            "account": bridge_status.get("account", ""),
+            "equity": equity,
+            "buying_power": buying_power,
             "issues": issues,
         }
 
