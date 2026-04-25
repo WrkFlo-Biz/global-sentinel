@@ -14,11 +14,13 @@ Inputs for this pass:
 
 - `/tmp/claude-sync-to-orchestrator.md`
 - current GS tree under `/home/moses/projects/global-sentinel`
-- landed GS approval/control demotion commits on `origin/main`:
+- landed GS migration commits relevant to this status note on `origin/main`:
   - `a0937aa` `feat: add guarded gs task client helpers`
   - `dcf00b1` `fix: add orchestrator approval handoff to position manager`
   - `2bf35c5` `fix: route trade approval through orchestrator mediation`
   - `072ad10` `fix: demote frontend approval bridge ux`
+  - `89310b8` `fix: require approved ticket hash for guarded trades`
+  - `7eb3b76` `docs: correct Foundry routing blocker status`
 - existing GS docs:
   `docs/openclaw-demotion.md`,
   `docs/openclaw-demotion-plan.md`,
@@ -37,18 +39,23 @@ Inputs for this pass:
   - GS now has a shared task-client boundary in
     `src/core/orchestrator_task_client.py` for `/v1/tasks` and `/v1/runs/*`
   - `src/execution/trade_approval.py` is now an orchestrator-mediated,
-    fail-closed guarded execution boundary instead of a Telegram callback loop
+    fail-closed guarded execution boundary instead of a Telegram callback loop,
+    and `89310b8` now requires the approved `ticket_hash` so guarded approval
+    binds to the reviewed payload
   - `src/execution/position_manager.py` now emits per-ticket orchestrator
     approval handoff metadata for guarded close proposals
   - `POST /api/telegram/approve`, `GET /api/pending-orders`, and the dashboard
     frontend approval bridge assumptions are demoted
+  - `7eb3b76` updates the companion Foundry routing doc so the resolved
+    `2bf35c5` integration breakage is no longer described as the live blocker
 - The biggest remaining blockers are:
   - GS still owns Telegram chat ingress and research relay
   - OpenClaw runtime state still lives in `src/core/openclaw_state_db.py`
   - execution-adjacent OpenClaw seeding still exists inside
     `scripts/agent_factory.py`
   - the orchestrator still lacks a confirmed GS-specific kind registry and
-    worker routing path for the guarded task payloads GS can now emit
+    end-to-end worker routing/execution path for all guarded task payloads GS
+    can now emit
   - many GS readers still treat local files as the source of truth even after
     the mutator demotions
 - Two deeper Phase 5 companion docs now exist and should be read with this
@@ -78,9 +85,10 @@ Inputs for this pass:
 - `src/execution/trade_approval.py:1-214,466-664` is no longer a Telegram or
   local-pending-file approval loop. It now validates orchestrator-stamped
   guarded context (`approval_jti`, `approval_reason`, `approval_exp`,
-  ticket/target consistency), submits one scoped `gs.trade.execute_shadow`
-  task through the shared task client, and keeps only a local JSONL audit
-  mirror plus compatibility stubs for the legacy file bridge.
+  scoped `target`, `ticket_id`, and required `ticket_hash`), submits one
+  scoped `gs.trade.execute_shadow` task through the shared task client, and
+  keeps only a local JSONL audit mirror plus compatibility stubs for the
+  legacy file bridge.
 - `src/execution/position_manager.py:430-496` now emits explicit orchestrator
   approval handoff metadata for guarded close proposals:
   `approval_required`, `ticket_id`, `ticket_hash`, `kind`, `target`, and
@@ -100,6 +108,10 @@ Inputs for this pass:
 - The target GS-orchestrator boundary is already stated correctly in
   `docs/architecture-delta-gs-view.md`: GS computes risk/policy facts, while
   the orchestrator owns approval transport and routed execution.
+- `docs/foundry-routing-adoption-plan.md` now reflects the blocker-cleared
+  state after `89310b8`: the old `2bf35c5` trade-approval integration breakage
+  is historical context, while the live routing gap is the broader GS
+  task-kind, worker-routing, and runtime-adoption work.
 - The deeper OpenClaw coupling inventory is already captured in
   `docs/openclaw-demotion.md`; this file narrows that audit to the current
   migration lane.
@@ -155,7 +167,7 @@ blocking a full GS-to-orchestrator cutover.
 | Flow | Current code | Current behavior | Remaining issue |
 | --- | --- | --- | --- |
 | Shared GS task client boundary | `src/core/orchestrator_task_client.py:1-220`; `tests/core/test_orchestrator_task_client.py` | Exists and now provides `submit_task()`, `get_run()`, `get_run_history()`, `build_guarded_task_payload()`, and `submit_guarded_task()` for GS callers. | Landed, but runtime adoption is still partial and the orchestrator still needs GS-specific kind registration plus worker execution for end-to-end success. |
-| Trade approval execution boundary | `src/execution/trade_approval.py:1-214,466-664` | Validates orchestrator approval context (`approval_jti`, `approval_reason`, `approval_exp`, scoped `target`, `ticket_id`, `ticket_hash`), submits one guarded `gs.trade.execute_shadow` task, writes a JSONL audit mirror, and leaves `resolve_pending_approval()` / `get_pending_approvals()` as dead compatibility stubs. | Demoted off raw Telegram transport and local pending-file authority. Remaining gap is orchestrator-side GS kind routing and wider runtime adoption. |
+| Trade approval execution boundary | `src/execution/trade_approval.py:1-214,466-664` | Validates orchestrator approval context (`approval_jti`, `approval_reason`, `approval_exp`, scoped `target`, `ticket_id`, and required `ticket_hash` after `89310b8`), submits one guarded `gs.trade.execute_shadow` task, writes a JSONL audit mirror, and leaves `resolve_pending_approval()` / `get_pending_approvals()` as dead compatibility stubs. | Demoted off raw Telegram transport and local pending-file authority. The old `2bf35c5` payload-binding blocker is cleared, but the wider orchestrator-side GS kind routing and runtime adoption work is still open. |
 | Position-manager approval handoff | `src/execution/position_manager.py:430-496`; `tests/execution/test_position_manager_manual_approval.py` | Proposed closes now carry `approval_required`, `ticket_id`, `ticket_hash`, `kind`, `target`, and `orchestrator_command` so each close can bind to a scoped GS approval token. | Handoff metadata is landed, but downstream execution still needs the same shared guarded submit/read path and orchestrator worker support. |
 | Legacy approval-file API and frontend bridge | `dashboard/api/server.py:3025-3041`; `server.py:684-700`; `dashboard/frontend/src/lib/api.ts:263-290`; `dashboard/frontend/src/components/ExecutionModePanel.tsx:42-70` | `POST /api/telegram/approve` now returns `410 legacy_approval_file_bridge_disabled`; `GET /api/pending-orders` now returns an `approval_required` demoted payload; the frontend now tells operators these routes are no longer source of truth and points to orchestrator approval instead. | Demoted. Remaining gap is a real ticket submit/read UX backed by the task client rather than guidance text alone. |
 | Execution-mode / kill-switch / manual-veto mutators | `dashboard/api/server.py:3004-3041,4031-4045,4995-5010`; `server.py:663-692,871-885`; `src/risk/manual_veto_mcp.py:127-163`; `scripts/ops/gs_control.py:62-196` | Dashboard/root API, MCP, and CLI mutators now return `approval_required` guidance and scoped orchestrator commands instead of writing local control files. | Mutation authority is demoted, but GS still has duplicated channel adapters and file-backed status reads. |
@@ -167,6 +179,10 @@ blocking a full GS-to-orchestrator cutover.
   or `OpenClawStateDB` as approval authority. It is now a fail-closed guarded
   submit boundary with compatibility stubs left behind for the dead file
   bridge.
+- `2bf35c5` is now historical context rather than the live trade-approval
+  blocker. `89310b8` tightened `request_approval()` to require the approved
+  `ticket_hash`, and `7eb3b76` updates the companion Foundry routing doc to
+  describe that cleared state accurately.
 - `src/monitoring/telegram_command_handler.py` no longer calls
   `/api/telegram/approve` or the control mutator endpoints. The bot UX is ahead
   of the state authority behind it.
@@ -251,8 +267,8 @@ status note:
 
 Their combined sequence is:
 
-1. close the Foundry routing ingress gap by making the orchestrator serve the
-   GS synchronous inference contract at `/v1/inference`
+1. stabilize and verify the already-landed GS synchronous inference contract at
+   `/v1/inference`
 2. finish moving active GS runtime callers onto the shared routing boundary
 3. register explicit GS task kind definitions and bind them to scoped targets
    such as `global-sentinel/control/kill-switch/on`,
@@ -265,8 +281,11 @@ Their combined sequence is:
 
 The routing blockers are also shared across both plans:
 
-- live `/v1/inference` is still missing
-- no GS-specific task kind registry was found in orchestrator
+- `/v1/inference` is no longer the blocker; the route is landed in
+  orchestrator source, and the remaining gap is runtime adoption plus retiring
+  GS fallback assumptions safely
+- no GS-specific task kind registry or confirmed end-to-end worker routing path
+  was found in orchestrator during this pass
 - GS now has a shared task client boundary for `/v1/tasks` and `/v1/runs/*`,
   but it is only partially adopted by runtime callers
 - local control files and `OpenClawStateDB` are still treated as authoritative
@@ -292,6 +311,9 @@ authorities.
      orchestrator-approved context on entry and submits one scoped
      `gs.trade.execute_shadow` task through
      `src/core/orchestrator_task_client.py`.
+   - `89310b8` clears the old `2bf35c5` payload-binding gap by requiring the
+     approved `ticket_hash` on guarded submission, so the trade approval now
+     binds to the reviewed payload instead of only the coarse task scope.
    - The current fail-closed boundary now validates:
      `kind`, `target`, `ticket_id`, `ticket_hash`, `approval_jti`,
      `approval_issued_by`, `approval_reason`, and `approval_exp`
