@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -26,6 +25,11 @@ CONTROL_DIR.mkdir(parents=True, exist_ok=True)
 
 MANUAL_VETO_PATH = CONTROL_DIR / "manual_veto.json"
 KILL_SWITCH_PATH = CONTROL_DIR / "kill_switch.json"
+APPROVAL_REQUIRED_ERROR = "orchestrator_approval_required"
+APPROVAL_REQUIRED_MESSAGE = (
+    "This MCP mutator is demoted. Route Tier-2 control changes through "
+    "orchestrator approval tokens instead of writing local control files."
+)
 
 
 def read_message() -> Optional[Dict[str, Any]]:
@@ -76,27 +80,6 @@ def _read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
         return default
 
 
-def _write_json(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
-
-
-def _log_action(control_type: str, active: bool, reason: str, set_by: str, timestamp: str):
-    log_dir = REPO_ROOT / "logs" / "risk_checks"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    safe_ts = timestamp.replace(":", "-")
-    log_path = log_dir / f"control-{control_type}-{safe_ts}.json"
-    log_path.write_text(json.dumps({
-        "control": control_type,
-        "active": active,
-        "reason": reason,
-        "set_by": set_by,
-        "timestamp": timestamp,
-    }, indent=2))
-
-
 def get_flags() -> Dict[str, Any]:
     veto = _read_json(MANUAL_VETO_PATH, {"manual_veto": False, "set_at": None})
     kill = _read_json(KILL_SWITCH_PATH, {"kill_switch": False, "set_at": None})
@@ -109,37 +92,79 @@ def get_flags() -> Dict[str, Any]:
     }
 
 
+def _approval_command(kind: str, target: str) -> str:
+    return (
+        f"wrkflo-orchestrator approve --kind {kind} --target {target} "
+        '--reason "<reason>"'
+    )
+
+
+def _approval_guidance_payload(
+    *,
+    tool_name: str,
+    requested_change: Dict[str, Any] | None = None,
+    commands: list[str],
+    target: str = "",
+    kind: str = "",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "status": "approval_required",
+        "error": APPROVAL_REQUIRED_ERROR,
+        "message": APPROVAL_REQUIRED_MESSAGE,
+        "tool": tool_name,
+        "commands": commands,
+    }
+    if requested_change is not None:
+        payload["requested_change"] = requested_change
+    if kind:
+        payload["kind"] = kind
+    if target:
+        payload["target"] = target
+    return payload
+
+
 def set_manual_veto(enabled: bool, reason: Optional[str] = None, set_by: str = "human") -> Dict[str, Any]:
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _write_json(MANUAL_VETO_PATH, {
-        "manual_veto": bool(enabled),
-        "reason": reason or "",
-        "set_by": set_by,
-        "set_at": now,
-    })
-    _log_action("veto", enabled, reason or "", set_by, now)
-    return get_flags()
+    del set_by
+    target = f"global-sentinel/control/manual-veto/{'on' if enabled else 'off'}"
+    kind = "gs.control.manual_veto.set"
+    return _approval_guidance_payload(
+        tool_name="set_manual_veto",
+        requested_change={"manual_veto": bool(enabled), "reason": reason or ""},
+        commands=[_approval_command(kind, target)],
+        kind=kind,
+        target=target,
+    )
 
 
 def set_kill_switch(enabled: bool, reason: Optional[str] = None, set_by: str = "human") -> Dict[str, Any]:
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _write_json(KILL_SWITCH_PATH, {
-        "kill_switch": bool(enabled),
-        "reason": reason or "",
-        "set_by": set_by,
-        "set_at": now,
-    })
-    _log_action("kill_switch", enabled, reason or "", set_by, now)
-    return get_flags()
+    del set_by
+    target = f"global-sentinel/control/kill-switch/{'on' if enabled else 'off'}"
+    kind = "gs.control.kill_switch.set"
+    return _approval_guidance_payload(
+        tool_name="set_kill_switch",
+        requested_change={"kill_switch": bool(enabled), "reason": reason or ""},
+        commands=[_approval_command(kind, target)],
+        kind=kind,
+        target=target,
+    )
 
 
 def clear_all_flags() -> Dict[str, Any]:
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _write_json(MANUAL_VETO_PATH, {"manual_veto": False, "reason": "cleared", "set_by": "human", "set_at": now})
-    _write_json(KILL_SWITCH_PATH, {"kill_switch": False, "reason": "cleared", "set_by": "human", "set_at": now})
-    _log_action("veto", False, "cleared", "human", now)
-    _log_action("kill_switch", False, "cleared", "human", now)
-    return get_flags()
+    return _approval_guidance_payload(
+        tool_name="clear_all_flags",
+        requested_change={"manual_veto": False, "kill_switch": False},
+        commands=[
+            _approval_command(
+                "gs.control.manual_veto.set",
+                "global-sentinel/control/manual-veto/off",
+            ),
+            _approval_command(
+                "gs.control.kill_switch.set",
+                "global-sentinel/control/kill-switch/off",
+            ),
+        ],
+    )
 
 
 TOOLS = [
@@ -150,7 +175,10 @@ TOOLS = [
     },
     {
         "name": "set_manual_veto",
-        "description": "Set the manual_veto control flag. When true, shadow drafts halt.",
+        "description": (
+            "Demoted mutator. Returns orchestrator approval guidance for "
+            "manual_veto changes instead of writing local control files."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"enabled": {"type": "boolean"}, "reason": {"type": "string"}},
@@ -160,7 +188,10 @@ TOOLS = [
     },
     {
         "name": "set_kill_switch",
-        "description": "Set the kill_switch flag. When true, all monitoring enters incident mode.",
+        "description": (
+            "Demoted mutator. Returns orchestrator approval guidance for "
+            "kill_switch changes instead of writing local control files."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"enabled": {"type": "boolean"}, "reason": {"type": "string"}},
@@ -170,7 +201,11 @@ TOOLS = [
     },
     {
         "name": "clear_all_flags",
-        "description": "Clear manual_veto and kill_switch flags.",
+        "description": (
+            "Demoted mutator. Returns orchestrator approval guidance for "
+            "clearing manual_veto and kill_switch instead of writing local "
+            "control files."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
 ]
