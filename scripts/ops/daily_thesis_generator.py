@@ -19,6 +19,7 @@ try:
 except Exception:
     _send_topic = None
 
+from src.core.control_state_snapshot import read_control_state_snapshot
 from src.inference.foundry_client import FoundryResponse, send_request
 
 env = {}
@@ -70,8 +71,7 @@ def gather_context():
 def build_operating_context(ctx) -> dict[str, object]:
     hmm_regime = ctx.get("hmm_regime") if isinstance(ctx.get("hmm_regime"), dict) else {}
     latest_signal = ctx.get("latest_signal") if isinstance(ctx.get("latest_signal"), dict) else {}
-    manual_veto = load_json(REPO_ROOT / "control/manual_veto.json")
-    kill_switch = load_json(REPO_ROOT / "control/kill_switch.json")
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
     return {
         "mode": (
             hmm_regime.get("operating_mode")
@@ -85,8 +85,8 @@ def build_operating_context(ctx) -> dict[str, object]:
             or latest_signal.get("regime_shift_probability")
             or 0.0
         ),
-        "manual_veto": bool(manual_veto.get("manual_veto", False)) if isinstance(manual_veto, dict) else False,
-        "kill_switch": bool(kill_switch.get("kill_switch", False)) if isinstance(kill_switch, dict) else False,
+        "manual_veto": control_snapshot["manual_veto"],
+        "kill_switch": control_snapshot["kill_switch"],
         "execution_sensitivity": "research_only",
     }
 

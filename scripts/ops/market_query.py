@@ -25,6 +25,7 @@ REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", Path(__file__).resolve()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.core.control_state_snapshot import read_control_state_snapshot
 from src.inference.foundry_client import FoundryResponse, send_request
 
 
@@ -66,18 +67,10 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _load_control_flag(filename: str, key: str) -> bool:
-    path = REPO_ROOT / "control" / filename
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    return bool(payload.get(key, False)) if isinstance(payload, dict) else False
-
-
 def build_operating_context(context: Dict[str, Any]) -> Dict[str, Any]:
     hmm_regime = context.get("hmm_regime") if isinstance(context.get("hmm_regime"), dict) else {}
     latest_signal = context.get("latest_signal") if isinstance(context.get("latest_signal"), dict) else {}
+    control_snapshot = read_control_state_snapshot(REPO_ROOT)
     return {
         "mode": (
             hmm_regime.get("operating_mode")
@@ -91,8 +84,8 @@ def build_operating_context(context: Dict[str, Any]) -> Dict[str, Any]:
             or latest_signal.get("regime_shift_probability")
             or 0.0
         ),
-        "manual_veto": _load_control_flag("manual_veto.json", "manual_veto"),
-        "kill_switch": _load_control_flag("kill_switch.json", "kill_switch"),
+        "manual_veto": control_snapshot["manual_veto"],
+        "kill_switch": control_snapshot["kill_switch"],
         "execution_sensitivity": "research_only",
     }
 
