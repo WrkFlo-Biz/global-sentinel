@@ -28,7 +28,7 @@ Pair this with:
 | --- | --- | --- | --- |
 | Runtime task state | `task_history` via `record_task_start()` and `record_task_status()` | `wrkflo-orchestrator` | Use orchestrator run lineage in `SQLiteStateStore.append()` / `latest()` / `history()` for in-flight state, and `SQLiteStateStore.record_task_completion()` for terminal summaries. Do not port GS-local `running` / `requeued` / `dead_letter` rows 1:1. |
 | Worker liveness | `worker_health` via `update_worker_health()` | `wrkflo-orchestrator` | Use `OrchestratorService.worker_heartbeat()` with `SQLiteStateStore.record_worker_health()` and `worker_health()`. |
-| Approval audit mirror | `audit_log` via `append_audit_log()` and legacy migration from `trade_approval_audit` | `wrkflo-orchestrator` as authority, optional GS-local JSONL mirror | Approval authority should move to orchestrator `approval_tokens_used` plus `audit_events` via `consume_approval_token()` and `log_audit_event()`. If GS still needs richer order details locally, keep a narrow JSONL mirror keyed by `run_id` and approval `jti`, not a second SQLite authority. |
+| Approval audit mirror | `audit_log` via `append_audit_log()` and legacy migration from `trade_approval_audit` | `wrkflo-orchestrator` as authority, optional GS-local JSONL mirror | Approval authority should move to orchestrator `approval_tokens_used` plus `audit_events` via `consume_approval_token()` and `log_audit_event()`. In the current tree, `src/execution/trade_approval.py` already uses a narrow JSONL mirror keyed by approval metadata rather than GS-local sqlite authority. |
 
 ## Module Retirement Map
 
@@ -50,7 +50,7 @@ that should be split during demotion.
 
 ## Direct Runtime Call Sites
 
-Only three runtime files currently depend directly on `OpenClawStateDB`.
+Only two runtime files currently depend directly on `OpenClawStateDB`.
 
 ### `scripts/agent_factory.py`
 
@@ -69,18 +69,24 @@ incidental; they are how GS still behaves like an embedded OpenClaw runtime.
 | `OpenClawBot._dead_letter()` | `1207-1238` | Calls `record_task_status(... dead_letter)` and worker idle update | Persists terminal local failure state for dropped tasks | Move to orchestrator state model | Terminal failure should become orchestrator run history plus `record_task_completion(success=False)` or a failed run snapshot, not a GS-local dead-letter row. |
 | `OpenClawBot.stop()` | `1365-1374` | Calls `update_worker_health(... status="stopping")` | Marks local workers as stopping during shutdown | Move to orchestrator state if any worker remains, otherwise remove | Emit a final orchestrator worker heartbeat only if a bridge worker still exists. Preferred end state is removal with the embedded runtime. |
 
-### `src/execution/trade_approval.py`
+### `src/execution/trade_approval.py` (already demoted from this lane)
 
 [`src/execution/trade_approval.py`](/home/moses/projects/global-sentinel/src/execution/trade_approval.py)
-uses `OpenClawStateDB` only for approval-event mirroring, but that mirror keeps
-approval authority notionally tied to GS-local state.
+is no longer a direct `OpenClawStateDB` dependency in the current tree. The
+trade-approval boundary already validates guarded orchestrator context, submits
+one scoped `gs.trade.execute_shadow` task, and keeps only a local JSONL audit
+mirror.
 
-| Function | Lines | Current dependency | What it does today | Disposition | Concrete replacement path |
-| --- | --- | --- | --- | --- | --- |
-| `_state_db_path()` | `52-56` | Resolves `GLOBAL_SENTINEL_STATE_DB_PATH` / `OPENCLAW_STATE_DB_PATH` to local `state.db` | Decides where approval audit rows are written | Remove | There should be no GS-owned approval SQLite path after demotion. |
-| `_log_approval_state_db()` | `79-91` | Instantiates `OpenClawStateDB` and calls `append_audit_log()` | Mirrors each approval event into local SQLite `audit_log` | Replace with orchestrator audit authority; optional narrow local log | Approval authority should move to orchestrator `consume_approval_token()` and `log_audit_event()`. If richer order context must stay local, keep only `logs/trade_approvals.jsonl` or another small JSONL mirror keyed by `run_id` and approval `jti`. |
-| `_record_approval_event()` | `94-129` | Always fans out to `_log_approval_state_db()` after JSONL logging | Makes every approval request/decision path depend on local SQLite | Narrow local logging only | Keep this helper only if it becomes a pure file logger around JSONL or structured app logging. It should stop being responsible for durable authority. |
-| `request_approval()` | `413-587` | Indirectly depends on local SQLite through `_record_approval_event()` at request and decision points | Emits `approval_requested` and `approval_decision` into `audit_log` for every trade-approval flow | Replace with orchestrator approval flow | Replace the local pending-approval model with orchestrator guarded-task submission. GS should consume orchestrator approval context (`run_id`, `jti`, `issued_by`, `reason`, `exp`) and stop writing local approval DB rows. |
+| Function | Lines | Current behavior | Current demotion read |
+| --- | --- | --- | --- |
+| `_log_approval_json()` | `122-128` | Appends approval events to `logs/trade_approvals.jsonl` | The retained local mirror is file-based only; there is no sqlite fan-out here. |
+| `_record_approval_event()` | `131-164` | Builds structured `approval_requested` / `approval_decision` rows and writes them through `_log_approval_json()` | Approval-event logging already bypasses `OpenClawStateDB`; keep this helper only as a narrow JSONL mirror unless GS drops the file entirely. |
+| `request_approval()` | `468-647` | Validates guarded approval context, enforces fail-closed checks, and submits one orchestrator-mediated guarded task | This migration step is already landed. Remaining cleanup is dead-code and documentation retirement around old sqlite assumptions, not a runtime approval-flow rewrite. |
+
+That means the remaining approval-audit demotion work now lives in
+`src/core/openclaw_state_db.py` and any archival/migration helpers that still
+describe `audit_log` as active authority. It does **not** live in the current
+`trade_approval.py` runtime path anymore.
 
 ### `scripts/ops/migrate_state_db.py`
 
@@ -103,34 +109,22 @@ runtime dependencies move.
 | `tests/test_openclaw_state_db.py::test_state_db_migrates_legacy_trade_approval_rows_into_audit_log()` | `113-188` | Verifies migration from `trade_approval_audit` into `audit_log` | Remove after archival | Keep only as a temporary archive/export test if legacy data still needs one final extraction. |
 | `tests/test_openclaw_state_db.py::test_agent_factory_records_task_history_and_worker_health()` | `191-262` | Uses `OPENCLAW_STATE_DB_PATH`, then asserts `task_history` and `worker_health` rows | Replace or remove | If a GS-to-orchestrator bridge remains, test the emitted client payloads or orchestrator contract, not sqlite rows in GS. Otherwise remove with `OpenClawBot`. |
 
-### Schema readers that bypass the import
+### Trade-approval tests already reflect the demoted flow
 
-| Function | Lines | Current dependency | Disposition | Concrete replacement path |
-| --- | --- | --- | --- | --- |
-| `tests/execution/test_trade_approval_fail_closed.py::_set_paths()` | `23-27` | Sets `OPENCLAW_STATE_DB_PATH` for the approval module | Remove | Trade-approval tests should stop provisioning a local OpenClaw DB. |
-| `tests/execution/test_trade_approval_fail_closed.py::_audit_db_entries()` | `47-77` | Reads `audit_log` rows directly from local `state.db` | Replace | Read the retained local JSONL mirror only, or assert mocked orchestrator approval context instead of local sqlite rows. |
-| `tests/execution/test_trade_approval_fail_closed.py::_assert_terminal_audit()` | `80-137` | Requires file-log and sqlite `audit_log` parity for every approval outcome test | Replace | After demotion, compare JSONL mirror entries only, or compare returned orchestrator approval metadata plus local JSONL if retained. |
+The current trade-approval tests are no longer `OpenClawStateDB` cleanup work.
+They already assert JSONL-only local logging and explicit absence of a GS-local
+sqlite authority:
 
-The following approval tests inherit that helper dependency and will need the
-same assertion rewrite once `_audit_db_entries()` and `_assert_terminal_audit()`
-are removed:
+| Function | Lines | Current behavior | Current demotion read |
+| --- | --- | --- | --- |
+| `tests/execution/test_trade_approval_fail_closed.py::_set_paths()` | `41-47` | Patches `APPROVAL_LOG_PATH` and the legacy `PENDING_DIR` only | No sqlite path injection remains in the approval module test setup. |
+| `tests/execution/test_trade_approval_fail_closed.py::_audit_entries()` | `56-64` | Reads `trade_approvals.jsonl` entries only | Unit coverage already validates the retained JSONL mirror rather than `audit_log` rows. |
+| `tests/execution/test_trade_approval_fail_closed.py::_assert_terminal_audit()` | `67-108` | Asserts JSONL parity and explicitly checks that `state.db` was **not** created | This is the opposite of the stale demotion assumption: the test now proves sqlite authority is gone from the trade-approval path. |
+| `tests/test_integration.py::test_trade_request_approval_and_execution_logging_flow()` | `247-314` | Asserts guarded submit payloads plus JSONL audit metadata such as `run_id` | Integration coverage is already aligned with orchestrator-mediated approval and local JSONL mirroring. |
+| `tests/test_integration.py::test_rejected_trade_request_stops_before_execution_logging()` | `317-350` | Asserts JSONL rejection logging and absence of downstream execution logs | No sqlite approval dependency remains in the rejected-path coverage either. |
 
-- `test_request_approval_blocks_when_disabled()`
-- `test_request_approval_blocks_below_threshold()`
-- `test_request_approval_blocks_missing_telegram_config()`
-- `test_request_approval_blocks_send_failure()`
-- `test_request_approval_blocks_timeout_even_when_auto_execute_is_true()`
-- `test_request_approval_blocks_unknown_decision()`
-- `test_request_approval_blocks_message_format_failure()`
-- `test_request_approval_blocks_invalid_trade_sizing_and_logs_rejection()`
-- `test_request_approval_blocks_invalid_config_and_logs_rejection()`
-- `test_request_approval_logs_explicit_approval()`
-- `test_request_approval_logs_explicit_rejection()`
-
-The two remaining tests in that file,
-`test_poll_callback_query_blocks_invalid_decision_file()` and
-`test_resolve_pending_approval_normalizes_and_rejects_invalid_values()`, are
-approval-flow tests but **not** `OpenClawStateDB` dependencies.
+Keep these tests in GS unless the retained JSONL mirror is removed entirely.
+They are no longer blockers for `OpenClawStateDB` retirement.
 
 ## Recommended Migration Sequence
 
@@ -145,11 +139,14 @@ approval-flow tests but **not** `OpenClawStateDB` dependencies.
    - Keep terminal summaries in orchestrator `task_completions`, not GS-local
      `task_history`.
 
-3. Move approval authority out of GS-local sqlite.
-   - Replace `_log_approval_state_db()` with orchestrator approval-token
-     consumption and audit events.
-   - Keep only a narrow GS-local JSONL mirror if order-detail forensics still
-     matter locally.
+3. Treat trade-approval sqlite demotion as already landed and finish the
+   residual cleanup.
+   - `src/execution/trade_approval.py` already uses guarded orchestrator submit
+     plus `logs/trade_approvals.jsonl`; do not reopen that runtime path as if it
+     still wrote `audit_log` rows.
+   - The remaining approval-audit cleanup is dead-code, archival, and
+     documentation work around `src/core/openclaw_state_db.py`, not another
+     trade-approval flow rewrite.
 
 4. Remove GS-only migration and schema tests.
    - Delete `scripts/ops/migrate_state_db.py` after any one-shot archival work.
