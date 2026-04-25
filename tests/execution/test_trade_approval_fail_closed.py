@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import src.execution.trade_approval as trade_approval
 
 
-def _order(notional: float = 1000.0) -> dict:
-    return {
+def _order(notional: float = 1000.0, **overrides: object) -> dict[str, object]:
+    order = {
         "symbol": "NVDA",
         "side": "buy",
         "qty": 1,
@@ -17,20 +17,38 @@ def _order(notional: float = 1000.0) -> dict:
         "notional": notional,
         "signal_source": "unit-test-signal",
         "requesting_agent": "unit-test-agent",
+        "strategy_style": "momentum_day_trade",
+        "account": "day_trade",
+        "ticket_id": "ticket-123",
+        "approval_token": "approve-token",
+        "approval_jti": "approval-jti-123",
+        "approval_issued_by": "moses",
+        "approval_reason": "approve test trade",
+        "approval_exp": int((datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp()),
+        "requester_kind": "scheduler",
+        "requester_id": "unit-test-agent",
+        "requester_channel": "pytest",
+        "source_surface": "pytest",
+        "time_in_force": "day",
+        "order_type": "limit",
     }
+    order.update(overrides)
+    return order
 
 
 def _set_paths(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(trade_approval, "APPROVAL_LOG_PATH", tmp_path / "trade_approvals.jsonl")
+    monkeypatch.setattr(
+        trade_approval,
+        "APPROVAL_LOG_PATH",
+        tmp_path / "trade_approvals.jsonl",
+    )
     monkeypatch.setattr(trade_approval, "PENDING_DIR", tmp_path / "pending")
-    monkeypatch.setenv("OPENCLAW_STATE_DB_PATH", str(tmp_path / "state.db"))
 
 
 def _set_enabled_env(monkeypatch) -> None:
     monkeypatch.setenv("TRADE_APPROVAL_ENABLED", "true")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
-    monkeypatch.setenv("TELEGRAM_TRADING_THREAD_ID", "0")
+    monkeypatch.delenv("ORCHESTRATOR_TASK_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("TRADE_APPROVAL_TIMEOUT", raising=False)
 
 
 def _audit_entries(tmp_path: Path) -> list[dict]:
@@ -44,56 +62,16 @@ def _audit_entries(tmp_path: Path) -> list[dict]:
     ]
 
 
-def _audit_db_entries(tmp_path: Path) -> list[dict]:
-    db_path = tmp_path / "state.db"
-    if not db_path.exists():
-        return []
-
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT
-                event_type,
-                timestamp,
-                agent_id,
-                decision,
-                reason,
-                entry_json
-            FROM audit_log
-            ORDER BY audit_id
-            """
-        ).fetchall()
-
-    entries = []
-    for row in rows:
-        entry = json.loads(row["entry_json"])
-        assert row["event_type"] == entry["event_type"]
-        assert row["timestamp"] == entry["timestamp"]
-        assert row["agent_id"] == entry["agent_id"]
-        assert row["decision"] == entry["decision"]
-        assert row["reason"] == entry["reason"]
-        entries.append(entry)
-    return entries
-
-
 def _assert_terminal_audit(
     tmp_path: Path,
-    result: dict,
+    result: dict[str, object],
     reason_substring: str,
     fail_closed_trigger: str | None,
-) -> None:
+) -> list[dict]:
     file_entries = _audit_entries(tmp_path)
-    db_entries = _audit_db_entries(tmp_path)
 
     assert len(file_entries) == 2
-    assert len(db_entries) == 2
-
     assert [entry["event_type"] for entry in file_entries] == [
-        "approval_requested",
-        "approval_decision",
-    ]
-    assert [entry["event_type"] for entry in db_entries] == [
         "approval_requested",
         "approval_decision",
     ]
@@ -105,11 +83,14 @@ def _assert_terminal_audit(
     assert request_entry["approval_id"] == decision_entry["approval_id"]
     assert request_entry["decision"] == "requested"
     assert request_entry["reason"] == "trade approval requested"
-    assert request_entry["requesting_agent"] == "unit-test-agent"
     assert request_entry["approved"] is None
+    assert request_entry["requesting_agent"] == "unit-test-agent"
     assert request_entry["trade_details"]["symbol"] == "NVDA"
     assert request_entry["trade_details"]["side"] == "buy"
     assert request_entry["trade_details"]["signal_source"] == "unit-test-signal"
+    assert request_entry["metadata"]["mediation"] == "orchestrator"
+    assert request_entry["metadata"]["telegram_transport_disabled"] is True
+    assert request_entry["metadata"]["legacy_pending_file_bridge_disabled"] is True
 
     assert decision_entry["schema_version"] == trade_approval.APPROVAL_AUDIT_SCHEMA_VERSION
     assert decision_entry["approval_id"] == request_entry["approval_id"]
@@ -120,21 +101,9 @@ def _assert_terminal_audit(
     assert decision_entry["requesting_agent"] == "unit-test-agent"
     assert decision_entry["trade_details"]["symbol"] == "NVDA"
     assert decision_entry["trade_details"]["side"] == "buy"
+    assert not (tmp_path / "state.db").exists()
 
-    for file_entry, db_entry in zip(file_entries, db_entries):
-        for key in (
-            "approval_id",
-            "event_type",
-            "timestamp",
-            "requesting_agent",
-            "decision",
-            "reason",
-            "fail_closed_trigger",
-            "approved",
-            "trade_details",
-            "metadata",
-        ):
-            assert db_entry[key] == file_entry[key]
+    return file_entries
 
 
 def test_request_approval_blocks_when_disabled(tmp_path: Path, monkeypatch, caplog) -> None:
@@ -147,118 +116,115 @@ def test_request_approval_blocks_when_disabled(tmp_path: Path, monkeypatch, capl
     assert result["approved"] is False
     assert result["decision"] == "disabled"
     assert "Trade blocked" in caplog.text
-    _assert_terminal_audit(tmp_path, result, "TRADE_APPROVAL_ENABLED is false", "approval_disabled")
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "TRADE_APPROVAL_ENABLED is false",
+        "approval_disabled",
+    )
 
 
 def test_request_approval_blocks_below_threshold(tmp_path: Path, monkeypatch) -> None:
     _set_paths(tmp_path, monkeypatch)
-    monkeypatch.setenv("TRADE_APPROVAL_ENABLED", "true")
+    _set_enabled_env(monkeypatch)
 
     result = trade_approval.request_approval(_order(notional=100.0))
 
     assert result["approved"] is False
     assert result["decision"] == "below_threshold"
-    _assert_terminal_audit(tmp_path, result, "blocking without explicit approval", "minimum_notional_gate")
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "blocking without explicit approval",
+        "minimum_notional_gate",
+    )
 
 
-def test_request_approval_blocks_missing_telegram_config(tmp_path: Path, monkeypatch) -> None:
-    _set_paths(tmp_path, monkeypatch)
-    monkeypatch.setenv("TRADE_APPROVAL_ENABLED", "true")
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.delenv("TELEGRAM_TOPIC_CHAT_ID", raising=False)
-
-    result = trade_approval.request_approval(_order())
-
-    assert result["approved"] is False
-    assert result["decision"] == "error"
-    assert "Missing Telegram config" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Missing Telegram config", "missing_telegram_config")
-
-
-def test_request_approval_blocks_send_failure(tmp_path: Path, monkeypatch) -> None:
-    _set_paths(tmp_path, monkeypatch)
-    _set_enabled_env(monkeypatch)
-    monkeypatch.setattr(trade_approval, "_send_with_buttons", lambda *args, **kwargs: None)
-
-    result = trade_approval.request_approval(_order())
-
-    assert result["approved"] is False
-    assert result["decision"] == "error"
-    assert "Failed to send Telegram approval request" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Failed to send Telegram approval request", "telegram_send_failure")
-
-
-def test_request_approval_blocks_timeout_even_when_auto_execute_is_true(tmp_path: Path, monkeypatch) -> None:
-    _set_paths(tmp_path, monkeypatch)
-    _set_enabled_env(monkeypatch)
-    monkeypatch.setenv("TRADE_APPROVAL_AUTO_EXECUTE", "true")
-    monkeypatch.setattr(trade_approval, "_send_with_buttons", lambda *args, **kwargs: 123)
-    monkeypatch.setattr(trade_approval, "_poll_callback_query", lambda *args, **kwargs: ("timeout", None))
-    monkeypatch.setattr(trade_approval, "_send_confirmation", lambda *args, **kwargs: None)
-
-    result = trade_approval.request_approval(_order())
-
-    assert result["approved"] is False
-    assert result["decision"] == "timeout"
-    _assert_terminal_audit(tmp_path, result, "blocking trade", "approval_timeout")
-
-
-def test_request_approval_blocks_unknown_decision(tmp_path: Path, monkeypatch) -> None:
-    _set_paths(tmp_path, monkeypatch)
-    _set_enabled_env(monkeypatch)
-    monkeypatch.setattr(trade_approval, "_send_with_buttons", lambda *args, **kwargs: 123)
-    monkeypatch.setattr(trade_approval, "_poll_callback_query", lambda *args, **kwargs: ("maybe", "raw_text"))
-    monkeypatch.setattr(trade_approval, "_send_confirmation", lambda *args, **kwargs: None)
-
-    result = trade_approval.request_approval(_order())
-
-    assert result["approved"] is False
-    assert result["decision"] == "error"
-    assert "Invalid approval decision" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Invalid approval decision", "invalid_approval_decision")
-
-
-def test_request_approval_blocks_message_format_failure(tmp_path: Path, monkeypatch) -> None:
+def test_request_approval_blocks_missing_guarded_context(tmp_path: Path, monkeypatch) -> None:
     _set_paths(tmp_path, monkeypatch)
     _set_enabled_env(monkeypatch)
     monkeypatch.setattr(
         trade_approval,
-        "_format_approval_message",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad payload")),
+        "submit_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("submit_task should not run")),
     )
 
-    result = trade_approval.request_approval(_order())
+    result = trade_approval.request_approval(_order(approval_jti=None))
 
     assert result["approved"] is False
     assert result["decision"] == "error"
-    assert "Failed to build trade approval request" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Failed to build trade approval request", "approval_payload_build_error")
+    assert "Missing orchestrator approval context" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Missing orchestrator approval context",
+        "missing_guarded_context",
+    )
 
 
-def test_request_approval_blocks_invalid_trade_sizing_and_logs_rejection(tmp_path: Path, monkeypatch) -> None:
+def test_request_approval_blocks_stale_approval_context(tmp_path: Path, monkeypatch) -> None:
     _set_paths(tmp_path, monkeypatch)
-    monkeypatch.setenv("TRADE_APPROVAL_ENABLED", "true")
+    _set_enabled_env(monkeypatch)
 
     result = trade_approval.request_approval(
-        {
-            "symbol": "NVDA",
-            "side": "buy",
-            "qty": 1,
-            "limit_price": 1000.0,
-            "notional": "bad-notional",
-            "signal_source": "unit-test-signal",
-            "requesting_agent": "unit-test-agent",
-        }
+        _order(
+            approval_exp=int(
+                (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+            )
+        )
     )
 
     assert result["approved"] is False
     assert result["decision"] == "error"
-    assert "Invalid trade sizing" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Invalid trade sizing", "invalid_trade_sizing")
+    assert "Stale orchestrator approval context" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Stale orchestrator approval context",
+        "stale_guarded_context",
+    )
 
 
-def test_request_approval_blocks_invalid_config_and_logs_rejection(tmp_path: Path, monkeypatch) -> None:
+def test_request_approval_blocks_target_mismatch(tmp_path: Path, monkeypatch) -> None:
+    _set_paths(tmp_path, monkeypatch)
+    _set_enabled_env(monkeypatch)
+
+    result = trade_approval.request_approval(
+        _order(target="global-sentinel/trade-ticket/other-ticket")
+    )
+
+    assert result["approved"] is False
+    assert result["decision"] == "error"
+    assert "Guarded trade target mismatch" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Guarded trade target mismatch",
+        "guarded_target_mismatch",
+    )
+
+
+def test_request_approval_blocks_ticket_hash_mismatch(tmp_path: Path, monkeypatch) -> None:
+    _set_paths(tmp_path, monkeypatch)
+    _set_enabled_env(monkeypatch)
+
+    result = trade_approval.request_approval(_order(ticket_hash="wrong-hash"))
+
+    assert result["approved"] is False
+    assert result["decision"] == "error"
+    assert "Guarded trade ticket hash mismatch" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Guarded trade ticket hash mismatch",
+        "guarded_ticket_hash_mismatch",
+    )
+
+
+def test_request_approval_blocks_invalid_config_and_logs_rejection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     _set_paths(tmp_path, monkeypatch)
     _set_enabled_env(monkeypatch)
     monkeypatch.setenv("TRADE_APPROVAL_TIMEOUT", "bad-timeout")
@@ -268,56 +234,146 @@ def test_request_approval_blocks_invalid_config_and_logs_rejection(tmp_path: Pat
     assert result["approved"] is False
     assert result["decision"] == "error"
     assert "Invalid trade approval config" in result["reason"]
-    _assert_terminal_audit(tmp_path, result, "Invalid trade approval config", "invalid_approval_config")
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Invalid trade approval config",
+        "invalid_approval_config",
+    )
 
 
-def test_request_approval_logs_explicit_approval(tmp_path: Path, monkeypatch) -> None:
+def test_request_approval_blocks_orchestrator_submission_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     _set_paths(tmp_path, monkeypatch)
     _set_enabled_env(monkeypatch)
-    monkeypatch.setattr(trade_approval, "_send_with_buttons", lambda *args, **kwargs: 123)
-    monkeypatch.setattr(trade_approval, "_poll_callback_query", lambda *args, **kwargs: ("approved", "manual_yes"))
-    monkeypatch.setattr(trade_approval, "_send_confirmation", lambda *args, **kwargs: None)
+
+    def fake_submit_task(*args, **kwargs):
+        raise trade_approval.OrchestratorTaskClientError(
+            "orchestrator returned HTTP 403: approval token required"
+        )
+
+    monkeypatch.setattr(trade_approval, "submit_task", fake_submit_task)
+
+    result = trade_approval.request_approval(_order())
+
+    assert result["approved"] is False
+    assert result["decision"] == "error"
+    assert "Orchestrator mediation failed" in result["reason"]
+    _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Orchestrator mediation failed",
+        "orchestrator_submission_failed",
+    )
+
+
+def test_request_approval_submits_guarded_task_and_logs_approval(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _set_paths(tmp_path, monkeypatch)
+    _set_enabled_env(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def fake_submit_task(
+        payload: dict[str, object],
+        *,
+        bearer_token: str = "",
+        base_url: str = "",
+        timeout: float = 0.0,
+    ) -> dict[str, object]:
+        captured["payload"] = payload
+        captured["bearer_token"] = bearer_token
+        captured["base_url"] = base_url
+        captured["timeout"] = timeout
+        return {"run_id": "run-123", "status": "queued"}
+
+    monkeypatch.setattr(trade_approval, "submit_task", fake_submit_task)
 
     result = trade_approval.request_approval(_order())
 
     assert result["approved"] is True
     assert result["decision"] == "approved"
-    _assert_terminal_audit(tmp_path, result, "User approved", None)
+    entries = _assert_terminal_audit(
+        tmp_path,
+        result,
+        "Orchestrator accepted guarded trade execution",
+        None,
+    )
+
+    assert captured["bearer_token"] == "approve-token"
+    assert captured["base_url"] == ""
+    assert captured["timeout"] == trade_approval.DEFAULT_TASK_TIMEOUT_SECONDS
+    payload = captured["payload"]
+    assert payload["project"] == "global-sentinel"
+    assert payload["kind"] == "gs.trade.execute_shadow"
+    assert payload["target"] == "global-sentinel/trade-ticket/ticket-123"
+    assert payload["ticket_id"] == "ticket-123"
+    assert payload["ticket_hash"]
+    assert payload["symbol"] == "NVDA"
+    assert payload["side"] == "buy"
+    assert payload["qty"] == 1
+    assert payload["notional"] == 1000.0
+    assert payload["requester_kind"] == "scheduler"
+    assert payload["requester_id"] == "unit-test-agent"
+    assert payload["requester_channel"] == "pytest"
+    assert payload["approval_jti"] == "approval-jti-123"
+    assert payload["approval_exp"]
+    assert payload["approval_issued_by"] == "moses"
+    assert payload["approval_context"]["approval_jti"] == "approval-jti-123"
+    assert payload["approval_context"]["approval_issued_by"] == "moses"
+
+    decision_entry = entries[-1]
+    assert decision_entry["metadata"]["run_id"] == "run-123"
+    assert decision_entry["metadata"]["target"] == "global-sentinel/trade-ticket/ticket-123"
+    assert decision_entry["metadata"]["approval_jti"] == "approval-jti-123"
 
 
-def test_request_approval_logs_explicit_rejection(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_request_approval_accepts_nested_approval_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     _set_paths(tmp_path, monkeypatch)
     _set_enabled_env(monkeypatch)
-    monkeypatch.setattr(trade_approval, "_send_with_buttons", lambda *args, **kwargs: 123)
-    monkeypatch.setattr(trade_approval, "_poll_callback_query", lambda *args, **kwargs: ("rejected", "manual_no"))
-    monkeypatch.setattr(trade_approval, "_send_confirmation", lambda *args, **kwargs: None)
+    captured: dict[str, object] = {}
 
-    with caplog.at_level(logging.WARNING, logger="global_sentinel.trade_approval"):
-        result = trade_approval.request_approval(_order())
+    def fake_submit_task(
+        payload: dict[str, object],
+        *,
+        bearer_token: str = "",
+        base_url: str = "",
+        timeout: float = 0.0,
+    ) -> dict[str, object]:
+        captured["payload"] = payload
+        captured["bearer_token"] = bearer_token
+        return {"run_id": "run-nested", "status": "queued"}
 
-    assert result["approved"] is False
-    assert result["decision"] == "rejected"
-    assert "Trade blocked" in caplog.text
-    _assert_terminal_audit(tmp_path, result, "User rejected", None)
+    monkeypatch.setattr(trade_approval, "submit_task", fake_submit_task)
+    order = _order(
+        approval_token=None,
+        approval_jti=None,
+        approval_issued_by=None,
+        approval_reason=None,
+        approval_exp=None,
+        approval_context={
+            "approval_token": "nested-token",
+            "approval_jti": "nested-jti",
+            "approval_issued_by": "nested-human",
+            "approval_reason": "nested approval",
+            "approval_exp": int(
+                (datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp()
+            ),
+        },
+    )
 
+    result = trade_approval.request_approval(order)
 
-def test_format_approval_message_requires_inline_buttons_only() -> None:
-    text = trade_approval._format_approval_message(_order(), timeout=60, auto_exec=False)
-
-    assert "Use the inline approval buttons below" in text
-    assert "reply YES/NO" not in text
-
-
-def test_poll_callback_query_ignores_legacy_decision_file(tmp_path: Path, monkeypatch) -> None:
-    _set_paths(tmp_path, monkeypatch)
-    trade_approval.PENDING_DIR.mkdir(parents=True, exist_ok=True)
-    decision_file = trade_approval.PENDING_DIR / "abc123.decision"
-    decision_file.write_text(json.dumps({"decision": "approved", "raw": "legacy_file"}))
-
-    decision, raw = trade_approval._poll_callback_query("abc123", "token", 0)
-
-    assert decision == "timeout"
-    assert raw is None
+    assert result["approved"] is True
+    assert captured["bearer_token"] == "nested-token"
+    assert captured["payload"]["approval_jti"] == "nested-jti"
+    assert captured["payload"]["approval_issued_by"] == "nested-human"
 
 
 def test_resolve_pending_approval_rejects_legacy_local_file_bridge(
@@ -335,10 +391,14 @@ def test_resolve_pending_approval_rejects_legacy_local_file_bridge(
         assert trade_approval.resolve_pending_approval("good", "approve") is False
 
     assert "orchestrator approval tokens instead" in caplog.text
+    assert "Telegram" in caplog.text
     assert not (trade_approval.PENDING_DIR / "good.decision").exists()
 
 
-def test_get_pending_approvals_returns_empty_when_legacy_files_exist(tmp_path: Path, monkeypatch) -> None:
+def test_get_pending_approvals_returns_empty_when_legacy_files_exist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     _set_paths(tmp_path, monkeypatch)
     trade_approval.PENDING_DIR.mkdir(parents=True, exist_ok=True)
     (trade_approval.PENDING_DIR / "old.pending").write_text("{}")

@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """
-Global Sentinel - Telegram Trade Approval Workflow
+Global Sentinel - orchestrator-mediated trade approval boundary.
 
-Before any trade is placed, sends a Telegram approval request to the Trading topic
-with inline keyboard buttons. Uses callback_query polling (separate from getUpdates
-message polling) to avoid conflicts with the existing TelegramCommandHandler.
-
-Configuration (.env):
-    TRADE_APPROVAL_ENABLED=true
-    TRADE_APPROVAL_TIMEOUT=60
-    TRADE_APPROVAL_AUTO_EXECUTE=false
+Legacy Telegram callback approvals and local pending files are intentionally
+demoted. Callers must present guarded approval context up front and submit one
+scoped `gs.trade.execute_shadow` task through wrkflo-orchestrator.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -21,21 +17,33 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import requests
-
-from src.core.openclaw_state_db import OpenClawStateDB
+from src.core.orchestrator_task_client import (
+    OrchestratorTaskClientError,
+    build_guarded_task_payload,
+    submit_task,
+)
 
 REPO_ROOT = Path(os.getenv("GLOBAL_SENTINEL_REPO_ROOT", "/opt/global-sentinel"))
 APPROVAL_LOG_PATH = REPO_ROOT / "logs" / "trade_approvals.jsonl"
 # Legacy path kept only for stale cleanup/backwards-compatible test patching.
 PENDING_DIR = Path("/tmp/gs_pending_approvals")
-APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v2"
-STATE_DB_FILENAME = "state.db"
+APPROVAL_AUDIT_SCHEMA_VERSION = "trade_approval_audit.v3"
+DEFAULT_PROJECT = "global-sentinel"
+GUARDED_TRADE_KIND = "gs.trade.execute_shadow"
+DEFAULT_REQUESTER_KIND = "scheduler"
+DEFAULT_REQUESTER_CHANNEL = "trade_approval"
+DEFAULT_SOURCE_SURFACE = "trade_approval"
+DEFAULT_TASK_TIMEOUT_SECONDS = 15.0
+TICKET_TARGET_PREFIX = f"{DEFAULT_PROJECT}/trade-ticket/"
 LEGACY_APPROVAL_BRIDGE_DISABLED_REASON = (
     "Local pending-approval files are disabled; route Tier-2 mediation through "
     "orchestrator approval tokens instead."
+)
+LEGACY_TELEGRAM_TRANSPORT_DISABLED_REASON = (
+    "Direct Telegram trade approval transport is disabled; obtain an "
+    "orchestrator approval token and submit the guarded GS trade task once."
 )
 
 logger = logging.getLogger("global_sentinel.trade_approval")
@@ -46,54 +54,78 @@ MIN_NOTIONAL_FOR_APPROVAL = 500.0
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
-    v = os.getenv(key, "").lower().strip()
-    if v in ("true", "1", "yes"):
+    value = os.getenv(key, "").lower().strip()
+    if value in ("true", "1", "yes"):
         return True
-    if v in ("false", "0", "no"):
+    if value in ("false", "0", "no"):
         return False
     return default
 
 
-def _state_db_path() -> Path:
-    override = os.getenv("GLOBAL_SENTINEL_STATE_DB_PATH") or os.getenv("OPENCLAW_STATE_DB_PATH")
-    if override:
-        return Path(override).expanduser()
-    return REPO_ROOT / STATE_DB_FILENAME
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _config_timeout_seconds() -> float:
+    raw = (
+        os.getenv("ORCHESTRATOR_TASK_TIMEOUT_SECONDS")
+        or os.getenv("TRADE_APPROVAL_TIMEOUT")
+        or str(DEFAULT_TASK_TIMEOUT_SECONDS)
+    )
+    try:
+        timeout = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid trade approval config: timeout must be numeric ({raw!r})") from exc
+    if timeout <= 0:
+        raise ValueError(f"Invalid trade approval config: timeout must be > 0 ({raw!r})")
+    return timeout
 
 
 def _requesting_agent(order_info: Dict[str, Any]) -> str:
-    for key in ("requesting_agent", "source_agent", "agent_id", "agent", "worker", "signal_source"):
+    for key in (
+        "requesting_agent",
+        "source_agent",
+        "agent_id",
+        "agent",
+        "worker",
+        "signal_source",
+    ):
         value = order_info.get(key)
-        if value is None:
-            continue
-        normalized = str(value).strip()
-        if normalized:
+        normalized = _optional_text(value)
+        if normalized is not None:
             return normalized
     return "system"
+
+
+def _safe_order_summary(order_info: Dict[str, Any]) -> dict:
+    return {
+        "symbol": order_info.get("symbol"),
+        "side": order_info.get("side"),
+        "qty": order_info.get("qty"),
+        "type": order_info.get("type") or order_info.get("order_type"),
+        "limit_price": order_info.get("limit_price"),
+        "notional": order_info.get("notional"),
+        "asset_class": order_info.get("asset_class"),
+        "strategy_style": order_info.get("strategy_style"),
+        "signal_source": order_info.get("signal_source"),
+        "contract_id": order_info.get("contract_id"),
+        "ticket_id": order_info.get("ticket_id"),
+        "ticket_hash": order_info.get("ticket_hash"),
+        "target": order_info.get("target"),
+        "source_surface": order_info.get("source_surface"),
+    }
 
 
 def _log_approval_json(entry: Dict[str, Any]) -> None:
     try:
         APPROVAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(APPROVAL_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
-    except Exception as e:
-        logger.warning("Failed to write trade approval audit JSON log: %s", e)
-
-
-def _log_approval_state_db(entry: Dict[str, Any]) -> None:
-    try:
-        state_db = OpenClawStateDB(_state_db_path())
-        state_db.append_audit_log(
-            event_type=str(entry["event_type"]),
-            timestamp=str(entry["timestamp"]),
-            agent_id=str(entry["agent_id"]),
-            decision=str(entry["decision"]),
-            reason=str(entry["reason"]),
-            entry=entry,
-        )
-    except Exception as e:
-        logger.warning("Failed to write trade approval audit row to audit_log in state.db: %s", e)
+        with open(APPROVAL_LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to write trade approval audit JSON log: %s", exc)
 
 
 def _record_approval_event(
@@ -109,7 +141,6 @@ def _record_approval_event(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     agent_id = _requesting_agent(order_info)
-    trade_details = _safe_order_summary(order_info)
     cleaned_metadata = {
         str(key): value
         for key, value in (metadata or {}).items()
@@ -122,8 +153,8 @@ def _record_approval_event(
         "approval_id": approval_id,
         "agent_id": agent_id,
         "requesting_agent": agent_id,
-        "trade_details": trade_details,
-        "order": trade_details,
+        "trade_details": _safe_order_summary(order_info),
+        "order": _safe_order_summary(order_info),
         "decision": decision,
         "reason": reason,
         "approved": approved,
@@ -131,19 +162,6 @@ def _record_approval_event(
         "metadata": cleaned_metadata,
     }
     _log_approval_json(entry)
-    _log_approval_state_db(entry)
-
-
-def _normalize_decision(decision: Any) -> Optional[str]:
-    if not isinstance(decision, str):
-        return None
-    normalized = decision.strip().lower()
-    return {
-        "approve": "approved",
-        "approved": "approved",
-        "reject": "rejected",
-        "rejected": "rejected",
-    }.get(normalized)
 
 
 def _log_trade_blocked(order_info: Dict[str, Any], decision: str, reason: str) -> None:
@@ -160,8 +178,6 @@ def _fail_closed_trigger(decision: str, reason: str) -> Optional[str]:
         return "approval_disabled"
     if decision == "below_threshold":
         return "minimum_notional_gate"
-    if decision == "timeout":
-        return "approval_timeout"
     if decision != "error":
         return None
 
@@ -170,14 +186,20 @@ def _fail_closed_trigger(decision: str, reason: str) -> Optional[str]:
         return "invalid_trade_sizing"
     if "invalid trade approval config" in lowered_reason:
         return "invalid_approval_config"
-    if "missing telegram config" in lowered_reason:
-        return "missing_telegram_config"
-    if "failed to build trade approval request" in lowered_reason:
-        return "approval_payload_build_error"
-    if "failed to send telegram approval request" in lowered_reason:
-        return "telegram_send_failure"
-    if "invalid approval decision" in lowered_reason:
-        return "invalid_approval_decision"
+    if "missing orchestrator approval context" in lowered_reason:
+        return "missing_guarded_context"
+    if "stale orchestrator approval context" in lowered_reason:
+        return "stale_guarded_context"
+    if "guarded trade target mismatch" in lowered_reason:
+        return "guarded_target_mismatch"
+    if "guarded trade kind mismatch" in lowered_reason:
+        return "guarded_kind_mismatch"
+    if "guarded trade project mismatch" in lowered_reason:
+        return "guarded_project_mismatch"
+    if "guarded trade ticket hash mismatch" in lowered_reason:
+        return "guarded_ticket_hash_mismatch"
+    if "orchestrator mediation failed" in lowered_reason:
+        return "orchestrator_submission_failed"
     return "approval_error"
 
 
@@ -205,208 +227,253 @@ def _blocked_result(
     return result
 
 
-def _format_approval_message(order_info: Dict[str, Any], timeout: int, auto_exec: bool) -> str:
-    """Format a trade approval Telegram message."""
-    symbol = order_info.get("symbol", "???")
-    side = order_info.get("side", "buy").upper()
-    qty = order_info.get("qty", "?")
-    limit_price = order_info.get("limit_price", "market")
-    notional = order_info.get("notional", 0)
-    signal = order_info.get("signal_source", "system")
-    strategy = order_info.get("strategy_style", "")
-    asset_class = order_info.get("asset_class", "equity")
-    contract_id = order_info.get("contract_id", "")
-
-    if limit_price and limit_price != "market":
-        price_str = f"@ ${float(limit_price):.2f}"
-    else:
-        price_str = "@ MARKET"
-
-    if asset_class == "option" and contract_id:
-        asset_str = f"{symbol} ({contract_id})"
-    else:
-        asset_str = symbol
-
-    auto_str = "Auto-execute" if auto_exec else "Auto-SKIP"
-
-    lines = [
-        "<b>TRADE APPROVAL REQUIRED</b>",
-        "",
-        f"<b>{side}</b> {qty}x {asset_str} {price_str}",
-        f"Signal: {signal}",
-        f"Notional: ${float(notional):,.2f}",
-    ]
-    if strategy:
-        lines.append(f"Strategy: {strategy}")
-    lines.extend([
-        "",
-        "Use the inline approval buttons below",
-        f"{auto_str} in {timeout}s if no response",
-    ])
-
-    return "\n".join(lines)
+def _approval_context_value(order_info: Dict[str, Any], *keys: str) -> Any:
+    nested = order_info.get("approval_context")
+    if isinstance(nested, dict):
+        for key in keys:
+            if key in nested and nested[key] is not None:
+                return nested[key]
+    for key in keys:
+        if key in order_info and order_info[key] is not None:
+            return order_info[key]
+    return None
 
 
-def _send_with_buttons(
-    text: str,
-    approval_id: str,
-    token: str,
-    chat_id: str,
-    thread_id: int,
-) -> Optional[int]:
-    """Send a Telegram message with inline YES/NO buttons. Returns message_id."""
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    inline_keyboard = {
-        "inline_keyboard": [[
-            {"text": "YES - Execute", "callback_data": f"approve:{approval_id}"},
-            {"text": "NO - Skip", "callback_data": f"reject:{approval_id}"},
-        ]]
+def _normalize_ticket_id(order_info: Dict[str, Any]) -> tuple[str, str]:
+    target = _optional_text(order_info.get("target"))
+    ticket_id = _optional_text(order_info.get("ticket_id"))
+
+    if ticket_id is None and target and target.startswith(TICKET_TARGET_PREFIX):
+        ticket_id = target[len(TICKET_TARGET_PREFIX) :]
+
+    if ticket_id is None:
+        raise ValueError("Missing orchestrator approval context: ticket_id")
+
+    expected_target = f"{TICKET_TARGET_PREFIX}{ticket_id}"
+    if target is None:
+        target = expected_target
+    if target != expected_target:
+        raise ValueError(
+            f"Guarded trade target mismatch: expected {expected_target!r}, got {target!r}"
+        )
+    return ticket_id, target
+
+
+def _parse_approval_exp(raw_value: Any) -> int:
+    if raw_value is None:
+        raise ValueError("Missing orchestrator approval context: approval_exp")
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+
+    text = _optional_text(raw_value)
+    if text is None:
+        raise ValueError("Missing orchestrator approval context: approval_exp")
+    if text.isdigit():
+        return int(text)
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Invalid trade approval config: approval_exp is not parseable ({text!r})") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _resolve_guarded_context(order_info: Dict[str, Any]) -> dict[str, Any]:
+    project = _optional_text(order_info.get("project")) or DEFAULT_PROJECT
+    if project != DEFAULT_PROJECT:
+        raise ValueError(
+            f"Guarded trade project mismatch: expected {DEFAULT_PROJECT!r}, got {project!r}"
+        )
+
+    kind = _optional_text(order_info.get("kind")) or GUARDED_TRADE_KIND
+    if kind != GUARDED_TRADE_KIND:
+        raise ValueError(
+            f"Guarded trade kind mismatch: expected {GUARDED_TRADE_KIND!r}, got {kind!r}"
+        )
+
+    ticket_id, target = _normalize_ticket_id(order_info)
+    approval_jti = _optional_text(_approval_context_value(order_info, "approval_jti", "jti"))
+    approval_issued_by = _optional_text(
+        _approval_context_value(order_info, "approval_issued_by", "issued_by")
+    )
+    approval_reason = _optional_text(
+        _approval_context_value(order_info, "approval_reason", "reason")
+    )
+    approval_token = _optional_text(
+        _approval_context_value(
+            order_info,
+            "approval_token",
+            "approval_bearer_token",
+            "orchestrator_bearer_token",
+            "bearer_token",
+            "token",
+        )
+    )
+
+    missing_fields: list[str] = []
+    if approval_jti is None:
+        missing_fields.append("approval_jti")
+    if approval_issued_by is None:
+        missing_fields.append("approval_issued_by")
+    if approval_reason is None:
+        missing_fields.append("approval_reason")
+    if approval_token is None:
+        missing_fields.append("approval_token")
+    if missing_fields:
+        raise ValueError(
+            f"Missing orchestrator approval context: {', '.join(missing_fields)}"
+        )
+
+    approval_exp = _parse_approval_exp(
+        _approval_context_value(order_info, "approval_exp", "exp")
+    )
+    now = int(time.time())
+    if approval_exp <= now:
+        raise ValueError(
+            f"Stale orchestrator approval context: approval_exp {approval_exp} <= now {now}"
+        )
+
+    requester_kind = _optional_text(order_info.get("requester_kind")) or DEFAULT_REQUESTER_KIND
+    requester_id = _optional_text(order_info.get("requester_id")) or _requesting_agent(order_info)
+    requester_channel = (
+        _optional_text(order_info.get("requester_channel")) or DEFAULT_REQUESTER_CHANNEL
+    )
+
+    return {
+        "project": project,
+        "kind": kind,
+        "ticket_id": ticket_id,
+        "target": target,
+        "approval_jti": approval_jti,
+        "approval_issued_by": approval_issued_by,
+        "approval_reason": approval_reason,
+        "approval_exp": approval_exp,
+        "approval_token": approval_token,
+        "requester_kind": requester_kind,
+        "requester_id": requester_id,
+        "requester_channel": requester_channel,
     }
+
+
+def _ticket_hash_payload(order_info: Dict[str, Any], ticket_id: str) -> dict[str, Any]:
+    return {
+        "ticket_id": ticket_id,
+        "symbol": _optional_text(order_info.get("symbol")) or "",
+        "side": _optional_text(order_info.get("side")) or "",
+        "qty": order_info.get("qty"),
+        "notional": order_info.get("notional"),
+        "asset_class": _optional_text(order_info.get("asset_class")) or "equity",
+        "order_type": _order_type(order_info),
+        "time_in_force": _optional_text(order_info.get("time_in_force")) or "day",
+        "limit_price": order_info.get("limit_price"),
+        "strategy": _optional_text(order_info.get("strategy"))
+        or _optional_text(order_info.get("strategy_style"))
+        or "",
+        "account": _optional_text(order_info.get("account"))
+        or _optional_text(order_info.get("strategy_family"))
+        or "default",
+    }
+
+
+def _ticket_hash(order_info: Dict[str, Any], ticket_id: str) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            _ticket_hash_payload(order_info, ticket_id),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return digest
+
+
+def _validated_ticket_hash(order_info: Dict[str, Any], ticket_id: str) -> str:
+    computed = _ticket_hash(order_info, ticket_id)
+    provided = _optional_text(order_info.get("ticket_hash"))
+    if provided is not None and provided != computed:
+        raise ValueError(
+            f"Guarded trade ticket hash mismatch: provided {provided!r} does not match computed {computed!r}"
+        )
+    return provided or computed
+
+
+def _order_type(order_info: Dict[str, Any]) -> str:
+    explicit = _optional_text(order_info.get("order_type")) or _optional_text(order_info.get("type"))
+    if explicit is not None:
+        return explicit
+    limit_price = order_info.get("limit_price")
+    if limit_price in (None, "", "market"):
+        return "market"
+    return "limit"
+
+
+def _build_guarded_trade_payload(
+    order_info: Dict[str, Any],
+    *,
+    notional: float,
+    guarded: Dict[str, Any],
+) -> dict[str, Any]:
     payload = {
-        "chat_id": chat_id,
-        "text": text[:4096],
-        "parse_mode": "HTML",
-        "message_thread_id": thread_id,
-        "reply_markup": json.dumps(inline_keyboard),
+        "requester_kind": guarded["requester_kind"],
+        "ticket_id": guarded["ticket_id"],
+        "ticket_hash": _validated_ticket_hash(order_info, guarded["ticket_id"]),
+        "strategy": _optional_text(order_info.get("strategy"))
+        or _optional_text(order_info.get("strategy_style"))
+        or "unspecified",
+        "account": _optional_text(order_info.get("account"))
+        or _optional_text(order_info.get("strategy_family"))
+        or "default",
+        "symbol": _optional_text(order_info.get("symbol")) or "",
+        "side": _optional_text(order_info.get("side")) or "",
+        "notional": notional,
+        "asset_class": _optional_text(order_info.get("asset_class")) or "equity",
+        "order_type": _order_type(order_info),
+        "time_in_force": _optional_text(order_info.get("time_in_force")) or "day",
+        "source_surface": _optional_text(order_info.get("source_surface")) or DEFAULT_SOURCE_SURFACE,
+        "approval_issued_by": guarded["approval_issued_by"],
     }
-    try:
-        resp = requests.post(url, json=payload, timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("result", {}).get("message_id")
-        else:
-            logger.error(f"Telegram send failed: {resp.status_code} {resp.text[:200]}")
-            return None
-    except Exception as e:
-        logger.error(f"Telegram send error: {e}")
-        return None
+    if order_info.get("qty") is not None:
+        payload["qty"] = order_info.get("qty")
+    if order_info.get("limit_price") not in (None, "", "market"):
+        payload["limit_price"] = order_info.get("limit_price")
+    for key in ("candidate_id", "package_id", "client_order_id", "router_run_id", "run_id"):
+        if order_info.get(key) is not None:
+            payload[key] = order_info.get(key)
 
-
-def _poll_callback_query(
-    approval_id: str,
-    token: str,
-    timeout_sec: int,
-) -> Tuple[str, Optional[str]]:
-    """
-    Poll for callback_query matching our approval_id.
-
-    Only processes Telegram callback_query updates. The legacy local-file bridge
-    used by text replies is intentionally disabled so Tier-2 mediation does not
-    bypass the orchestrator approval-token flow.
-    """
-    deadline = time.time() + timeout_sec
-    poll_interval = 2
-    # Use a dedicated offset for callback queries only
-    cb_offset_file = Path("/tmp/gs_callback_offset.json")
-    cb_offset = 0
-    saw_poll_conflict = False
-    if cb_offset_file.exists():
-        try:
-            cb_offset = json.loads(cb_offset_file.read_text()).get("offset", 0)
-        except Exception:
-            pass
-
-    while time.time() < deadline:
-        # Poll for callback queries only.
-        try:
-            remaining = int(deadline - time.time())
-            url = f"https://api.telegram.org/bot{token}/getUpdates"
-            params = {
-                "timeout": min(3, max(1, remaining)),
-                "allowed_updates": json.dumps(["callback_query"]),
-            }
-            if cb_offset:
-                params["offset"] = cb_offset
-
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                updates = resp.json().get("result", [])
-                for update in updates:
-                    update_id = update.get("update_id", 0)
-                    cb_offset = update_id + 1
-                    try:
-                        cb_offset_file.write_text(json.dumps({"offset": cb_offset}))
-                    except Exception:
-                        pass
-
-                    cb = update.get("callback_query")
-                    if not cb:
-                        continue
-
-                    cb_data = cb.get("data", "")
-                    cb_id = cb.get("id", "")
-
-                    # Answer the callback to clear the loading indicator
-                    try:
-                        requests.post(
-                            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-                            json={"callback_query_id": cb_id},
-                            timeout=5,
-                        )
-                    except Exception:
-                        pass
-
-                    if cb_data == f"approve:{approval_id}":
-                        _cleanup_pending(approval_id)
-                        return "approved", "inline_button_yes"
-                    elif cb_data == f"reject:{approval_id}":
-                        _cleanup_pending(approval_id)
-                        return "rejected", "inline_button_no"
-            elif resp.status_code == 409:
-                if not saw_poll_conflict:
-                    saw_poll_conflict = True
-                    logger.warning(
-                        "Telegram callback polling conflict for approval %s; %s",
-                        approval_id,
-                        LEGACY_APPROVAL_BRIDGE_DISABLED_REASON,
-                    )
-        except Exception as e:
-            logger.debug(f"Callback poll error: {e}")
-
-        time.sleep(poll_interval)
-
-    _cleanup_pending(approval_id)
-    return "timeout", None
-
-
-def _cleanup_pending(approval_id: str):
-    """Remove pending/decision files."""
-    try:
-        (PENDING_DIR / f"{approval_id}.pending").unlink(missing_ok=True)
-        (PENDING_DIR / f"{approval_id}.decision").unlink(missing_ok=True)
-    except Exception:
-        pass
-
-
-def _send_confirmation(approved: bool, order_info: dict, reason: str, token: str, chat_id: str, thread_id: int):
-    """Send a confirmation message."""
-    emoji = "\u2705" if approved else "\u274c"
-    action = "EXECUTED" if approved else "SKIPPED"
-    text = f"{emoji} Trade {action}: {order_info.get('side', '').upper()} {order_info.get('qty', '?')}x {order_info.get('symbol', '?')} -- {reason}"
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={
-            "chat_id": chat_id,
-            "text": text,
-            "message_thread_id": thread_id,
-        }, timeout=10)
-    except Exception as e:
-        logger.warning(f"Failed to send confirmation: {e}")
+    task_payload = build_guarded_task_payload(
+        kind=guarded["kind"],
+        target=guarded["target"],
+        project=guarded["project"],
+        requester_id=guarded["requester_id"],
+        requester_name=guarded["requester_kind"],
+        requester_channel=guarded["requester_channel"],
+        approval_jti=guarded["approval_jti"],
+        approval_reason=guarded["approval_reason"],
+        approval_exp=guarded["approval_exp"],
+        payload=payload,
+    )
+    approval_context = dict(task_payload.get("approval_context", {}))
+    approval_context["approval_issued_by"] = guarded["approval_issued_by"]
+    task_payload["approval_context"] = approval_context
+    task_payload["approval_issued_by"] = guarded["approval_issued_by"]
+    return task_payload
 
 
 def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Request trade approval via Telegram.
+    Validate guarded approval context and submit one GS execution task.
 
     Args:
-        order_info: dict with keys like symbol, side, qty, limit_price, notional,
-                    signal_source, strategy_style, asset_class, contract_id, etc.
+        order_info: normalized trade ticket plus approval context.
 
     Returns:
         dict with keys:
-            approved (bool): whether the trade should proceed
-            decision (str): 'approved', 'rejected', 'timeout', 'disabled',
-                          'below_threshold', 'error'
+            approved (bool): whether the guarded submit succeeded
+            decision (str): 'approved', 'disabled', 'below_threshold', or 'error'
             reason (str): human-readable reason
     """
     ts = datetime.now(timezone.utc).isoformat()
@@ -422,13 +489,17 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
         approved=None,
         metadata={
             "fail_closed_mode": True,
+            "mediation": "orchestrator",
             "trade_approval_enabled": _env_bool("TRADE_APPROVAL_ENABLED", False),
-            "configured_timeout_sec": os.getenv("TRADE_APPROVAL_TIMEOUT", "60"),
-            "auto_execute_requested": _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", False),
+            "telegram_transport_disabled": True,
+            "legacy_pending_file_bridge_disabled": True,
+            "target": order_info.get("target"),
+            "ticket_id": order_info.get("ticket_id"),
+            "approval_jti": _approval_context_value(order_info, "approval_jti", "jti"),
+            "approval_exp": _approval_context_value(order_info, "approval_exp", "exp"),
         },
     )
 
-    # Check if approval is enabled
     if not _env_bool("TRADE_APPROVAL_ENABLED", False):
         return _blocked_result(
             ts,
@@ -436,23 +507,22 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
             order_info,
             "disabled",
             "TRADE_APPROVAL_ENABLED is false",
-            metadata={"stage": "preflight"},
+            metadata={"stage": "preflight", "mediation": "orchestrator"},
         )
 
-    # Check notional threshold
     try:
         notional = float(order_info.get("notional", 0) or 0)
         if notional == 0:
             qty = float(order_info.get("qty", 0) or 0)
             price = float(order_info.get("limit_price", 0) or 0)
             notional = qty * price
-    except (TypeError, ValueError) as e:
+    except (TypeError, ValueError) as exc:
         return _blocked_result(
             ts,
             approval_id,
             order_info,
             "error",
-            f"Invalid trade sizing for approval: {e}",
+            f"Invalid trade sizing for approval: {exc}",
             metadata={
                 "raw_notional": order_info.get("notional"),
                 "raw_qty": order_info.get("qty"),
@@ -466,92 +536,87 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
             approval_id,
             order_info,
             "below_threshold",
-            f"Notional ${notional:.2f} < ${MIN_NOTIONAL_FOR_APPROVAL:.2f} threshold; blocking without explicit approval",
+            (
+                f"Notional ${notional:.2f} < ${MIN_NOTIONAL_FOR_APPROVAL:.2f} "
+                "threshold; blocking without explicit approval"
+            ),
             metadata={
                 "evaluated_notional": notional,
                 "minimum_notional_for_approval": MIN_NOTIONAL_FOR_APPROVAL,
             },
         )
 
-    # Get Telegram config
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_TOPIC_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", ""))
     try:
-        thread_id = int(os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"))
-        timeout_sec = int(os.getenv("TRADE_APPROVAL_TIMEOUT", "60"))
-    except ValueError as e:
+        timeout_seconds = _config_timeout_seconds()
+    except ValueError as exc:
         return _blocked_result(
             ts,
             approval_id,
             order_info,
             "error",
-            f"Invalid trade approval config: {e}",
+            str(exc),
+            metadata={"mediation": "orchestrator"},
+        )
+
+    try:
+        guarded = _resolve_guarded_context(order_info)
+        task_payload = _build_guarded_trade_payload(
+            order_info,
+            notional=notional,
+            guarded=guarded,
+        )
+    except ValueError as exc:
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            str(exc),
+            metadata={"mediation": "orchestrator"},
+        )
+
+    try:
+        response = submit_task(
+            task_payload,
+            bearer_token=guarded["approval_token"],
+            timeout=timeout_seconds,
+        )
+    except OrchestratorTaskClientError as exc:
+        return _blocked_result(
+            ts,
+            approval_id,
+            order_info,
+            "error",
+            f"Orchestrator mediation failed: {exc}",
             metadata={
-                "configured_thread_id": os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"),
-                "configured_timeout_sec": os.getenv("TRADE_APPROVAL_TIMEOUT", "60"),
+                "target": guarded["target"],
+                "kind": guarded["kind"],
+                "approval_jti": guarded["approval_jti"],
+                "timeout_seconds": timeout_seconds,
             },
         )
-    auto_execute = _env_bool("TRADE_APPROVAL_AUTO_EXECUTE", False)
-    if auto_execute:
-        logger.warning("TRADE_APPROVAL_AUTO_EXECUTE is ignored in fail-closed mode")
-        auto_execute = False
 
-    if not token or not chat_id:
-        logger.error("Missing TELEGRAM_BOT_TOKEN or chat_id for trade approval")
+    run_id = _optional_text(response.get("run_id")) or _optional_text(response.get("task_id"))
+    status = _optional_text(response.get("status")) or "submitted"
+    if run_id is None or status.lower() in {"error", "failed", "rejected"}:
         return _blocked_result(
             ts,
             approval_id,
             order_info,
             "error",
-            "Missing Telegram config for trade approval",
-            metadata={"token_present": bool(token), "chat_id_present": bool(chat_id)},
+            "Orchestrator mediation failed: guarded submit did not return an accepted run",
+            metadata={
+                "response": dict(response),
+                "target": guarded["target"],
+                "kind": guarded["kind"],
+            },
         )
 
-    # Build approval request; malformed payloads must fail closed.
-    try:
-        msg_text = _format_approval_message(order_info, timeout_sec, auto_execute)
-    except Exception as e:
-        return _blocked_result(
-            ts,
-            approval_id,
-            order_info,
-            "error",
-            f"Failed to build trade approval request: {e}",
-            metadata={"timeout_sec": timeout_sec},
-        )
-
-    # Send approval request with inline buttons
-    msg_id = _send_with_buttons(msg_text, approval_id, token, chat_id, thread_id)
-
-    if msg_id is None:
-        return _blocked_result(
-            ts,
-            approval_id,
-            order_info,
-            "error",
-            "Failed to send Telegram approval request",
-            metadata={"timeout_sec": timeout_sec, "message_thread_id": thread_id},
-        )
-
-    logger.info(f"Trade approval sent (msg_id={msg_id}, approval_id={approval_id}), waiting {timeout_sec}s...")
-
-    # Poll for response
-    decision, raw_text = _poll_callback_query(approval_id, token, timeout_sec)
-
-    if decision == "approved":
-        result = {"approved": True, "decision": "approved", "reason": f"User approved: '{raw_text}'"}
-    elif decision == "rejected":
-        result = {"approved": False, "decision": "rejected", "reason": f"User rejected: '{raw_text}'"}
-    elif decision == "timeout":
-        result = {"approved": False, "decision": "timeout", "reason": f"No response in {timeout_sec}s, blocking trade"}
-    else:
-        result = {"approved": False, "decision": "error", "reason": f"Invalid approval decision: {decision}"}
-    if not result["approved"]:
-        _log_trade_blocked(order_info, result["decision"], result["reason"])
-
-    # Send confirmation
-    _send_confirmation(result["approved"], order_info, result["reason"], token, chat_id, thread_id)
-
+    result = {
+        "approved": True,
+        "decision": "approved",
+        "reason": f"Orchestrator accepted guarded trade execution (run_id={run_id})",
+    }
     _record_approval_event(
         event_type="approval_decision",
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -560,12 +625,19 @@ def request_approval(order_info: Dict[str, Any]) -> Dict[str, Any]:
         decision=result["decision"],
         reason=result["reason"],
         approved=result["approved"],
-        fail_closed_trigger=_fail_closed_trigger(result["decision"], result["reason"]),
+        fail_closed_trigger=None,
         metadata={
-            "message_id": msg_id,
-            "message_thread_id": thread_id,
-            "timeout_sec": timeout_sec,
-            "raw_response": raw_text,
+            "run_id": run_id,
+            "status": status,
+            "kind": guarded["kind"],
+            "target": guarded["target"],
+            "approval_jti": guarded["approval_jti"],
+            "approval_issued_by": guarded["approval_issued_by"],
+            "approval_reason": guarded["approval_reason"],
+            "approval_exp": guarded["approval_exp"],
+            "requester_kind": guarded["requester_kind"],
+            "requester_id": guarded["requester_id"],
+            "requester_channel": guarded["requester_channel"],
         },
     )
     return result
@@ -576,13 +648,15 @@ def resolve_pending_approval(approval_id: str, decision: str):
     Legacy local-file approval bridge.
 
     Text replies should no longer resolve trade approvals by writing local
-    decision files; Tier-2 mediation belongs on the orchestrator token flow.
+    decision files; Tier-2 mediation belongs on the orchestrator token flow,
+    not Telegram callback polling or local pending files.
     """
     logger.warning(
-        "Rejecting legacy local-file approval resolution for %s (%r); %s",
+        "Rejecting legacy local-file approval resolution for %s (%r); %s %s",
         approval_id,
         decision,
         LEGACY_APPROVAL_BRIDGE_DISABLED_REASON,
+        LEGACY_TELEGRAM_TRANSPORT_DISABLED_REASON,
     )
     return False
 
@@ -592,73 +666,49 @@ def get_pending_approvals() -> list:
     return []
 
 
-def _safe_order_summary(order_info: Dict[str, Any]) -> dict:
-    return {
-        "symbol": order_info.get("symbol"),
-        "side": order_info.get("side"),
-        "qty": order_info.get("qty"),
-        "type": order_info.get("type"),
-        "limit_price": order_info.get("limit_price"),
-        "notional": order_info.get("notional"),
-        "asset_class": order_info.get("asset_class"),
-        "strategy_style": order_info.get("strategy_style"),
-        "signal_source": order_info.get("signal_source"),
-        "contract_id": order_info.get("contract_id"),
-    }
-
-
-# ── CLI for testing ──
 if __name__ == "__main__":
     import argparse
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
 
-    parser = argparse.ArgumentParser(description="Trade Approval Workflow")
-    parser.add_argument("--test", action="store_true", help="Send a mock approval request")
+    parser = argparse.ArgumentParser(
+        description="Submit a guarded GS trade approval through wrkflo-orchestrator"
+    )
+    parser.add_argument("--test", action="store_true", help="Submit a mock guarded approval")
     parser.add_argument("--symbol", default="NVDA", help="Test symbol")
     parser.add_argument("--side", default="buy", help="Test side")
-    parser.add_argument("--qty", type=int, default=5, help="Test quantity")
-    parser.add_argument("--price", type=float, default=2.50, help="Test price")
-    parser.add_argument("--timeout", type=int, default=15, help="Approval timeout for test (default 15s)")
-    parser.add_argument("--no-wait", action="store_true", help="Just send the message, do not poll")
+    parser.add_argument("--qty", type=int, default=1, help="Test quantity")
+    parser.add_argument("--price", type=float, default=1000.0, help="Limit price")
+    parser.add_argument("--ticket-id", default="demo-ticket", help="Trade ticket id")
     args = parser.parse_args()
 
-    # Load .env
-    env_path = REPO_ROOT / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-    if args.test:
-        os.environ["TRADE_APPROVAL_ENABLED"] = "true"
-        os.environ["TRADE_APPROVAL_TIMEOUT"] = str(args.timeout)
+    if not args.test:
+        parser.print_help()
+    else:
         mock_order = {
             "symbol": args.symbol,
             "side": args.side,
             "qty": args.qty,
-            "type": "limit",
             "limit_price": args.price,
-            "notional": args.qty * args.price * 100,
-            "signal_source": "ICT/SMC + momentum consensus (TEST)",
-            "strategy_style": "momentum_day_trade",
-            "asset_class": "option",
-            "contract_id": f"{args.symbol}260328C00170000",
+            "notional": args.qty * args.price,
+            "strategy_style": "demo",
+            "requesting_agent": "trade_approval_cli",
+            "requester_kind": "cli",
+            "requester_id": "trade_approval_cli",
+            "requester_channel": "trade_approval",
+            "source_surface": "trade_approval_cli",
+            "ticket_id": args.ticket_id,
+            "approval_token": os.getenv("APPROVAL_TOKEN", ""),
+            "approval_jti": os.getenv("APPROVAL_JTI", "demo-jti"),
+            "approval_issued_by": os.getenv("APPROVAL_ISSUED_BY", "demo"),
+            "approval_reason": os.getenv("APPROVAL_REASON", "demo approval"),
+            "approval_exp": os.getenv(
+                "APPROVAL_EXP",
+                str(int(time.time()) + 600),
+            ),
         }
-        if args.no_wait:
-            # Just send the message, don't poll
-            token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-            chat_id = os.getenv("TELEGRAM_TOPIC_CHAT_ID", "")
-            thread_id = int(os.getenv("TELEGRAM_TRADING_THREAD_ID", "0"))
-            approval_id = uuid.uuid4().hex[:12]
-            msg_text = _format_approval_message(mock_order, args.timeout, True)
-            msg_id = _send_with_buttons(msg_text, approval_id, token, chat_id, thread_id)
-            print(f"Message sent: msg_id={msg_id}, approval_id={approval_id}")
-        else:
-            print(f"Sending mock approval for {args.side.upper()} {args.qty}x {args.symbol} @ ${args.price}...")
-            result = request_approval(mock_order)
-            print(f"\nResult: {json.dumps(result, indent=2)}")
-    else:
-        parser.print_help()
+        os.environ.setdefault("TRADE_APPROVAL_ENABLED", "true")
+        print(json.dumps(request_approval(mock_order), indent=2))
