@@ -31,6 +31,11 @@ from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
+ORCHESTRATOR_APPROVAL_COMMAND = "wrkflo-orchestrator approve --kind <kind> --target global-sentinel"
+LEGACY_APPROVAL_ENDPOINT_MESSAGE = (
+    "Legacy dashboard approval endpoint is disabled; route Tier-2 approvals "
+    "through orchestrator approval tokens instead."
+)
 ALPACA_STOCK_STREAM_FEED = os.getenv("ALPACA_STOCK_STREAM_FEED", "iex").strip().lower() or "iex"
 LIVE_EQUITY_SAMPLE_MIN_INTERVAL_SECONDS = 5.0
 LIVE_EQUITY_SAMPLE_RETENTION_SECONDS = 86400.0
@@ -2969,28 +2974,15 @@ async def set_execution_mode(request: Request):
 
 @app.post("/api/telegram/approve")
 async def telegram_approve(request: Request):
-    """Approve pending manual-mode orders. Body: {"strategy": "day_trade"|"medium_long", "action": "approve"|"reject"}"""
-    try:
-        body = await request.json()
-        strategy = body.get("strategy")
-        action = body.get("action", "approve")
-
-        if strategy not in ("day_trade", "medium_long"):
-            return JSONResponse(status_code=400, content={"error": "invalid strategy"})
-
-        # Write approval to a file the crisis monitor checks
-        approval_path = REPO_ROOT / "control" / f"pending_approval_{strategy}.json"
-        approval_data = {
-            "strategy": strategy,
-            "action": action,
-            "approved": action == "approve",
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        }
-        approval_path.write_text(json.dumps(approval_data, indent=2), encoding="utf-8")
-
-        return {"status": "ok", **approval_data}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    """Legacy approval-file bridge is disabled in favor of orchestrator mediation."""
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "legacy_approval_file_bridge_disabled",
+            "message": LEGACY_APPROVAL_ENDPOINT_MESSAGE,
+            "orchestrator_command": ORCHESTRATOR_APPROVAL_COMMAND,
+        },
+    )
 
 
 @app.get("/api/pending-orders")
