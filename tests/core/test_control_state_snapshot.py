@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.core.control_state_snapshot import (
     read_control_metadata_snapshot,
     read_control_state_snapshot,
+    read_control_wrapper_snapshot,
 )
 
 
@@ -91,4 +92,61 @@ def test_read_control_metadata_snapshot_defaults_none_for_missing_invalid_or_non
         "manual_veto_updated_at": None,
         "kill_switch_updated_at": None,
         "control_dir": str(control_dir),
+    }
+
+
+def test_read_control_wrapper_snapshot_preserves_metadata_and_normalizes_booleans(
+    tmp_path: Path,
+) -> None:
+    _write_json(
+        tmp_path / "control" / "kill_switch.json",
+        {
+            "kill_switch": False,
+            "active": True,
+            "reason": "operator override",
+            "set_at": "2026-04-25T11:00:00Z",
+        },
+    )
+    _write_json(
+        tmp_path / "control" / "manual_veto.json",
+        {
+            "active": True,
+            "reason": "manual review",
+            "set_at": "2026-04-25T11:05:00Z",
+        },
+    )
+
+    assert read_control_wrapper_snapshot(tmp_path) == {
+        "kill_switch": {
+            "kill_switch": False,
+            "active": False,
+            "reason": "operator override",
+            "set_at": "2026-04-25T11:00:00Z",
+        },
+        "manual_veto": {
+            "manual_veto": True,
+            "active": True,
+            "reason": "manual review",
+            "set_at": "2026-04-25T11:05:00Z",
+        },
+    }
+
+
+def test_read_control_wrapper_snapshot_defaults_to_boolean_false_when_payloads_are_missing_or_invalid(
+    tmp_path: Path,
+) -> None:
+    control_dir = tmp_path / "control"
+    control_dir.mkdir(parents=True, exist_ok=True)
+    (control_dir / "manual_veto.json").write_text("{bad-json", encoding="utf-8")
+    (control_dir / "kill_switch.json").write_text("[]", encoding="utf-8")
+
+    assert read_control_wrapper_snapshot(tmp_path) == {
+        "kill_switch": {
+            "kill_switch": False,
+            "active": False,
+        },
+        "manual_veto": {
+            "manual_veto": False,
+            "active": False,
+        },
     }

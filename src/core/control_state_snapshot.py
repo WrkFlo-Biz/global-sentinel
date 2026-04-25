@@ -37,6 +37,15 @@ def _control_updated_at(payload: dict[str, Any]) -> str | None:
     return updated_at if isinstance(updated_at, str) else None
 
 
+def _control_wrapper_payload(payload: dict[str, Any], explicit_key: str) -> dict[str, Any]:
+    snapshot_value = _control_flag(payload, explicit_key)
+    return {
+        **payload,
+        explicit_key: snapshot_value,
+        "active": snapshot_value,
+    }
+
+
 def read_control_state_snapshot(repo_root: Path | str) -> dict[str, bool]:
     _, manual_veto, kill_switch = _control_payloads(repo_root)
     return {
@@ -51,4 +60,12 @@ def read_control_metadata_snapshot(repo_root: Path | str) -> dict[str, str | Non
         "manual_veto_updated_at": _control_updated_at(manual_veto),
         "kill_switch_updated_at": _control_updated_at(kill_switch),
         "control_dir": str(control_dir),
+    }
+
+
+def read_control_wrapper_snapshot(repo_root: Path | str) -> dict[str, dict[str, Any]]:
+    _, manual_veto, kill_switch = _control_payloads(repo_root)
+    return {
+        "kill_switch": _control_wrapper_payload(kill_switch, "kill_switch"),
+        "manual_veto": _control_wrapper_payload(manual_veto, "manual_veto"),
     }

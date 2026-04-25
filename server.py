@@ -25,7 +25,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.core.control_state_snapshot import read_control_state_snapshot
+from src.core.control_state_snapshot import (
+    read_control_state_snapshot,
+    read_control_wrapper_snapshot,
+)
 
 REPO_ROOT = Path(os.getenv("GS_REPO_ROOT", "/opt/global-sentinel")).resolve()
 API_KEY = os.getenv("GS_DASHBOARD_API_KEY", "")
@@ -303,29 +306,8 @@ def heartbeat():
     return load_json(REPO_ROOT / "logs" / "heartbeat.json")
 
 
-def _control_wrapper_entry(control_name: str, snapshot_value: bool) -> Dict[str, Any]:
-    payload = load_json(REPO_ROOT / "control" / f"{control_name}.json")
-    if not isinstance(payload, dict):
-        payload = {}
-    return {
-        **payload,
-        control_name: snapshot_value,
-        "active": snapshot_value,
-    }
-
-
 def _controls_wrapper_payload() -> Dict[str, Dict[str, Any]]:
-    control_snapshot = read_control_state_snapshot(REPO_ROOT)
-    return {
-        "kill_switch": _control_wrapper_entry(
-            "kill_switch",
-            control_snapshot["kill_switch"],
-        ),
-        "manual_veto": _control_wrapper_entry(
-            "manual_veto",
-            control_snapshot["manual_veto"],
-        ),
-    }
+    return read_control_wrapper_snapshot(REPO_ROOT)
 
 
 def _canonical_control_status_payload(
