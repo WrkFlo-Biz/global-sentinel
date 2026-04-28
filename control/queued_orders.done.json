@@ -1,0 +1,17 @@
+{
+  "created": "2026-03-09T05:35:00Z",
+  "reason": "Medium_long DTBP exhausted pre-market; queued for 09:31 ET Monday auto-submit",
+  "orders": [
+    {"symbol": "STNG", "notional": 45000, "side": "buy", "account": "medium_long", "note": "shipping_rate_explosion"},
+    {"symbol": "FRO",  "notional": 37500, "side": "buy", "account": "medium_long", "note": "shipping_rate_explosion"},
+    {"symbol": "ZIM",  "notional": 37500, "side": "buy", "account": "medium_long", "note": "shipping_rate_explosion"},
+    {"symbol": "NAT",  "notional": 30000, "side": "buy", "account": "medium_long", "note": "shipping_rate_explosion"},
+    {"symbol": "LMT",  "notional": 45000, "side": "buy", "account": "medium_long", "note": "defense_accumulation"},
+    {"symbol": "RTX",  "notional": 37500, "side": "buy", "account": "medium_long", "note": "defense_accumulation"},
+    {"symbol": "NOC",  "notional": 30000, "side": "buy", "account": "medium_long", "note": "defense_accumulation"},
+    {"symbol": "LNG",  "notional": 45000, "side": "buy", "account": "medium_long", "note": "europe_energy_crisis"},
+    {"symbol": "GLD",  "notional": 60000, "side": "buy", "account": "medium_long", "note": "gold_safe_haven"},
+    {"symbol": "MOS",  "notional": 30000, "side": "buy", "account": "medium_long", "note": "fertilizer_food_chain"},
+    {"symbol": "CF",   "notional": 30000, "side": "buy", "account": "medium_long", "note": "fertilizer_food_chain"}
+  ]
+}

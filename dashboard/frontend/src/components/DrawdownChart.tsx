@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { api, type PortfolioHistoryData } from "@/lib/api";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -14,7 +13,8 @@ interface DrawdownPoint {
   drawdown_pct: number;
 }
 
-const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 function formatDate(ts: number): string {
   try {
@@ -22,23 +22,6 @@ function formatDate(ts: number): string {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   } catch {
     return "";
-  }
-}
-
-function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cacheAgeMs?: number): string {
-  if (!sourceTimestampUtc) return "Waiting for first refresh";
-  try {
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - new Date(sourceTimestampUtc).getTime()) / 1000));
-    const ageLabel = ageSeconds < 5
-      ? "Source updated just now"
-      : ageSeconds < 60
-        ? `Source updated ${ageSeconds}s ago`
-        : `Source updated ${Math.floor(ageSeconds / 60)}m ago`;
-    const cacheLabel = cacheStatus ? ` · cache ${cacheStatus}` : "";
-    const ageMsLabel = typeof cacheAgeMs === "number" ? ` · age ${Math.round(cacheAgeMs)}ms` : "";
-    return `${ageLabel}${cacheLabel}${ageMsLabel}`;
-  } catch {
-    return "Source freshness unavailable";
   }
 }
 
@@ -73,46 +56,30 @@ function ChartTooltip({ active, payload }: ChartTooltipProps) {
 }
 
 export default function DrawdownChart() {
-  const REFRESH_MS = 60000;
   const [data, setData] = useState<DrawdownPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sourceTimestampUtc, setSourceTimestampUtc] = useState<string | undefined>(undefined);
-  const [cacheStatus, setCacheStatus] = useState<string | undefined>(undefined);
-  const [cacheAgeMs, setCacheAgeMs] = useState<number | undefined>(undefined);
-  const freshnessLabel = formatFreshness(sourceTimestampUtc, cacheStatus, cacheAgeMs);
 
   const fetchData = useCallback(async () => {
     try {
-      // Try progressively shorter periods until we get data
-      const periods = ["1A", "3M", "1M", "1W"];
-      let hist: PortfolioHistoryData | null = null;
-      for (const period of periods) {
-        const h = await api.portfolioHistory(period, "1D", "all").catch(() => null);
-        if (!h) continue;
-        if (h.error) continue;
-        if (h.timestamp && h.equity && h.equity.some((e: number) => e > 0)) {
-          hist = h;
-          break;
-        }
-      }
-
-      if (!hist) { setError("No portfolio history available yet"); return; }
+      const headers: Record<string, string> = {};
+      if (API_KEY) headers["X-API-Key"] = API_KEY;
+      const res = await fetch(`${API_BASE}/api/portfolio-history?period=1A&timeframe=1D`, { cache: "no-store", headers });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const hist = await res.json();
+      if (hist.error) { setError(hist.error); return; }
 
       let peak = 0;
       const points: DrawdownPoint[] = [];
       for (let i = 0; i < hist.timestamp.length; i++) {
         const eq = hist.equity[i];
-        if (eq === 0 || eq === null || eq === undefined) continue;
+        if (eq === 0) continue;
         if (eq > peak) peak = eq;
         const dd = peak > 0 ? ((eq - peak) / peak) * 100 : 0;
         points.push({ timestamp: hist.timestamp[i], equity: eq, peak, drawdown_pct: dd });
       }
       setData(points);
       setError(null);
-      setSourceTimestampUtc(hist.source_timestamp_utc || hist.latest_source_timestamp_utc || hist.timestamp_utc);
-      setCacheStatus(hist.cache_status);
-      setCacheAgeMs(hist.cache_age_ms);
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -120,25 +87,7 @@ export default function DrawdownChart() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, REFRESH_MS);
-    const handlePortfolioRefresh = () => {
-      fetchData();
-    };
-    window.addEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
-    };
-  }, [fetchData]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCacheAgeMs(prev => (typeof prev === "number" ? prev + 1000 : prev));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-40 text-gray-600 text-xs">Loading drawdown...</div>;
@@ -171,9 +120,6 @@ export default function DrawdownChart() {
             <span className="text-gray-500">Current: <span className="text-gray-300 font-bold tabular-nums">{currentDD.toFixed(2)}%</span></span>
           </div>
         )}
-        <span className="text-[10px] text-gray-500">
-          {freshnessLabel} · refresh {Math.round(REFRESH_MS / 1000)}s
-        </span>
       </div>
 
       <ResponsiveContainer width="100%" height={160}>

@@ -1,6 +1,34 @@
 "use client";
 
-import type { PortfolioAccountDetail, PortfolioData, PortfolioPosition } from "@/lib/api";
+interface Position {
+  symbol: string;
+  qty: number;
+  side: string;
+  account?: string;
+  avg_entry_price: number;
+  current_price: number;
+  unrealized_pl: number;
+  unrealized_plpc: number;
+  market_value: number;
+}
+
+interface PortfolioData {
+  status?: string;
+  equity: number;
+  cash: number;
+  buying_power: number;
+  portfolio_value: number;
+  positions: Position[];
+  account_errors?: Array<{ label: string; error: string }>;
+  position_count_by_account?: Record<string, number>;
+  pricing_summary?: {
+    market_data_health?: string;
+    latest_pricing_age_seconds?: number | null;
+    stale_position_count?: number;
+    delayed_position_count?: number;
+  };
+  timestamp_utc: string;
+}
 
 function formatUSD(val: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(val);
@@ -11,115 +39,11 @@ function formatPct(val: number): string {
   return `${sign}${(val * 100).toFixed(2)}%`;
 }
 
-function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cacheAgeMs?: number): string {
-  if (!sourceTimestampUtc) return "Source freshness unavailable";
-  try {
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - new Date(sourceTimestampUtc).getTime()) / 1000));
-    const ageLabel = ageSeconds < 5
-      ? "Source updated just now"
-      : ageSeconds < 60
-        ? `Source updated ${ageSeconds}s ago`
-        : `Source updated ${Math.floor(ageSeconds / 60)}m ago`;
-    const cacheLabel = cacheStatus ? ` · cache ${cacheStatus}` : "";
-    const ageMsLabel = typeof cacheAgeMs === "number" ? ` · age ${Math.round(cacheAgeMs)}ms` : "";
-    return `${ageLabel}${cacheLabel}${ageMsLabel}`;
-  } catch {
-    return "Source freshness unavailable";
-  }
-}
-
-function formatAgeSeconds(ageSeconds?: number | null): string {
-  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
-  if (ageSeconds < 60) return `${ageSeconds}s`;
-  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
-  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
-  return `${Math.floor(ageSeconds / 86400)}d`;
-}
-
-function formatAccountLabel(label: string, displayLabel?: string): string {
-  if (displayLabel) return displayLabel;
-  if (label === "day_trade") return "Day Trade";
-  if (label === "day_trade_2") return "Day Trade 2";
-  if (label === "medium_long") return "Med/Long";
-  return label.replace(/_/g, " ");
-}
-
-function formatAccountTag(label?: string): string {
-  if (label === "day_trade") return "DT";
-  if (label === "day_trade_2") return "DT2";
-  if (label === "medium_long") return "ML";
-  return (label || "").slice(0, 3).toUpperCase();
-}
-
-function statusTone(status?: string): string {
-  if (status === "error") return "border-red-900/50 bg-red-950/30 text-red-200";
-  if (status === "partial") return "border-amber-900/50 bg-amber-950/30 text-amber-200";
-  return "border-emerald-900/50 bg-emerald-950/30 text-emerald-200";
-}
-
-function accountPositionCount(
-  data: PortfolioData,
-  account: PortfolioAccountDetail,
-): number {
-  return data.position_count_by_account?.[account.label]
-    ?? account.position_count
-    ?? account.positions.length;
-}
-
-function accountPnL(account: PortfolioAccountDetail): number {
-  return account.positions.reduce((acc, position) => acc + position.unrealized_pl, 0);
-}
-
-function positionsEmptyMessage(status: string, accountErrors: Array<{ label: string; error: string }>): string {
-  if (status === "error") return "Portfolio unavailable. All requested accounts failed.";
-  if (accountErrors.length > 0) return "No open positions returned from healthy accounts.";
-  return "No open positions";
-}
-
-function PositionsTable({
-  positions,
-  multiAccount,
-}: {
-  positions: PortfolioPosition[];
-  multiAccount: boolean;
-}) {
-  return (
-    <div className="overflow-x-auto overflow-y-auto max-h-[320px]">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-[#1a1f2e]">
-          <tr className="text-gray-500 border-b border-[#2a3040]">
-            <th className="text-left py-1.5 font-medium">Symbol</th>
-            {multiAccount && <th className="text-left py-1.5 font-medium">Acct</th>}
-            <th className="text-right py-1.5 font-medium">Qty</th>
-            <th className="text-right py-1.5 font-medium">Entry</th>
-            <th className="text-right py-1.5 font-medium">Price</th>
-            <th className="text-right py-1.5 font-medium">P&L</th>
-            <th className="text-right py-1.5 font-medium">%</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position, index) => {
-            const plColor = position.unrealized_pl >= 0 ? "text-emerald-400" : "text-red-400";
-            const accountTag = formatAccountTag(position.account);
-            return (
-              <tr
-                key={`${position.symbol}-${position.account || "single"}-${index}`}
-                className="border-b border-[#1f2537] hover:bg-[#1f2537]"
-              >
-                <td className="py-1.5 font-medium text-gray-200">{position.symbol}</td>
-                {multiAccount && <td className="py-1.5 text-[10px] text-gray-500">{accountTag}</td>}
-                <td className="py-1.5 text-right text-gray-300 tabular-nums">{position.qty}</td>
-                <td className="py-1.5 text-right text-gray-400 tabular-nums">{position.avg_entry_price.toFixed(2)}</td>
-                <td className="py-1.5 text-right text-gray-300 tabular-nums">{position.current_price.toFixed(2)}</td>
-                <td className={`py-1.5 text-right tabular-nums ${plColor}`}>{formatUSD(position.unrealized_pl)}</td>
-                <td className={`py-1.5 text-right tabular-nums ${plColor}`}>{formatPct(position.unrealized_plpc)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
+function formatAgeSeconds(val?: number | null): string {
+  if (val === undefined || val === null) return "unknown";
+  if (val < 60) return `${Math.round(val)}s`;
+  if (val < 3600) return `${Math.round(val / 60)}m`;
+  return `${(val / 3600).toFixed(1)}h`;
 }
 
 export default function PortfolioPanel({ data }: { data: PortfolioData | null }) {
@@ -131,79 +55,57 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
     );
   }
 
-  const positions = data.positions || [];
-  const accounts = data.accounts || [];
-  const accountErrors = data.account_errors || [];
-  const totalPL = positions.reduce((acc, position) => acc + position.unrealized_pl, 0);
-  const totalPositionCount = data.position_count_total ?? positions.length;
-  const totalAccountCount = Math.max(1, data.account_count ?? accounts.length ?? 1);
-  const multiAccount = totalAccountCount > 1;
-  const status = data.status || (accountErrors.length > 0 ? "partial" : "ok");
-  const statusClasses = statusTone(status);
-  const pricingSummary = data.pricing_summary;
-  const streamErrors = pricingSummary?.stream_error_accounts || [];
-  const streamDegraded = pricingSummary?.stream_degraded_accounts || [];
+  const totalPL = data.positions.reduce((acc, p) => acc + p.unrealized_pl, 0);
+  const status = (data.status || "ok").toUpperCase();
+  const marketDataHealth = data.pricing_summary?.market_data_health || "unknown";
+  const hasWarnings = status !== "OK" || marketDataHealth !== "live";
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${statusClasses}`}>
-              {status.toUpperCase()}
-            </span>
-            {data.schema_version && (
-              <span className="text-[10px] text-gray-500">{data.schema_version}</span>
-            )}
-          </div>
-          <div className="text-[10px] text-gray-500 mt-1">
-            {totalPositionCount} positions across {totalAccountCount} account{totalAccountCount === 1 ? "" : "s"}
-          </div>
-          <div className="text-[10px] text-gray-500 mt-1">
-            {formatFreshness(data.source_timestamp_utc, data.cache_status, data.cache_age_ms)}
-          </div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+            status === "OK"
+              ? "text-emerald-400 border-emerald-900/40 bg-emerald-950/20"
+              : status === "PARTIAL"
+              ? "text-yellow-400 border-yellow-900/40 bg-yellow-950/20"
+              : "text-red-400 border-red-900/40 bg-red-950/20"
+          }`}>
+            {status}
+          </span>
+          <span className="text-[10px] text-gray-500 uppercase">
+            Market Data: {marketDataHealth}
+          </span>
         </div>
+        {data.pricing_summary?.latest_pricing_age_seconds !== undefined && (
+          <span className="text-[10px] text-gray-500">
+            Quote age: {formatAgeSeconds(data.pricing_summary.latest_pricing_age_seconds)}
+          </span>
+        )}
       </div>
 
-      {pricingSummary && positions.length > 0 && (
-        <div className={`rounded border px-3 py-2 mb-3 ${
-          pricingSummary.market_data_health === "stale"
-            ? "border-red-900/50 bg-red-950/20 text-red-200"
-            : pricingSummary.market_data_health !== "live"
-              ? "border-amber-900/50 bg-amber-950/20 text-amber-200"
-              : "border-emerald-900/40 bg-emerald-950/15 text-emerald-200"
-        }`}>
-          <div className="text-[10px] uppercase tracking-wider font-semibold">
-            Price Freshness
-          </div>
-          <div className="text-[11px] mt-1 leading-4">
-            Latest price age {formatAgeSeconds(pricingSummary.latest_pricing_age_seconds)}
-            {" · "}
-            Oldest price age {formatAgeSeconds(pricingSummary.oldest_pricing_age_seconds)}
-            {" · "}
-            {pricingSummary.stale_position_count} stale / {pricingSummary.delayed_position_count} delayed positions
-          </div>
-          {(streamErrors.length > 0 || streamDegraded.length > 0) && (
-            <div className="text-[10px] mt-1">
-              Stream health:
-              {streamErrors.length > 0 && ` errors on ${streamErrors.join(", ")}`}
-              {streamErrors.length > 0 && streamDegraded.length > 0 ? " ·" : ""}
-              {streamDegraded.length > 0 && ` delayed on ${streamDegraded.join(", ")}`}
+      {hasWarnings && (
+        <div className="mb-3 rounded border border-yellow-900/30 bg-yellow-950/10 px-3 py-2 text-[10px] text-yellow-300">
+          {status !== "OK" && data.account_errors && data.account_errors.length > 0 && (
+            <div className="mb-1">
+              Account issues: {data.account_errors.map((err) => `${err.label}: ${err.error}`).join(" | ")}
+            </div>
+          )}
+          {marketDataHealth !== "live" && (
+            <div>
+              Pricing warnings: stale={data.pricing_summary?.stale_position_count || 0}, delayed={data.pricing_summary?.delayed_position_count || 0}
             </div>
           )}
         </div>
       )}
 
+      {/* Account summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
         {[
-          { label: multiAccount ? "Total Equity" : "Equity", value: formatUSD(data.equity) },
+          { label: "Equity", value: formatUSD(data.equity) },
           { label: "Cash", value: formatUSD(data.cash) },
           { label: "Buying Power", value: formatUSD(data.buying_power) },
-          {
-            label: "Unrealized P&L",
-            value: formatUSD(totalPL),
-            color: totalPL >= 0 ? "text-emerald-400" : "text-red-400",
-          },
+          { label: "Unrealized P&L", value: formatUSD(totalPL), color: totalPL >= 0 ? "text-emerald-400" : "text-red-400" },
         ].map((item) => (
           <div key={item.label} className="text-center">
             <div className="text-[10px] text-gray-500 uppercase">{item.label}</div>
@@ -214,69 +116,41 @@ export default function PortfolioPanel({ data }: { data: PortfolioData | null })
         ))}
       </div>
 
-      {accountErrors.length > 0 && (
-        <div className={`rounded border px-3 py-2 mb-3 ${statusClasses}`}>
-          <div className="text-[10px] uppercase tracking-wider font-semibold">
-            {status === "error" ? "Account failures" : "Partial account failure"}
-          </div>
-          <div className="space-y-1 mt-1">
-            {accountErrors.map((accountError) => (
-              <div key={accountError.label} className="text-[11px] leading-4">
-                <span className="font-semibold">{formatAccountLabel(accountError.label)}:</span>{" "}
-                <span>{accountError.error}</span>
-              </div>
-            ))}
-          </div>
+      {/* Positions table */}
+      {data.positions.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-500 border-b border-[#2a3040]">
+                <th className="text-left py-1.5 font-medium">Symbol</th>
+                <th className="text-left py-1.5 font-medium">Acct</th>
+                <th className="text-right py-1.5 font-medium">Qty</th>
+                <th className="text-right py-1.5 font-medium">Entry</th>
+                <th className="text-right py-1.5 font-medium">Price</th>
+                <th className="text-right py-1.5 font-medium">P&L</th>
+                <th className="text-right py-1.5 font-medium">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.positions.map((p) => {
+                const plColor = p.unrealized_pl >= 0 ? "text-emerald-400" : "text-red-400";
+                return (
+                  <tr key={p.symbol} className="border-b border-[#1f2537] hover:bg-[#1f2537]">
+                    <td className="py-1.5 font-medium text-gray-200">{p.symbol}</td>
+                    <td className="py-1.5 text-gray-500">{p.account || "-"}</td>
+                    <td className="py-1.5 text-right text-gray-300 tabular-nums">{p.qty}</td>
+                    <td className="py-1.5 text-right text-gray-400 tabular-nums">{p.avg_entry_price.toFixed(2)}</td>
+                    <td className="py-1.5 text-right text-gray-300 tabular-nums">{p.current_price.toFixed(2)}</td>
+                    <td className={`py-1.5 text-right tabular-nums ${plColor}`}>{formatUSD(p.unrealized_pl)}</td>
+                    <td className={`py-1.5 text-right tabular-nums ${plColor}`}>{formatPct(p.unrealized_plpc)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      {accounts.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-          {accounts.map((account) => {
-            const isError = account.status === "error";
-            const pnl = accountPnL(account);
-            const pnlColor = pnl >= 0 ? "text-emerald-400" : "text-red-400";
-            return (
-              <div
-                key={account.label}
-                className={`rounded px-2.5 py-2 border ${isError ? "border-red-900/40 bg-red-950/20" : "border-[#1f2537] bg-[#111827]"}`}
-              >
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="text-[10px] text-gray-400 uppercase">
-                    {formatAccountLabel(account.label, account.display_label)}
-                  </div>
-                  <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${statusTone(account.status || "ok")}`}>
-                    {(account.status || "ok").toUpperCase()}
-                  </span>
-                </div>
-
-                {isError ? (
-                  <div className="text-[11px] text-red-200 leading-4">
-                    {account.error || "Account data unavailable."}
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-gray-300 tabular-nums">{formatUSD(account.equity)}</span>
-                      <span className={`tabular-nums font-medium ${pnlColor}`}>{formatUSD(pnl)}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 mt-1">
-                      {accountPositionCount(data, account)} positions
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {positions.length > 0 ? (
-        <PositionsTable positions={positions} multiAccount={multiAccount} />
       ) : (
-        <div className="text-gray-600 text-xs text-center py-4">
-          {positionsEmptyMessage(status, accountErrors)}
-        </div>
+        <div className="text-gray-600 text-xs text-center py-4">No open positions</div>
       )}
     </div>
   );

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { api, type PortfolioHistoryData } from "@/lib/api";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -15,12 +14,18 @@ interface EquityPoint {
   base_value: number;
 }
 
-const PORTFOLIO_REFRESH_EVENT = "gs:portfolio-refresh";
-type PortfolioRefreshEventDetail = {
-  portfolio?: unknown;
-  portfolio_history_intraday?: PortfolioHistoryData | null;
-  received_at_utc?: string;
-};
+interface PortfolioHistory {
+  timestamp: number[];
+  equity: number[];
+  profit_loss: number[];
+  profit_loss_pct: number[];
+  base_value: number;
+  timeframe: string;
+  error?: string;
+}
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 // Period config: label, Alpaca period param, Alpaca timeframe param, isIntraday
 const PERIODS: { label: string; period: string; timeframe: string; intraday: boolean }[] = [
@@ -48,23 +53,6 @@ function formatTick(ts: number, intraday: boolean): string {
 
 function formatUSD(val: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
-}
-
-function formatFreshness(sourceTimestampUtc?: string, cacheStatus?: string, cacheAgeMs?: number): string {
-  if (!sourceTimestampUtc) return "Waiting for first refresh";
-  try {
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - new Date(sourceTimestampUtc).getTime()) / 1000));
-    const ageLabel = ageSeconds < 5
-      ? "Source updated just now"
-      : ageSeconds < 60
-        ? `Source updated ${ageSeconds}s ago`
-        : `Source updated ${Math.floor(ageSeconds / 60)}m ago`;
-    const cacheLabel = cacheStatus ? ` · cache ${cacheStatus}` : "";
-    const ageMsLabel = typeof cacheAgeMs === "number" ? ` · age ${Math.round(cacheAgeMs)}ms` : "";
-    return `${ageLabel}${cacheLabel}${ageMsLabel}`;
-  } catch {
-    return "Source freshness unavailable";
-  }
 }
 
 interface ChartTooltipProps {
@@ -109,75 +97,43 @@ export default function EquityCurve() {
   const [loading, setLoading] = useState(true);
   const [selectedLabel, setSelectedLabel] = useState<string>("1M");
   const [error, setError] = useState<string | null>(null);
-  const [sourceTimestampUtc, setSourceTimestampUtc] = useState<string | undefined>(undefined);
-  const [cacheStatus, setCacheStatus] = useState<string | undefined>(undefined);
-  const [cacheAgeMs, setCacheAgeMs] = useState<number | undefined>(undefined);
 
   const selected = PERIODS.find(p => p.label === selectedLabel) || PERIODS[5];
-  const REFRESH_MS = selected.intraday ? 30000 : 120000;
-  const freshnessLabel = formatFreshness(sourceTimestampUtc, cacheStatus, cacheAgeMs);
-
-  const applyHistory = useCallback((hist: PortfolioHistoryData) => {
-    const points: EquityPoint[] = [];
-    for (let i = 0; i < hist.timestamp.length; i++) {
-      points.push({
-        timestamp: hist.timestamp[i],
-        equity: hist.equity[i],
-        profit_loss: hist.profit_loss[i],
-        profit_loss_pct: hist.profit_loss_pct[i],
-        base_value: hist.base_value,
-      });
-    }
-    setData(points);
-    setError(null);
-    setSourceTimestampUtc(hist.source_timestamp_utc || hist.latest_source_timestamp_utc || hist.timestamp_utc);
-    setCacheStatus(hist.cache_status);
-    setCacheAgeMs(hist.cache_age_ms);
-  }, []);
 
   const fetchHistory = useCallback(async () => {
     try {
-      const hist: PortfolioHistoryData = await api.portfolioHistory(selected.period, selected.timeframe, "all");
+      const headers: Record<string, string> = {};
+      if (API_KEY) headers["X-API-Key"] = API_KEY;
+      const res = await fetch(`${API_BASE}/api/portfolio-history?period=${selected.period}&timeframe=${selected.timeframe}`, { cache: "no-store", headers });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const hist: PortfolioHistory = await res.json();
       if (hist.error) {
         setError(hist.error);
         return;
       }
-      applyHistory(hist);
+      const points: EquityPoint[] = [];
+      for (let i = 0; i < hist.timestamp.length; i++) {
+        points.push({
+          timestamp: hist.timestamp[i],
+          equity: hist.equity[i],
+          profit_loss: hist.profit_loss[i],
+          profit_loss_pct: hist.profit_loss_pct[i],
+          base_value: hist.base_value,
+        });
+      }
+      setData(points);
+      setError(null);
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, [applyHistory, selected]);
+  }, [selected]);
 
   useEffect(() => {
     setLoading(true);
     fetchHistory();
-    const interval = setInterval(fetchHistory, REFRESH_MS);
-    const handlePortfolioRefresh = (event: Event) => {
-      const detail = (event as CustomEvent<PortfolioRefreshEventDetail>).detail;
-      const streamedHistory = detail?.portfolio_history_intraday;
-      if (selected.period === "1D" && selected.timeframe === "1H" && streamedHistory && !streamedHistory.error) {
-        applyHistory(streamedHistory);
-        return;
-      }
-      fetchHistory();
-    };
-    window.addEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener(PORTFOLIO_REFRESH_EVENT, handlePortfolioRefresh);
-    };
-  }, [applyHistory, fetchHistory, REFRESH_MS, selected.period, selected.timeframe]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCacheAgeMs(prev => (typeof prev === "number" ? prev + 1000 : prev));
-    }, 1000);
-    return () => {
-      clearInterval(interval);
-    };
-  }, []);
+  }, [fetchHistory]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-gray-600 text-xs">Loading equity curve...</div>;
@@ -221,9 +177,6 @@ export default function EquityCurve() {
           <span className="text-base sm:text-lg font-bold text-gray-200 tabular-nums">{formatUSD(latest.equity)}</span>
           <span className={`text-xs sm:text-sm font-bold tabular-nums ${returnColor}`}>
             {totalReturn >= 0 ? "+" : ""}{formatUSD(totalReturn)} ({totalReturnPct >= 0 ? "+" : ""}{totalReturnPct.toFixed(2)}%)
-          </span>
-          <span className="text-[10px] text-gray-500">
-            {freshnessLabel} · refresh {Math.round(REFRESH_MS / 1000)}s
           </span>
         </div>
         <div className="flex gap-1 flex-wrap">

@@ -6,17 +6,12 @@ function formatUSD(val: number): string {
   return `$${val.toFixed(2)}`;
 }
 
-function formatAge(ageSeconds?: number | null): string {
-  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
-  if (ageSeconds < 60) return `${ageSeconds}s`;
-  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
-  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
-  return `${Math.floor(ageSeconds / 86400)}d`;
-}
-
 function IdeaRow({ idea }: { idea: TradeIdea }) {
   const sideColor = idea.side === "long" ? "text-emerald-400" : "text-red-400";
   const sideBg = idea.side === "long" ? "bg-emerald-400/5" : "bg-red-400/5";
+  const dataQualityTone = idea.data_backed
+    ? "text-cyan-300 bg-cyan-950/20 border-cyan-900/30"
+    : "text-yellow-400 bg-yellow-950/20 border-yellow-900/30";
 
   return (
     <div className={`${sideBg} rounded px-3 py-2 mb-1.5`}>
@@ -38,12 +33,25 @@ function IdeaRow({ idea }: { idea: TradeIdea }) {
           <span className="text-gray-500 text-[10px]">
             {Math.round(idea.historical_win_rate * 100)}% hist. win
           </span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${dataQualityTone}`}>
+            {idea.data_backed ? "DATA-BACKED" : "THESIS-ONLY"}
+          </span>
         </div>
         <span className="text-xs text-gray-400 tabular-nums">
           Score: {idea.confidence_adjusted_score}
         </span>
       </div>
       <div className="text-xs text-gray-400 mb-1">{idea.reason}</div>
+      {idea.supporting_data && (
+        <div className="text-[10px] text-gray-500 mb-1">
+          {idea.supporting_data}
+        </div>
+      )}
+      {idea.market_data_note && (
+        <div className="text-[10px] text-yellow-500 mb-1">
+          {idea.market_data_note}
+        </div>
+      )}
       {idea.entry !== undefined && (
         <div className="flex items-center gap-3 text-[10px] text-gray-500">
           <span>Entry: <span className="text-gray-300 tabular-nums">{formatUSD(idea.entry)}</span></span>
@@ -52,6 +60,9 @@ function IdeaRow({ idea }: { idea: TradeIdea }) {
           <span>R:R <span className="text-gray-300 tabular-nums">{idea.risk_reward}</span></span>
           {idea.daily_vol_pct !== undefined && (
             <span>Vol: <span className="text-gray-300 tabular-nums">{idea.daily_vol_pct}%</span></span>
+          )}
+          {idea.market_data_freshness_hours !== undefined && (
+            <span>Age: <span className="text-gray-300 tabular-nums">{idea.market_data_freshness_hours}h</span></span>
           )}
         </div>
       )}
@@ -84,10 +95,6 @@ export default function TradeAnalysisPanel({ data }: { data: TradeAnalysis | nul
 
   return (
     <div>
-      <div className="text-[10px] text-gray-500 mb-3">
-        Source {data.source_freshness || "unknown"}
-        {data.source_age_seconds !== undefined && data.source_age_seconds !== null ? ` · age ${formatAge(data.source_age_seconds)}` : ""}
-      </div>
       {/* Thesis */}
       <div className="bg-blue-950/20 border border-blue-900/30 rounded px-3 py-2 mb-3">
         <div className="flex items-center justify-between mb-1">
@@ -101,11 +108,39 @@ export default function TradeAnalysisPanel({ data }: { data: TradeAnalysis | nul
         <div className="text-xs text-gray-300">{data.playbook_thesis}</div>
       </div>
 
+      {data.market_data_assessment && (
+        <div className="bg-[#111827] rounded px-3 py-2 mb-3 text-[10px]">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-gray-400 uppercase tracking-wider">Market Data</span>
+            <span className={`font-medium ${
+              data.market_data_assessment.status === "fresh"
+                ? "text-cyan-300"
+                : data.market_data_assessment.status === "stale"
+                ? "text-yellow-400"
+                : "text-orange-400"
+            }`}>
+              {data.market_data_assessment.status}
+            </span>
+          </div>
+          <div className="text-gray-500">
+            {data.market_data_assessment.price_ready_symbols}/{data.market_data_assessment.total_symbols} symbols have full price envelopes.
+          </div>
+          {data.market_data_assessment.warnings.map((warning, idx) => (
+            <div key={idx} className="text-yellow-500 mt-1">{warning}</div>
+          ))}
+        </div>
+      )}
+
       {/* Risk Assessment */}
       <div className="flex items-center gap-2 mb-3 text-[10px]">
         <span className="px-1.5 py-0.5 rounded bg-[#111827] text-gray-400">
           {data.risk_assessment.position_sizing}
         </span>
+        {data.risk_assessment.market_data_status && (
+          <span className="px-1.5 py-0.5 rounded bg-[#111827] text-cyan-300">
+            Market Data: {data.risk_assessment.market_data_status}
+          </span>
+        )}
         {data.risk_assessment.risk_factors.map((f, i) => (
           <span key={i} className="px-1.5 py-0.5 rounded bg-yellow-950/20 text-yellow-500 border border-yellow-900/30">
             {f.length > 50 ? f.slice(0, 50) + "..." : f}

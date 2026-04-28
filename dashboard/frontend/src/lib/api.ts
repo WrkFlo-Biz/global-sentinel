@@ -34,30 +34,6 @@ export interface BridgeSummary {
   finnhub_packet_count: number;
 }
 
-export interface BridgeOperatorStatus {
-  label: string;
-  status: "live" | "source_live" | "empty" | "snapshot_only" | "no_snapshot" | "stale" | "unknown";
-  display_status: string;
-  fresh?: boolean;
-  snapshot_recent?: boolean;
-  count?: number;
-  detail?: string;
-  exists?: boolean;
-  file_count?: number;
-  json_file_count?: number;
-  hash_file_count?: number;
-  latest_file?: string | null;
-  latest_age_min?: number | null;
-}
-
-export interface BridgeStatusResponse {
-  bridges: Record<string, BridgeOperatorStatus>;
-  bridge_summary: Record<string, number | string | undefined>;
-  data_freshness: Record<string, boolean>;
-  fallback_mode: boolean;
-  timestamp_utc?: string;
-}
-
 export interface Scorecard {
   schema_version: string;
   timestamp_utc: string;
@@ -93,18 +69,9 @@ export interface TimelinePoint {
   fallback: boolean;
 }
 
-export interface ControlStatus {
-  timestamp_utc?: string;
-  mode?: string;
-  cycle?: number;
-  regime_p?: number;
-  confidence?: number;
-  kill_switch: boolean;
-  manual_veto: boolean;
-  shadow_eligible?: boolean;
-  fallback_mode?: boolean;
-  execution_mode?: Record<string, string>;
-  evidence?: string[];
+export interface Controls {
+  kill_switch: { active: boolean; reason?: string; activated_at?: string };
+  manual_veto: { active: boolean; reason?: string; activated_at?: string };
 }
 
 export interface GraduationCheck {
@@ -126,6 +93,7 @@ export interface PortfolioPosition {
   symbol: string;
   qty: number;
   side: string;
+  asset_class?: string;
   avg_entry_price: number;
   current_price: number;
   unrealized_pl: number;
@@ -134,45 +102,41 @@ export interface PortfolioPosition {
   account?: string;
   account_label?: string;
   broker?: string;
+  pricing_source?: string;
+  pricing_timestamp_utc?: string;
 }
 
-export interface PortfolioAccountError {
+export interface PortfolioAccount {
   label: string;
-  error: string;
-}
-
-export interface PortfolioAccountDetail {
-  label: string;
-  status?: string;
   broker?: string;
   display_label?: string;
   account_number?: string;
   is_live?: boolean;
-  equity: number;
-  cash: number;
-  buying_power: number;
-  portfolio_value: number;
-  positions: PortfolioPosition[];
-  position_count: number;
+  equity?: number;
+  cash?: number;
+  buying_power?: number;
+  portfolio_value?: number;
+  positions?: PortfolioPosition[];
+  position_count?: number;
+  status?: string;
+  error?: string;
   timestamp_utc?: string;
   source_timestamp_utc?: string;
   fetched_at_utc?: string;
   cache_age_ms?: number;
   cache_status?: string;
-  error?: string;
 }
 
-export interface PortfolioConsistency {
-  account_count_requested: number;
-  account_count_success: number;
-  account_count_error: number;
-  position_count_total: number;
-  position_count_total_from_accounts?: number;
-  position_count_by_account: Record<string, number>;
-  requested_accounts?: string[];
-  accounts_match_requested?: boolean;
-  positions_match_total?: boolean;
-  has_account_errors?: boolean;
+export interface PortfolioPricingSummary {
+  priced_position_count: number;
+  position_count: number;
+  latest_pricing_timestamp_utc?: string | null;
+  latest_pricing_age_seconds?: number | null;
+  oldest_pricing_timestamp_utc?: string | null;
+  oldest_pricing_age_seconds?: number | null;
+  delayed_position_count?: number;
+  stale_position_count?: number;
+  market_data_health?: string;
 }
 
 export interface PortfolioData {
@@ -183,53 +147,15 @@ export interface PortfolioData {
   buying_power: number;
   portfolio_value: number;
   positions: PortfolioPosition[];
-  accounts?: PortfolioAccountDetail[];
-  account_errors?: PortfolioAccountError[];
+  accounts?: PortfolioAccount[];
+  account_errors?: Array<{ label: string; error: string }>;
   position_count_total?: number;
   position_count_by_account?: Record<string, number>;
   account_count?: number;
-  consistency?: PortfolioConsistency;
+  pricing_summary?: PortfolioPricingSummary;
   timestamp_utc: string;
-  source_timestamp_utc?: string;
-  latest_source_timestamp_utc?: string;
-  fetched_at_utc?: string;
-  cache_age_ms?: number;
-  cache_status?: string;
-  pricing_summary?: {
-    priced_position_count: number;
-    position_count: number;
-    latest_pricing_timestamp_utc?: string | null;
-    latest_pricing_age_seconds?: number | null;
-    oldest_pricing_timestamp_utc?: string | null;
-    oldest_pricing_age_seconds?: number | null;
-    delayed_position_count: number;
-    stale_position_count: number;
-    market_data_health: "live" | "delayed" | "degraded" | "stale";
-    stream_error_accounts?: string[];
-    stream_degraded_accounts?: string[];
-  };
-  stream_health?: Record<string, any>;
-  error?: string;
-}
-
-export interface PortfolioHistoryData {
-  schema_version?: string;
-  account?: string;
-  requested_period?: string;
-  requested_timeframe?: string;
-  timestamp: number[];
-  equity: number[];
-  profit_loss: number[];
-  profit_loss_pct: number[];
-  base_value: number;
-  timeframe: string;
-  timestamp_utc?: string;
-  source_timestamp_utc?: string;
-  latest_source_timestamp_utc?: string;
-  fetched_at_utc?: string;
-  cache_age_ms?: number;
-  cache_status?: string;
-  accounts?: Record<string, PortfolioHistoryData | { error: string }>;
+  source_timestamp_utc?: string | null;
+  latest_source_timestamp_utc?: string | null;
   error?: string;
 }
 
@@ -268,246 +194,44 @@ export interface ExecutionModeData {
   bot_permissions: Record<string, any>;
 }
 
-export interface DemotedApprovalResponse {
-  status: "approval_required";
-  error?: string;
-  message?: string;
-  orchestrator_command?: string;
-  approval_required?: boolean;
-  legacy_approval_file_bridge_disabled?: boolean;
-}
-
-export type ExecutionModeMutationResponse =
-  | ExecutionModeData
-  | DemotedApprovalResponse
-  | Record<string, unknown>;
-
-export const EXECUTION_APPROVAL_GUIDANCE = {
-  title: "Orchestrator approval required",
-  message:
-    "Legacy pending-orders polling and local approve/reject actions are disabled. Use orchestrator approval for scoped GS trade tickets instead.",
-  detail:
-    "This panel no longer assumes /api/pending-orders or /api/telegram/approve is the source of truth.",
-  orchestratorCommand:
-    "wrkflo-orchestrator approve --kind gs.trade.execute_shadow --target global-sentinel/trade-ticket/<ticket_id>",
-} as const;
-
-export function isDemotedApprovalResponse(
-  value: unknown,
-): value is DemotedApprovalResponse {
-  if (!value || typeof value !== "object") return false;
-  return (value as { status?: unknown }).status === "approval_required";
-}
-
-export interface ExecutionRoutingSummary {
-  event_count: number;
-  processed_candidate_count: number;
-  submit_attempt_count: number;
-  submit_success_count: number;
-  broker_rejected_count: number;
-  skipped_count: number;
-  error_count: number;
-  candidate_conversion_rate: number;
-  broker_accept_rate: number;
-  skip_or_block_rate: number;
-  block_reason_category_counts: Record<string, number>;
-  raw_block_reason_counts: Record<string, number>;
-}
-
-export interface ExecutionLiveOrderAccountSummary {
-  order_count_total: number;
-  filled: number;
-  partially_filled: number;
-  open: number;
-  rejected: number;
-  canceled: number;
-  expired: number;
-  other: number;
-  fill_rate_any: number;
-  fill_rate_full: number;
-}
-
-export interface ExecutionLiveOrdersSummary {
-  status: string;
-  lookback_hours: number;
-  sample_window_start_utc: string;
-  account_count: number;
-  order_count_total: number;
-  filled_count: number;
-  partially_filled_count: number;
-  open_count: number;
-  rejected_count: number;
-  canceled_count: number;
-  expired_count: number;
-  other_count: number;
-  fill_rate_any: number;
-  fill_rate_full: number;
-  open_rate: number;
-  by_account: Record<string, ExecutionLiveOrderAccountSummary>;
-  raw_status_counts: Record<string, number>;
-  account_errors: Array<{ label: string; error: string }>;
-}
-
-export interface ExecutionSummary {
-  schema_version: string;
-  timestamp_utc: string;
-  routing: ExecutionRoutingSummary;
-  live_orders: ExecutionLiveOrdersSummary;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function selectControlStatusPayload(payload: unknown): Record<string, unknown> | null {
-  const record = asRecord(payload);
-  if (!record) return null;
-
-  const canonicalStatus = asRecord(record.control_status);
-  if (canonicalStatus) return canonicalStatus;
-
-  const compatibilityStatus = asRecord(record.controls);
-  if (compatibilityStatus) return compatibilityStatus;
-
-  if ("kill_switch" in record || "manual_veto" in record) {
-    return record;
-  }
-
-  return null;
-}
-
-function selectLiveControlStatusPayload(payload: unknown): Record<string, unknown> | null {
-  const record = asRecord(payload);
-  if (!record) return null;
-  return asRecord(record.control_status);
-}
-
-function readControlFlag(
-  value: unknown,
-  explicitKey: "kill_switch" | "manual_veto",
-): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-  if (explicitKey in record) return Boolean(record[explicitKey]);
-  if ("active" in record) return Boolean(record.active);
-  return false;
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((item): item is string => typeof item === "string");
-}
-
-function readStringRecord(value: unknown): Record<string, string> | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  return Object.fromEntries(
-    Object.entries(record).filter(([, entryValue]) => typeof entryValue === "string"),
-  ) as Record<string, string>;
-}
-
-export function normalizeControlStatusPayload(payload: unknown): ControlStatus | null {
-  const record = selectControlStatusPayload(payload);
-  if (!record) return null;
-  return normalizeControlStatusRecord(record);
-}
-
-export function normalizeLiveControlStatusPayload(payload: unknown): ControlStatus | null {
-  const record = selectLiveControlStatusPayload(payload);
-  if (!record) return null;
-  return normalizeControlStatusRecord(record);
-}
-
-function normalizeControlStatusRecord(record: Record<string, unknown>): ControlStatus | null {
-  const killSwitch = record.kill_switch;
-  const manualVeto = record.manual_veto;
-  if (typeof killSwitch === "boolean" || typeof manualVeto === "boolean") {
-    return {
-      timestamp_utc: typeof record.timestamp_utc === "string" ? record.timestamp_utc : undefined,
-      mode: typeof record.mode === "string" ? record.mode : undefined,
-      cycle: typeof record.cycle === "number" ? record.cycle : undefined,
-      regime_p: typeof record.regime_p === "number" ? record.regime_p : undefined,
-      confidence: typeof record.confidence === "number" ? record.confidence : undefined,
-      kill_switch: Boolean(killSwitch),
-      manual_veto: Boolean(manualVeto),
-      shadow_eligible: typeof record.shadow_eligible === "boolean" ? record.shadow_eligible : undefined,
-      fallback_mode: typeof record.fallback_mode === "boolean" ? record.fallback_mode : undefined,
-      execution_mode: readStringRecord(record.execution_mode),
-      evidence: readStringArray(record.evidence),
-    };
-  }
-
-  const killSwitchRecord = asRecord(killSwitch);
-  const manualVetoRecord = asRecord(manualVeto);
-  if (!killSwitchRecord && !manualVetoRecord) return null;
-
-  return {
-    kill_switch: readControlFlag(killSwitchRecord, "kill_switch"),
-    manual_veto: readControlFlag(manualVetoRecord, "manual_veto"),
-  };
-}
-
-async function fetchControlStatus(): Promise<ControlStatus> {
-  const payload = await fetchJSON<unknown>("/api/control/status");
-  const normalized = normalizeControlStatusPayload(payload);
-  if (!normalized) {
-    throw new Error("API error: invalid control status payload");
-  }
-  return normalized;
-}
-
 export const api = {
   heartbeat: () => fetchJSON<Heartbeat>("/api/heartbeat"),
-  controlStatus: () => fetchControlStatus(),
+  controls: () => fetchJSON<Controls>("/api/controls"),
   latestScorecard: () => fetchJSON<Scorecard>("/api/scorecard/latest"),
   timeline: (limit = 200) => fetchJSON<TimelinePoint[]>(`/api/scorecards/timeline?limit=${limit}`),
-  bridges: () => fetchJSON<BridgeStatusResponse>("/api/bridges"),
+  bridges: () => fetchJSON<any>("/api/bridges"),
   orders: (limit = 50) => fetchJSON<any[]>(`/api/execution/orders?limit=${limit}`),
   bindings: (limit = 50) => fetchJSON<any[]>(`/api/execution/bindings?limit=${limit}`),
-  executionSummary: (routerLimit = 100, brokerLimit = 100, lookbackHours = 24) =>
-    fetchJSON<ExecutionSummary>(
-      `/api/execution/summary?router_limit=${routerLimit}&broker_limit=${brokerLimit}&lookback_hours=${lookbackHours}`,
-    ),
   alerts: (limit = 30) => fetchJSON<any[]>(`/api/alerts?limit=${limit}`),
   graduation: () => fetchJSON<GraduationReport>("/api/graduation"),
   thresholds: () => fetchJSON<any>("/api/thresholds"),
   timeWindow: () => fetchJSON<any>("/api/time_window"),
   portfolio: () => fetchJSON<PortfolioData>("/api/portfolio"),
-  portfolioHistory: (period = "1M", timeframe = "1D", account = "all") =>
-    fetchJSON<PortfolioHistoryData>(
-      `/api/portfolio-history?period=${period}&timeframe=${timeframe}&account=${account}`,
-    ),
   tradeAnalysis: () => fetchJSON<TradeAnalysis>("/api/trade-analysis"),
   performance: () => fetchJSON<PerformanceData>("/api/performance"),
   consciousness: () => fetchJSON<ConsciousnessData>("/api/consciousness"),
   politicianAlpha: () => fetchJSON<PoliticianAlphaData>("/api/politician-alpha"),
   executionMode: () => fetchJSON<ExecutionModeData>("/api/execution-mode"),
-  setExecutionMode: async (
-    strategy: string,
-    mode: string,
-  ): Promise<ExecutionModeMutationResponse> => {
-    const response = await fetch(`${API_BASE}/api/execution-mode`, {
+  setExecutionMode: (strategy: string, mode: string) =>
+    fetch(`${API_BASE}/api/execution-mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
       body: JSON.stringify({ strategy, mode }),
-    });
-    return response.json();
-  },
+    }).then(r => r.json()),
+  approveOrders: (strategy: string, action: string) =>
+    fetch(`${API_BASE}/api/telegram/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-API-Key": API_KEY } : {}) },
+      body: JSON.stringify({ strategy, action }),
+    }).then(r => r.json()),
+  pendingOrders: () => fetchJSON<any>("/api/pending-orders"),
   gssTimeline: (limit = 100) => fetchJSON<GSSTimelinePoint[]>(`/api/gss-timeline?limit=${limit}`),
   gssLatest: () => fetchJSON<GSSLatest>("/api/gss-latest"),
   dashboardLayout: () => fetchJSON<DashboardLayout>("/api/dashboard/layout"),
-  quantum: () => fetchJSON<any>("/api/quantum"),
 };
 
 export interface PerformanceData {
   timestamp_utc?: string;
-  source_timestamp_utc?: string;
-  source_age_seconds?: number | null;
-  source_freshness?: "live" | "degraded" | "stale" | "unknown";
-  open_positions_snapshot_timestamp_utc?: string;
-  open_positions_snapshot_age_seconds?: number | null;
-  open_positions_snapshot_freshness?: "live" | "degraded" | "stale" | "unknown";
   total_trades: number;
   wins: number;
   losses: number;
@@ -529,12 +253,28 @@ export interface TradeIdea {
   historical_win_rate: number;
   confidence_adjusted_score: number;
   holding_period?: string;
+  advisory_only?: boolean;
+  data_backed?: boolean;
   current_price?: number;
   daily_vol_pct?: number;
+  adv_shares?: number;
   entry?: number;
   target?: number;
   stop?: number;
   risk_reward?: number;
+  price_source?: string;
+  volatility_source?: string;
+  market_data_timestamp_utc?: string;
+  market_data_freshness_hours?: number;
+  market_data_note?: string;
+  supporting_data?: string;
+  market_data?: {
+    freshness_status?: string;
+    warnings?: string[];
+    price?: number | null;
+    sigma_daily_pct?: number | null;
+    adv_shares?: number | null;
+  };
 }
 
 export interface SectorRotation {
@@ -552,9 +292,6 @@ export interface HistoricalExample {
 
 export interface TradeAnalysis {
   timestamp_utc: string;
-  source_timestamp_utc?: string;
-  source_age_seconds?: number | null;
-  source_freshness?: "live" | "degraded" | "stale" | "unknown";
   mode: string;
   regime_p: number;
   transition: string;
@@ -569,7 +306,18 @@ export interface TradeAnalysis {
     max_position_pct: number;
     time_window: string;
     window_quality: string;
+    market_data_status?: string;
     risk_factors: string[];
+  };
+  market_data_assessment?: {
+    status: string;
+    total_symbols: number;
+    price_ready_symbols: number;
+    partial_symbols: number;
+    stale_symbols: number;
+    missing_symbols: number;
+    price_ready_ratio: number;
+    warnings: string[];
   };
   historical_examples: HistoricalExample[];
   evidence_summary: string[];
@@ -656,40 +404,19 @@ export interface DashboardLayout {
   error?: string;
 }
 
-export interface WSConnection {
-  close: () => void;
-}
-
-export function connectWS(onMessage: (data: any) => void): WSConnection | null {
+export function connectWS(onMessage: (data: any) => void): WebSocket | null {
   const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8501";
   const wsBase = (process.env.NEXT_PUBLIC_API_URL || origin).replace("http", "ws") + "/ws";
   const wsUrl = API_KEY ? `${wsBase}?api_key=${API_KEY}` : wsBase;
   try {
-    let closed = false;
-    let activeSocket: WebSocket | null = null;
-
-    const connect = () => {
-      if (closed) return;
-      const ws = new WebSocket(wsUrl);
-      activeSocket = ws;
-      ws.onmessage = (e) => {
-        try { onMessage(JSON.parse(e.data)); } catch {}
-      };
-      ws.onclose = () => {
-        if (!closed) {
-          setTimeout(connect, 5000);
-        }
-      };
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      try { onMessage(JSON.parse(e.data)); } catch {}
     };
-
-    connect();
-
-    return {
-      close: () => {
-        closed = true;
-        activeSocket?.close();
-      },
+    ws.onclose = () => {
+      setTimeout(() => connectWS(onMessage), 5000);
     };
+    return ws;
   } catch {
     return null;
   }

@@ -11,29 +11,11 @@ function StatBox({ label, value, color }: { label: string; value: string; color?
   );
 }
 
-function formatAccountTag(label?: string): string {
-  if (label === "day_trade") return "DT";
-  if (label === "day_trade_2") return "DT2";
-  if (label === "medium_long") return "ML";
-  return (label || "").slice(0, 3).toUpperCase();
-}
-
-function formatAge(ageSeconds?: number | null): string {
-  if (ageSeconds === undefined || ageSeconds === null) return "unknown";
-  if (ageSeconds < 60) return `${ageSeconds}s`;
-  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
-  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
-  return `${Math.floor(ageSeconds / 86400)}d`;
-}
-
 function OpenPositionsView({ portfolio }: { portfolio: PortfolioData }) {
   const totalPL = portfolio.positions.reduce((acc, p) => acc + p.unrealized_pl, 0);
   const plColor = totalPL >= 0 ? "text-emerald-400" : "text-red-400";
   const winners = portfolio.positions.filter(p => p.unrealized_pl >= 0).length;
   const losers = portfolio.positions.length - winners;
-  const multiAccount = (portfolio.account_count ?? 0) > 1
-    || new Set(portfolio.positions.map((position) => position.account).filter(Boolean)).size > 1;
-  const accountErrors = portfolio.account_errors || [];
 
   return (
     <div>
@@ -41,45 +23,18 @@ function OpenPositionsView({ portfolio }: { portfolio: PortfolioData }) {
         <span className="text-[10px] text-yellow-500 bg-yellow-950/20 px-1.5 py-0.5 rounded border border-yellow-900/30">
           OPEN POSITIONS
         </span>
-        {portfolio.status && (
-          <span className="text-[10px] text-gray-400 uppercase">{portfolio.status}</span>
-        )}
       </div>
-      {accountErrors.length > 0 && (
-        <div className="mb-3 rounded border border-amber-900/40 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-200">
-          {accountErrors.length} account issue{accountErrors.length === 1 ? "" : "s"} detected in portfolio feed.
-        </div>
-      )}
-      {portfolio.pricing_summary && (
-        <div className={`mb-3 rounded border px-2 py-1 text-[10px] ${
-          portfolio.pricing_summary.market_data_health === "stale"
-            ? "border-red-900/40 bg-red-950/20 text-red-200"
-            : portfolio.pricing_summary.market_data_health !== "live"
-              ? "border-amber-900/40 bg-amber-950/20 text-amber-200"
-              : "border-emerald-900/40 bg-emerald-950/20 text-emerald-200"
-        }`}>
-          Open-position pricing is {portfolio.pricing_summary.market_data_health}.
-          {" "}Oldest price age: {formatAge(portfolio.pricing_summary.oldest_pricing_age_seconds)}.
-        </div>
-      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
         <StatBox label="Unrealized P&L" value={`$${totalPL >= 0 ? "+" : ""}${totalPL.toFixed(2)}`} color={plColor} />
         <StatBox label="Positions" value={`${winners}W / ${losers}L`} />
         <StatBox label="Count" value={`${portfolio.positions.length}`} />
       </div>
-      <div className="space-y-0.5 overflow-y-auto max-h-[280px]">
+      <div className="space-y-0.5">
         {portfolio.positions
           .sort((a, b) => b.unrealized_pl - a.unrealized_pl)
           .map((p) => (
-          <div key={`${p.symbol}-${p.account || "single"}`} className="flex items-center justify-between text-[11px] px-2 py-1 bg-[#111827] rounded">
-            <div className="flex items-center gap-2">
-              <span className="text-gray-200 font-medium">{p.symbol}</span>
-              {multiAccount && p.account && (
-                <span className="text-[9px] text-gray-500 border border-[#2a3040] rounded px-1 py-0.5">
-                  {formatAccountTag(p.account)}
-                </span>
-              )}
-            </div>
+          <div key={p.symbol} className="flex items-center justify-between text-[11px] px-2 py-1 bg-[#111827] rounded">
+            <span className="text-gray-200 font-medium">{p.symbol}</span>
             <div className="flex items-center gap-3">
               <span className="text-gray-500">{p.qty} shares</span>
               <span className={`tabular-nums font-medium ${p.unrealized_pl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
@@ -106,10 +61,6 @@ export default function PerformancePanel({ data, portfolio }: { data: Performanc
 
   return (
     <div>
-      <div className="text-[10px] text-gray-500 mb-3">
-        Source {data.source_freshness || "unknown"}
-        {data.source_age_seconds !== undefined && data.source_age_seconds !== null ? ` · age ${formatAge(data.source_age_seconds)}` : ""}
-      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
         <StatBox label="Total P&L" value={`$${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl.toFixed(2)}`} color={pnlColor} />
         <StatBox label="Win Rate" value={`${(data.win_rate * 100).toFixed(1)}%`} color={wrColor} />
@@ -128,7 +79,7 @@ export default function PerformancePanel({ data, portfolio }: { data: Performanc
       {Object.keys(data.by_symbol).length > 0 && (
         <div>
           <h4 className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">By Symbol</h4>
-          <div className="space-y-0.5 overflow-y-auto max-h-[280px]">
+          <div className="space-y-0.5">
             {Object.entries(data.by_symbol).map(([sym, d]) => (
               <div key={sym} className="flex items-center justify-between text-[11px] px-2 py-1 bg-[#111827] rounded">
                 <span className="text-gray-200 font-medium">{sym}</span>
