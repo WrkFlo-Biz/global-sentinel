@@ -1,0 +1,22 @@
+[Unit]
+Description=Global Sentinel Event Feature Matrix Builder
+After=network.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/global-sentinel
+EnvironmentFile=-/opt/global-sentinel/.env
+Environment=PYTHONPATH=/opt/global-sentinel
+ExecStart=/usr/bin/python3 /opt/global-sentinel/scripts/ops/build_event_features.py --repo-root /opt/global-sentinel
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/global-sentinel/logs
+ReadWritePaths=/opt/global-sentinel/data
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
+
